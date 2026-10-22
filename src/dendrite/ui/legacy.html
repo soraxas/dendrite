@@ -604,7 +604,7 @@ async function selectArtifact(hash, navigate = true) {
     <dt>produced by</dt><dd>${a.producer ? `<a data-exec="${esc(a.producer.id)}">${esc(a.producer.node)}</a> <span class="mono">${esc(short(a.producer.id, 8))}</span>` : "source input"}</dd></dl>
     <div style="margin-top:10px;display:flex;gap:6px">${state.route.view !== "lineage" ? `<button data-go="#/artifact/${esc(a.hash)}${state.route.exp ? "/from/" + esc(state.route.exp) : ""}">Trace lineage</button>` : ""}
     ${a.kind === "file" && a.present ? `<a href="/api/artifacts/${esc(a.hash)}/download"><button>Download</button></a>` : ""}</div></section>
-    <section><h3>Used by experiments</h3>${a.experiments.map((e) => `<div><a data-go="#/exp/${esc(e.id)}">${esc(e.name || e.id)}</a> <span class="mono" style="color:var(--muted)">${esc(e.id)}</span> <span style="color:var(--muted);font-size:12px">${esc(e.roles.join(", "))}</span></div>`).join("") || `<span style="color:var(--muted)">—</span>`}</section>
+    <section><h3>Used by experiments</h3>${a.experiments.map((e) => `<div><a data-go="#/exp/${esc(e.id)}">${esc(e.name || e.id)}</a> <span class="mono" style="color:var(--muted)">${esc(e.id)}</span> <span style="color:var(--muted);font-size:12px">${esc((e.role_labels || e.roles).join(", "))}</span></div>`).join("") || `<span style="color:var(--muted)">—</span>`}</section>
     <section><h3>Preview</h3>${preview}</section>`;
 }
 async function selectExecution(id) {

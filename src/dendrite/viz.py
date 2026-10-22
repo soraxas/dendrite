@@ -53,7 +53,8 @@ def lineage_mermaid(graph: dict[str, Any]) -> str:
     focus = graph["artifact"]["hash"]
     for a in graph["artifacts"]:
         style = ":::pinned" if a["hash"] == focus else ""
-        lines.append(f'  {_mid(a["hash"])}[("{a["filename"] or a["kind"]}<br/><small>{a["hash"][:10]}</small>")]{style}')
+        label = a.get("label") or a["filename"] or a["kind"]
+        lines.append(f'  {_mid(a["hash"])}[("{label}<br/><small>{a["kind"]} {a["hash"][:10]}</small>")]{style}')
     for x in graph["executions"]:
         lines.append(f'  {_mid(x["id"])}["{x["node"]}<br/><small>exec {x["id"][:8]}</small>"]:::computed')
     for e in graph["edges"]:

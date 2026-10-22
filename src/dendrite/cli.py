@@ -85,24 +85,41 @@ def cmd_lineage(lab: Lab, args) -> None:
         print(lineage_mermaid(g))
         return
     a = g["artifact"]
-    print(f"artifact {a['hash']}  {a['kind']}  {a['filename'] or ''}  {a['size']} B")
-    print(f"producer: {g['producer'] or 'source input'}")
+    print(f"artifact {a['label']}  {a['hash']}  {a['kind']}  {a['size']} B")
+    print(f"producer: {a['producer_node'] + ' (exec ' + g['producer'] + ')' if g['producer'] else 'source input'}")
     for title, ids in (("ancestors", g["ancestors"]), ("descendants", g["descendants"])):
         execs = {x["id"]: x for x in g["executions"]}
         print(f"{title}:")
         for i in ids:
             print(f"  {execs[i]['node']:<24} exec {i}")
-    print("experiments:", ", ".join(f"{e['name'] or e['id']} ({'/'.join(e['roles'])})" for e in g["experiments"]) or "-")
+    print("experiments:")
+    for e in g["experiments"]:
+        print(f"  {e['name'] or e['id']:<20} {e['id']}  {describe_roles(e['roles'])}")
+
+
+def describe_roles(roles: list[dict]) -> str:
+    """e.g. ``input video · produced by extract · read by colmap, train``."""
+    parts = []
+    inputs = [r["name"] for r in roles if r["kind"] == "input"]
+    if inputs:
+        parts.append("input " + ", ".join(inputs))
+    for kind, verb in (("produced", "produced by"), ("read", "read by")):
+        nodes = list(dict.fromkeys(r["node"] for r in roles if r["kind"] == kind))
+        if nodes:
+            parts.append(f"{verb} {', '.join(nodes)}")
+    return " · ".join(parts)
 
 
 def cmd_ui(lab: Lab, args) -> None:
     import uvicorn
 
-    from .server import create_app
+    from .server import create_app, ui_mode
 
     for mod in args.imports or []:
         importlib.import_module(mod)
     print(f"dendrite UI on http://{args.host}:{args.port}  ({lab})")
+    if ui_mode() == "legacy":
+        print("serving the legacy UI; run scripts/build-ui.sh to build the React UI")
     uvicorn.run(create_app(lab), host=args.host, port=args.port, log_level="warning")
 
 

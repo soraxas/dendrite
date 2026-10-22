@@ -3,3 +3,6 @@ __pycache__/
 *.pyc
 .dendrite/
 .pytest_cache/
+src/dendrite/ui/dist/
+ui/node_modules/
+/dist/

@@ -288,29 +288,47 @@ class Metadata:
         return [dict(r) for r in rows]
 
     def experiments_using_artifact(self, h: str) -> list[dict]:
-        """Experiments that took ``h`` as input, or whose node runs produced or consumed it."""
+        """Experiments that took ``h`` as input, or whose node runs produced or read it.
+
+        ``roles`` is structured (``{"kind": "input"|"produced"|"read", "node", "name"}``);
+        ``role_labels`` keeps the compact ``input`` / ``output:<node>`` / ``consumed:<node>`` form.
+        """
         pat = f"%{h}%"  # hashes are unique hex, so a text match on the JSON is exact enough
         with self.ro() as conn:
-            exps = conn.execute(sa.select(experiments.c.id, experiments.c.name, experiments.c.inputs)).mappings().all()
+            exps = conn.execute(
+                sa.select(experiments.c.id, experiments.c.name, experiments.c.inputs).order_by(experiments.c.created_at)
+            ).mappings().all()
             nrs = conn.execute(
-                sa.select(node_runs.c.experiment_id, node_runs.c.node, node_runs.c.inputs, node_runs.c.outputs).where(
+                sa.select(node_runs.c.experiment_id, node_runs.c.node, node_runs.c.inputs, node_runs.c.outputs)
+                .where(
                     sa.or_(
                         sa.cast(node_runs.c.outputs, sa.Text).like(pat),
                         sa.cast(node_runs.c.inputs, sa.Text).like(pat),
                     )
                 )
+                .order_by(node_runs.c.seq)
             ).mappings().all()
-        roles: dict[str, set[str]] = {}
+        roles: dict[str, list[dict]] = {}
         for e in exps:
-            if h in (e["inputs"] or {}).values():
-                roles.setdefault(e["id"], set()).add("input")
+            for name, v in (e["inputs"] or {}).items():
+                if v == h:
+                    roles.setdefault(e["id"], []).append({"kind": "input", "node": None, "name": name})
         for nr in nrs:
-            if h in (nr["outputs"] or {}).values():
-                roles.setdefault(nr["experiment_id"], set()).add(f"output:{nr['node']}")
-            if h in (nr["inputs"] or {}).values():
-                roles.setdefault(nr["experiment_id"], set()).add(f"consumed:{nr['node']}")
-        names = {e["id"]: e["name"] for e in exps}
-        return [{"id": i, "name": names.get(i), "roles": sorted(r)} for i, r in roles.items()]
+            for name, v in (nr["outputs"] or {}).items():
+                if v == h:
+                    roles.setdefault(nr["experiment_id"], []).append({"kind": "produced", "node": nr["node"], "name": name})
+            for name, v in (nr["inputs"] or {}).items():
+                if v == h:
+                    roles.setdefault(nr["experiment_id"], []).append({"kind": "read", "node": nr["node"], "name": name})
+        legacy = {"input": "input", "produced": "output", "read": "consumed"}
+        out = []
+        for e in exps:  # creation order
+            if e["id"] not in roles:
+                continue
+            rs = roles[e["id"]]
+            labels = sorted({r["kind"] if r["node"] is None else f"{legacy[r['kind']]}:{r['node']}" for r in rs})
+            out.append({"id": e["id"], "name": e["name"], "roles": rs, "role_labels": labels})
+        return out
 
     # -- executions ----------------------------------------------------------------
     def find_success(self, signature: str) -> list[tuple[dict, dict[str, ArtifactRef]]]:

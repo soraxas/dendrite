@@ -4,16 +4,24 @@ from __future__ import annotations
 
 import pickle
 from importlib import resources
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
 
 from .experiment import Experiment, Lab, _ref_dict
 from .store import ArtifactRef
 from .viz import lineage_mermaid, mermaid, tree_mermaid
 
 PREVIEW_BYTES = 64 * 1024
+UI_DIR = Path(str(resources.files("dendrite") / "ui"))
+
+
+def ui_mode(ui_dir: Path = UI_DIR) -> str:
+    """``react`` when the built bundle is present, otherwise the ``legacy`` single-file page."""
+    return "react" if (ui_dir / "dist" / "index.html").is_file() else "legacy"
 
 
 def _experiment(lab: Lab, key: str) -> Experiment:
@@ -53,14 +61,15 @@ def _preview(lab: Lab, ref: ArtifactRef) -> dict[str, Any]:
         return {"type": "binary"}
 
 
-def create_app(lab: Lab | None = None) -> FastAPI:
+def create_app(lab: Lab | None = None, ui_dir: Path = UI_DIR) -> FastAPI:
     lab = lab or Lab()
+    mode = ui_mode(ui_dir)
     app = FastAPI(title="dendrite", version="0.1.0")
     app.state.lab = lab
 
     @app.get("/api/info")
     def info() -> dict[str, Any]:
-        return {"db": lab.db.engine.url.render_as_string(hide_password=True), "store": lab.store.url}
+        return {"db": lab.db.engine.url.render_as_string(hide_password=True), "store": lab.store.url, "ui": mode}
 
     @app.get("/api/experiments")
     def experiments() -> list[dict[str, Any]]:
@@ -124,10 +133,15 @@ def create_app(lab: Lab | None = None) -> FastAPI:
         ex["used_by"] = lab.db.node_runs_for_execution(exec_id)
         return ex
 
-    index = resources.files("dendrite") / "ui" / "index.html"
+    if mode == "react":
+        # Mounted last so every /api route above takes precedence; the SPA uses hash routing,
+        # so only "/" and the hashed assets need serving.
+        app.mount("/", StaticFiles(directory=ui_dir / "dist", html=True), name="ui")
+    else:
+        legacy = ui_dir / "legacy.html"
 
-    @app.get("/", response_class=HTMLResponse)
-    def spa() -> str:
-        return index.read_text(encoding="utf-8")
+        @app.get("/", response_class=HTMLResponse)
+        def spa() -> str:
+            return legacy.read_text(encoding="utf-8")
 
     return app

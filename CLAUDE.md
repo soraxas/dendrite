@@ -29,7 +29,9 @@ uv run pytest -k pin                       # by keyword
 DENDRITE_TEST_PG_URL=postgresql+psycopg://user:pw@host:port/db uv run pytest tests/test_postgres.py
 uv run python examples/recon.py            # demo: baseline + config fork + pinned fork (DEMO_SLEEP=2 to slow nodes)
 uv run dendrite ui --port 8454             # API + SPA; also: list | show | diff | dag | tree | lineage
-uv build                                   # wheel must contain dendrite/ui/index.html
+cd ui && npm run dev                       # hot-reloading UI, /api proxied to :8454 (Node 20+; UI work only)
+cd ui && npm run build                     # tsc type-check + vite build into src/dendrite/ui/dist (git-ignored)
+scripts/build-ui.sh && uv build            # release: the build guard fails a wheel/sdist without the bundle
 ```
 
 The Postgres tests skip unless `DENDRITE_TEST_PG_URL` is set. Each test creates and drops its own schema. There is no linter or formatter configured.
@@ -64,10 +66,19 @@ The flow of a run spans several modules in `src/dendrite/`:
 4. **`store.py`.** A content-addressed blob store laid out as `objects/<h[:2]>/<h[2:]>`.
    - A directory is a manifest blob, and the directory's hash is that manifest's hash.
    - `LocalStore` uses atomic `os.replace` and hardlinked checkouts. `FsspecStore` handles S3, MinIO, GCS and `memory://`, with a local checkout cache.
-5. **`server.py` + `ui/index.html`.**
-   - A FastAPI JSON API (`/api/experiments`, `/api/experiments/{id}/dag`, `/api/diff`, `/api/artifacts/{hash}[/lineage|/download]`, `/api/executions/{id}`).
-   - A build-free vanilla-JS SPA with its own layered SVG DAG layout. It picks left-to-right or top-to-bottom automatically and polls every 1s while a run is active.
-   - There is no npm or bundler. Keep it a single static file.
+5. **`server.py` + `ui/`.**
+   - A FastAPI JSON API (`/api/experiments`, `/api/experiments/{id}/dag`, `/api/diff`, `/api/artifacts/{hash}[/lineage|/download]`, `/api/executions/{id}`, `/api/info`). Keep API changes additive, because the legacy page still reads it. The one exception so far: usage `roles` became structured, and the old strings live on as `role_labels`.
+   - **Shipping the UI:**
+     - `ui/` is a React + TS + Vite app (React Flow + elkjs + TanStack Query).
+     - It builds into `src/dendrite/ui/dist/`, which is git-ignored and packaged through `[tool.hatch.build] artifacts`.
+     - `hatch_build.py` refuses sdist or wheel builds without the bundle. Editable builds and `DENDRITE_SKIP_UI_CHECK=1` are exempt.
+     - `create_app` mounts `dist/` with `StaticFiles` *after* the API routes when the bundle exists. Otherwise it serves the frozen fallback `src/dendrite/ui/legacy.html`; don't add features there.
+   - **Layout:**
+     - `ui/src/layout.ts` runs ELK in a web worker. It caches positions per graph shape (node ids plus edges), so status polls never re-lay-out.
+     - Edges are drawn from ELK's orthogonal routes by the custom `elk` edge in `Graph.tsx`.
+   - **Selection** lives in the hash URL (`?sel=node:|input:|artifact:|exec:<id>`). `App.tsx` derives both the graph highlight and the detail panel from it.
+   - **Labels:** lineage artifact labels (`label`, `producer_node`, `role`) and structured usage `roles` are computed in Python (`Lab.lineage`, `Metadata.experiments_using_artifact`), not in the UI.
+   - **Headless screenshots:** headless Chrome's `--virtual-time-budget` stalls the ELK worker. Use `uv run python scripts/screenshot.py OUT.png URL [wait_s]` instead, which captures in real time over CDP and prints console errors.
 6. **`viz.py` / `cli.py`.** Mermaid renderers and the argparse CLI.
 
 ## Invariants to preserve
@@ -95,6 +106,7 @@ The flow of a run spans several modules in `src/dendrite/`:
 Spec-driven changes live in `openspec/`:
 
 - `openspec/config.yaml` holds project context.
-- `openspec/changes/add-artifact-lineage/` holds the initial proposal, design, specs and tasks. It is not yet archived, so `openspec/specs/` is empty until `openspec archive add-artifact-lineage` is run.
+- `openspec/specs/` holds the baseline specs from the archived `add-artifact-lineage` change.
+- `openspec/changes/react-flow-ui/` is the React Flow UI change. Archive it with `openspec archive react-flow-ui` once it has been reviewed.
 - Use `/opsx:propose`, `/opsx:apply` and `/opsx:archive` for new work.
 - Validate with `openspec validate <change>`.

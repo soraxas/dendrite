@@ -180,19 +180,58 @@ class Lab:
                 hashes.add(h)
                 edges.append({"from": e["id"], "to": h, "label": name})
         refs = self.db.artifacts_by_hash(hashes)
+        users = self.db.experiments_using_artifact(ref.hash)
+        producer = self.db.producer_of(ref.hash)
+        producer_row = self.db.execution(producer) if producer else None
+
+        # Label every artifact by what it *is* in the pipeline (an output or input name), not by
+        # its storage kind; fall back to filename, then kind.
+        produced_by: dict[str, tuple[str, str]] = {}  # hash -> (node, output name)
+        read_as: dict[str, str] = {}  # hash -> first input name it was read under
+        desc_set = set(desc)
+        from_desc: set[str] = set()
+        for e in execs.values():
+            for name, h in e["outputs"].items():
+                produced_by.setdefault(h, (e["node"], name))
+                if e["id"] in desc_set:
+                    from_desc.add(h)
+            for name, h in e["inputs"].items():
+                read_as.setdefault(h, name)
+        if producer_row:
+            for name, h in producer_row["outputs"].items():
+                if h == ref.hash:
+                    produced_by.setdefault(h, (producer_row["node"], name))
+        source_names = self._source_input_names(hashes)
+
+        def annotate(r: ArtifactRef) -> dict[str, Any]:
+            d = _ref_dict(r)
+            node, out = produced_by.get(r.hash, (None, None))
+            d["producer_node"] = node
+            d["label"] = out or source_names.get(r.hash) or read_as.get(r.hash) or r.filename or r.kind
+            d["role"] = "focus" if r.hash == ref.hash else "descendant" if r.hash in from_desc else "ancestor"
+            return d
+
         return {
-            "artifact": _ref_dict(ref),
-            "producer": self.db.producer_of(ref.hash),
+            "artifact": annotate(ref),
+            "producer": producer,
             "ancestors": anc,
             "descendants": desc,
             "executions": [
                 {k: e[k] for k in ("id", "node", "signature", "status", "started_at", "finished_at", "experiment_id")}
                 for e in execs.values()
             ],
-            "artifacts": [_ref_dict(r) for r in refs.values()],
+            "artifacts": [annotate(r) for r in refs.values()],
             "edges": edges,
-            "experiments": self.db.experiments_using_artifact(ref.hash),
+            "experiments": users,
         }
+
+    def _source_input_names(self, hashes: set[str]) -> dict[str, str]:
+        names: dict[str, str] = {}
+        for row in self.db.experiments():
+            for name, h in (row["inputs"] or {}).items():
+                if h in hashes:
+                    names.setdefault(h, name)
+        return names
 
     # -- experiments ---------------------------------------------------------------
     def create(

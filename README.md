@@ -107,13 +107,15 @@ Lab(store_url="s3://lineage/prod", storage_options={"endpoint_url": "http://mini
 
 ## UI and CLI
 
-`dendrite ui` serves a JSON API (`/api/...`) and a build-free single-page app with:
+`dendrite ui` serves a JSON API (`/api/...`) and a React single-page app (React Flow, laid out by ELK). The app shows:
 
 - an experiment fork tree, with per-experiment status bars
-- a live DAG (queued → running/waiting → computed/cached/pinned/failed) that auto-picks left-to-right or top-to-bottom layout
+- a live DAG (queued → running/waiting → computed/cached/pinned/failed). Node status updates in place, and the graph is only re-laid-out when new nodes appear.
 - node details: signature, the execution it reused and which experiment computed it, params, inputs/outputs, and metric sparklines
-- artifact tracing: a provenance graph, previews, downloads, and the experiments that use each artifact
+- artifact lineage: artifacts (data) and executions (computation) are drawn as distinct node types, and artifacts are labelled by output name. The selection is kept in the URL and the side panel always describes it. "Used by" reads like *produced by extract_frames · read by colmap, train_splats*.
 - an experiment diff: params, per-node reuse, and metric deltas
+
+The built UI ships inside the wheel, so installing and running dendrite never needs Node.js. If the bundle hasn't been built (for example in a fresh clone), `dendrite ui` falls back to the older single-file page and says so. `/api/info` reports which UI is active.
 
 ```bash
 dendrite list | show EXP | diff A B | dag EXP | tree | lineage HASH [--mermaid] | ui
@@ -130,9 +132,27 @@ Each run also publishes a Prefect markdown artifact (`dendrite-<exp id>`) with t
 
 ## Development
 
-The design and requirements live in OpenSpec: `openspec/changes/add-artifact-lineage/`. Use `/opsx:propose`, `/opsx:apply` and `/opsx:archive` for new changes.
+The design and requirements live in OpenSpec: the baseline specs are in `openspec/specs/`, and changes in flight are in `openspec/changes/`. Use `/opsx:propose`, `/opsx:apply` and `/opsx:archive` for new changes.
 
 ```bash
-uv run pytest                                   # SQLite + local/memory/moto-S3 stores
+uv run pytest                                   # SQLite + local/memory/moto-S3 stores, API, packaging
 DENDRITE_TEST_PG_URL=postgresql+psycopg://postgres:pw@localhost:55432/dendrite uv run pytest tests/test_postgres.py
 ```
+
+### Web UI
+
+The UI source lives in `ui/` (React + TypeScript + Vite). Working on it needs Node.js 20+.
+
+```bash
+uv run dendrite ui                 # backend on :8454
+cd ui && npm install && npm run dev   # hot-reloading UI; /api is proxied to :8454 (override with DENDRITE_API=…)
+npm run build                      # type-check + bundle into src/dendrite/ui/dist (git-ignored)
+```
+
+To release, build the UI first and then the Python package:
+
+```bash
+scripts/build-ui.sh && uv build
+```
+
+`hatch_build.py` makes `uv build` fail if `src/dendrite/ui/dist/index.html` is missing. Editable installs (`uv sync`) are exempt. Set `DENDRITE_SKIP_UI_CHECK=1` to deliberately build a wheel that only has the legacy page.

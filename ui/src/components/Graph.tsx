@@ -1,0 +1,218 @@
+// React Flow canvas fed by ELK positions and routed edges.
+import {
+  Background,
+  BaseEdge,
+  Controls,
+  EdgeLabelRenderer,
+  MarkerType,
+  MiniMap,
+  ReactFlow,
+  ReactFlowProvider,
+  useReactFlow,
+  type Edge,
+  type EdgeProps,
+  type Node,
+  type NodeTypes,
+} from "@xyflow/react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useElkLayout, type LayoutEdge, type Point } from "../layout";
+
+export interface GraphNode<T extends Record<string, unknown> = Record<string, unknown>> {
+  id: string;
+  type: string;
+  width: number;
+  height: number;
+  data: T;
+  minimapColor?: string;
+}
+
+export interface GraphEdge extends LayoutEdge {}
+
+type ElkEdgeData = { points: Point[]; label?: string; labelBox?: { x: number; y: number; width: number; height: number }; hl: boolean };
+
+function roundedPath(pts: Point[], r = 8): string {
+  if (pts.length < 2) return "";
+  let d = `M${pts[0].x},${pts[0].y}`;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const [a, b, c] = [pts[i - 1], pts[i], pts[i + 1]];
+    const d1 = Math.hypot(b.x - a.x, b.y - a.y), d2 = Math.hypot(c.x - b.x, c.y - b.y);
+    const rr = Math.min(r, d1 / 2, d2 / 2);
+    const p1 = { x: b.x + ((a.x - b.x) * rr) / (d1 || 1), y: b.y + ((a.y - b.y) * rr) / (d1 || 1) };
+    const p2 = { x: b.x + ((c.x - b.x) * rr) / (d2 || 1), y: b.y + ((c.y - b.y) * rr) / (d2 || 1) };
+    d += ` L${p1.x},${p1.y} Q${b.x},${b.y} ${p2.x},${p2.y}`;
+  }
+  const last = pts[pts.length - 1];
+  return `${d} L${last.x},${last.y}`;
+}
+
+function ElkEdge({ id, data, markerEnd }: EdgeProps<Edge<ElkEdgeData>>) {
+  if (!data) return null;
+  const stroke = data.hl ? "var(--accent)" : "var(--edge)";
+  return (
+    <>
+      <BaseEdge
+        id={id}
+        path={roundedPath(data.points)}
+        markerEnd={markerEnd}
+        style={{ stroke, strokeWidth: data.hl ? 2.2 : 1.5 }}
+      />
+      {data.label && data.labelBox && (
+        <EdgeLabelRenderer>
+          <div
+            className={`elk-edge-label ${data.hl ? "hl" : ""}`}
+            style={{ transform: `translate(${data.labelBox.x}px, ${data.labelBox.y}px)` }}
+          >
+            {data.label}
+          </div>
+        </EdgeLabelRenderer>
+      )}
+    </>
+  );
+}
+
+const edgeTypes = { elk: ElkEdge };
+
+function useSize(ref: React.RefObject<HTMLDivElement | null>) {
+  const [size, setSize] = useState({ width: 0, height: 0 });
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([e]) => setSize({ width: e.contentRect.width, height: e.contentRect.height }));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [ref]);
+  return size;
+}
+
+interface Props {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  nodeTypes: NodeTypes;
+  selectedId?: string;
+  /** Node to keep in view when the whole graph is too large to fit at a legible zoom. */
+  focusId?: string;
+  onSelect: (id: string) => void;
+  legend: ReactNode;
+}
+
+const MIN_LEGIBLE_ZOOM = 0.65;
+
+function Canvas({ nodes, edges, nodeTypes, selectedId, focusId, onSelect, legend }: Props) {
+  const box = useRef<HTMLDivElement>(null);
+  const size = useSize(box);
+  const shapeKey = useMemo(
+    () => nodes.map((n) => n.id).join("|") + "#" + edges.map((e) => `${e.from}>${e.to}`).join("|"),
+    [nodes, edges],
+  );
+  const layout = useElkLayout(nodes, edges, shapeKey, size);
+  const { fitView, getZoom, setCenter } = useReactFlow();
+
+  const incident = useMemo(() => {
+    const s = new Set<string>();
+    if (selectedId) for (const e of edges) if (e.from === selectedId || e.to === selectedId) s.add(e.id);
+    return s;
+  }, [edges, selectedId]);
+  const rfNodes: Node[] = useMemo(() => {
+    if (!layout) return [];
+    return nodes
+      .filter((n) => layout.nodes.has(n.id))
+      .map((n) => ({
+        id: n.id,
+        type: n.type,
+        position: layout.nodes.get(n.id)!,
+        width: n.width,
+        height: n.height,
+        data: { ...n.data, dir: layout.dir, selected: n.id === selectedId },
+        draggable: false,
+        selectable: false,
+      }));
+  }, [layout, nodes, selectedId]);
+
+  const rfEdges: Edge<ElkEdgeData>[] = useMemo(() => {
+    if (!layout) return [];
+    return edges
+      .filter((e) => layout.edges.has(e.id))
+      .map((e) => {
+        const r = layout.edges.get(e.id)!;
+        const hl = incident.has(e.id);
+        return {
+          id: e.id,
+          source: e.from,
+          target: e.to,
+          type: "elk",
+          markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16, color: hl ? "var(--accent)" : "var(--edge)" },
+          data: { points: r.points, label: e.label, labelBox: r.label, hl },
+        };
+      });
+  }, [layout, edges, incident]);
+
+  // Re-fit only when the graph's shape changes, never on status polls. If fitting everything
+  // would make text illegible, centre the focus node at a readable zoom instead.
+  useEffect(() => {
+    if (!layout) return;
+    requestAnimationFrame(async () => {
+      await fitView({ padding: 0.12, maxZoom: 1.2, minZoom: 0.2 });
+      const focus = focusId ? layout.nodes.get(focusId) : undefined;
+      const spec = focusId ? nodes.find((n) => n.id === focusId) : undefined;
+      if (getZoom() < MIN_LEGIBLE_ZOOM && focus && spec) {
+        await setCenter(focus.x + spec.width / 2, focus.y + spec.height / 2 - 120, { zoom: 0.85 });
+      } else if (getZoom() < MIN_LEGIBLE_ZOOM) {
+        await fitView({ padding: 0.12, minZoom: MIN_LEGIBLE_ZOOM, maxZoom: MIN_LEGIBLE_ZOOM });
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layout]);
+
+  return (
+    <div ref={box} style={{ position: "absolute", inset: 0 }}>
+      <ReactFlow
+        nodes={rfNodes}
+        edges={rfEdges}
+        nodeTypes={nodeTypes}
+        edgeTypes={edgeTypes}
+        colorMode="system"
+        minZoom={0.2}
+        maxZoom={2.5}
+        nodesConnectable={false}
+        nodesDraggable={false}
+        onNodeClick={(_, n) => onSelect(n.id)}
+        proOptions={{ hideAttribution: true }}
+      >
+        <Background gap={24} size={1} color="var(--line)" />
+        <Controls showInteractive={false} position="bottom-right" />
+        {nodes.length > 8 && (
+          <MiniMap
+            pannable
+            zoomable
+            position="top-right"
+            nodeColor={(n) => nodes.find((x) => x.id === n.id)?.minimapColor ?? "var(--edge)"}
+            maskColor="color-mix(in srgb, var(--bg) 70%, transparent)"
+            style={{ background: "var(--panel)" }}
+          />
+        )}
+      </ReactFlow>
+      {legend}
+      {!layout && <div className="empty" style={{ position: "absolute", inset: 0 }}>Laying out…</div>}
+    </div>
+  );
+}
+
+export function Graph(props: Props) {
+  return (
+    <ReactFlowProvider>
+      <Canvas {...props} />
+    </ReactFlowProvider>
+  );
+}
+
+/** Merge parallel edges between the same pair of nodes into one edge with a combined label. */
+export function mergeEdges(edges: { from: string; to: string; label: string }[]): GraphEdge[] {
+  const merged = new Map<string, GraphEdge>();
+  for (const e of edges) {
+    const id = `${e.from}->${e.to}`;
+    const m = merged.get(id);
+    if (!m) merged.set(id, { id, from: e.from, to: e.to, label: e.label });
+    else if (e.label && !(m.label ?? "").split(", ").includes(e.label)) m.label = m.label ? `${m.label}, ${e.label}` : e.label;
+  }
+  return [...merged.values()];
+}
