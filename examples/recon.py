@@ -33,7 +33,7 @@ def extract_frames(video: Path, fps: int = 2) -> Path:
 
 @artifact_task(outputs=["cameras", "sparse"], version="2")
 def colmap(frames: Path, matcher: str = "sequential") -> tuple[Path, Path]:
-    time.sleep(SLEEP * 2)
+    time.sleep(SLEEP * 3)
     n = len(list(frames.iterdir()))
     cams = workdir() / "cameras.json"
     cams.write_text(json.dumps({"matcher": matcher, "n_cameras": n}))

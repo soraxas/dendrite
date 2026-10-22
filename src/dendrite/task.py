@@ -46,6 +46,28 @@ def code_fingerprint(fn: Callable) -> str:
     return sha256_bytes(src.encode())
 
 
+def source_snapshot(fn: Callable) -> dict[str, Any] | None:
+    """Source text and location of ``fn`` for display and editing (not part of the signature)."""
+    try:
+        lines, line = inspect.getsourcelines(fn)
+    except (OSError, TypeError):
+        return None
+    source = "".join(lines)
+    try:
+        file = inspect.getsourcefile(fn)
+        file = str(Path(file).resolve()) if file else None
+    except TypeError:
+        file = None
+    return {
+        "hash": sha256_bytes(source.encode()),
+        "source": source,
+        "file": file,
+        "line": line,
+        "module": fn.__module__,
+        "qualname": fn.__qualname__,
+    }
+
+
 def env_fingerprint(packages: Iterable[str]) -> dict[str, Any]:
     versions = {}
     for pkg in sorted(packages):
@@ -139,6 +161,7 @@ class ArtifactTask:
             if p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD):
                 raise TypeError(f"{self.name}: *args/**kwargs are not supported in artifact tasks")
         self.code = code_fingerprint(fn) if hash_source else None
+        self.source = source_snapshot(fn)
         self._task_options = task_options
         functools.update_wrapper(self, fn)
 
@@ -349,6 +372,8 @@ class ArtifactTask:
             experiment_id=exp_id,
             task_run_id=task_run_id,
         )
+        if self.source:
+            db.record_source(exec_id, self.source)
         try:
             with _Heartbeat(db, signature, owner, self.lease_ttl) if lease else nullcontext():
                 refs, metric_values = self._compute(lab, exec_id, call, params)

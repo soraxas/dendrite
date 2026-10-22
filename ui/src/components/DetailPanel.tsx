@@ -1,9 +1,10 @@
 // Detail panel: always describes exactly the selected graph item (selection lives in the URL).
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { api, type ArtifactRef, type Dag, type DagNode, type Usage } from "../api";
 import { EXPERIMENT_STATUS, STATUS, statusLabel } from "../copy";
 import { describeRoles, flatten, fmtDur, fmtSize, fmtTime, fmtVal, short } from "../format";
-import { useArtifact, useDiff, useExecution } from "../queries";
+import { useArtifact, useDiff, useExecution, useSource } from "../queries";
+import { CodeModal } from "./CodeModal";
 
 export interface Nav {
   openExp: (id: string) => void;
@@ -149,6 +150,27 @@ function Sparklines({ execId }: { execId: string }) {
   );
 }
 
+function CodeSection({ execId, step }: { execId: string; step: string }) {
+  const { data: ex } = useExecution(execId);
+  const src = ex?.source;
+  const { data: snap } = useSource(src?.hash);
+  const [open, setOpen] = useState(false);
+  if (!ex) return null;
+  if (!src) return <section><h3>Code</h3><Muted>Not recorded for this run (it predates code snapshots).</Muted></section>;
+  const where = `${src.display ?? src.file ?? "unknown file"}${src.line ? `:${src.line}` : ""}`;
+  const label = snap?.editable ? "Edit code" : "View code";
+  const state = !snap ? "" : snap.status === "same" ? "matches the file" : snap.status === "changed" ? "file changed since this ran" : "file no longer exists";
+  return (
+    <section>
+      <h3>Code</h3>
+      <div className="mono" style={{ overflowWrap: "anywhere" }} title={src.file ?? undefined}>{where}</div>
+      <div className="muted" style={{ fontSize: 12, margin: "2px 0 8px" }}>{src.qualname}{state ? ` · ${state}` : ""}</div>
+      <button onClick={() => setOpen(true)}>{label}</button>
+      {open && <CodeModal hash={src.hash} step={step} onClose={() => setOpen(false)} />}
+    </section>
+  );
+}
+
 export function NodeDetail({ n, dag, nav }: { n: DagNode; dag: Dag; nav: Nav }) {
   const metrics = Object.entries(n.metrics ?? {});
   const fromOther = n.execution_experiment && n.execution_experiment !== dag.experiment.id ? n.execution_experiment : null;
@@ -179,6 +201,7 @@ export function NodeDetail({ n, dag, nav }: { n: DagNode; dag: Dag; nav: Nav }) 
         {Object.keys(n.outputs ?? {}).length ? Object.entries(n.outputs ?? {}).map(([k, r]) => <ArtifactChip key={k} name={k} r={r} nav={nav} />) : <Muted>{pending ? "not produced yet" : "—"}</Muted>}
         {Object.keys(n.outputs ?? {}).length > 0 && <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>Click an output to preview it and trace where it came from.</div>}
       </section>
+      {n.execution_id && <CodeSection execId={n.execution_id} step={n.name} />}
       <section>
         <h3>Parameters</h3>
         {n.params && Object.keys(n.params).length ? (

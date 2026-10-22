@@ -115,6 +115,26 @@ node_runs = sa.Table(
     sa.Column("error", sa.Text),
 )
 
+# Source snapshots are kept outside the signature spec so recording them never changes cache keys.
+code_snapshots = sa.Table(
+    "code_snapshots",
+    meta,
+    sa.Column("hash", sa.String(64), primary_key=True),  # sha256 of the source text
+    sa.Column("source", sa.Text, nullable=False),
+    sa.Column("file", sa.Text),
+    sa.Column("line", sa.Integer),
+    sa.Column("module", sa.String(300)),
+    sa.Column("qualname", sa.String(300)),
+    sa.Column("created_at", sa.Float, nullable=False),
+)
+
+execution_sources = sa.Table(
+    "execution_sources",
+    meta,
+    sa.Column("execution_id", sa.String(32), sa.ForeignKey("executions.id"), primary_key=True),
+    sa.Column("source_hash", sa.String(64), sa.ForeignKey("code_snapshots.hash"), nullable=False, index=True),
+)
+
 leases = sa.Table(
     "leases",
     meta,
@@ -411,6 +431,33 @@ class Metadata:
             self._upsert_node_run(conn, experiment_id, node, **node_run)
             if lease:
                 conn.execute(leases.delete().where(leases.c.signature == lease[0], leases.c.owner == lease[1]))
+
+    def record_source(self, exec_id: str, snap: dict[str, Any]) -> None:
+        """Link an execution to its node function's source snapshot (stored once per text)."""
+        with self.tx() as conn:
+            exists = conn.execute(sa.select(code_snapshots.c.hash).where(code_snapshots.c.hash == snap["hash"])).first()
+            if not exists:
+                conn.execute(code_snapshots.insert().values(created_at=time.time(), **snap))
+            conn.execute(execution_sources.insert().values(execution_id=exec_id, source_hash=snap["hash"]))
+
+    def snapshot(self, source_hash: str) -> dict | None:
+        with self.ro() as conn:
+            row = conn.execute(sa.select(code_snapshots).where(code_snapshots.c.hash == source_hash)).mappings().first()
+        return dict(row) if row else None
+
+    def source_for_execution(self, exec_id: str) -> dict | None:
+        """Snapshot metadata (no text) for an execution, or None for runs recorded before snapshots."""
+        with self.ro() as conn:
+            row = (
+                conn.execute(
+                    sa.select(code_snapshots.c.hash, code_snapshots.c.file, code_snapshots.c.line, code_snapshots.c.module, code_snapshots.c.qualname)
+                    .join(execution_sources, execution_sources.c.source_hash == code_snapshots.c.hash)
+                    .where(execution_sources.c.execution_id == exec_id)
+                )
+                .mappings()
+                .first()
+            )
+        return dict(row) if row else None
 
     def fail_execution(self, exec_id: str, error: str) -> None:
         with self.tx() as conn:

@@ -10,8 +10,10 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 from .experiment import Experiment, Lab, _ref_dict
+from .sources import SourceConflict, disk_status, write_source
 from .store import ArtifactRef
 from .viz import lineage_mermaid, mermaid, tree_mermaid
 
@@ -61,7 +63,23 @@ def _preview(lab: Lab, ref: ArtifactRef) -> dict[str, Any]:
         return {"type": "binary"}
 
 
-def create_app(lab: Lab | None = None, ui_dir: Path = UI_DIR) -> FastAPI:
+class SourceEdit(BaseModel):
+    source: str
+    file_sha: str
+
+
+def _display_path(file: str | None) -> str | None:
+    """Path relative to the server's working directory when it lives under it."""
+    if not file:
+        return None
+    try:
+        return str(Path(file).relative_to(Path.cwd()))
+    except ValueError:
+        return file
+
+
+def create_app(lab: Lab | None = None, ui_dir: Path = UI_DIR, allow_edit: bool = False) -> FastAPI:
+    """``allow_edit`` lets the UI write edited step source back to its file (see sources.py)."""
     lab = lab or Lab()
     mode = ui_mode(ui_dir)
     app = FastAPI(title="dendrite", version="0.1.0")
@@ -69,7 +87,7 @@ def create_app(lab: Lab | None = None, ui_dir: Path = UI_DIR) -> FastAPI:
 
     @app.get("/api/info")
     def info() -> dict[str, Any]:
-        return {"db": lab.db.engine.url.render_as_string(hide_password=True), "store": lab.store.url, "ui": mode}
+        return {"db": lab.db.engine.url.render_as_string(hide_password=True), "store": lab.store.url, "ui": mode, "edit": allow_edit}
 
     @app.get("/api/experiments")
     def experiments() -> list[dict[str, Any]]:
@@ -131,7 +149,34 @@ def create_app(lab: Lab | None = None, ui_dir: Path = UI_DIR) -> FastAPI:
         if ex is None:
             raise HTTPException(404, f"no execution {exec_id!r}")
         ex["used_by"] = lab.db.node_runs_for_execution(exec_id)
+        src = lab.db.source_for_execution(exec_id)
+        ex["source"] = {**src, "display": _display_path(src["file"])} if src else None
         return ex
+
+    @app.get("/api/sources/{source_hash}")
+    def source(source_hash: str) -> dict[str, Any]:
+        snap = lab.db.snapshot(source_hash)
+        if snap is None:
+            raise HTTPException(404, f"no source snapshot {source_hash!r}")
+        disk = disk_status(snap)
+        return {
+            **{k: snap[k] for k in ("hash", "source", "file", "line", "module", "qualname")},
+            "display": _display_path(snap["file"]),
+            **disk,
+            "editable": allow_edit and disk["status"] == "same",
+        }
+
+    @app.put("/api/sources/{source_hash}")
+    def save_source(source_hash: str, edit: SourceEdit) -> dict[str, Any]:
+        if not allow_edit:
+            raise HTTPException(403, "editing is disabled; start `dendrite ui` on localhost or with --allow-edit")
+        snap = lab.db.snapshot(source_hash)
+        if snap is None:
+            raise HTTPException(404, f"no source snapshot {source_hash!r}")
+        try:
+            return write_source(snap, edit.source, edit.file_sha)
+        except SourceConflict as e:
+            raise HTTPException(409, str(e)) from None
 
     if mode == "react":
         # Mounted last so every /api route above takes precedence; the SPA uses hash routing,

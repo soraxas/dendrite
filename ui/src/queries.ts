@@ -31,3 +31,6 @@ export const useExecution = (id?: string | null) =>
 
 export const useDiff = (a?: string, b?: string) =>
   useQuery({ queryKey: ["diff", a, b], queryFn: () => api.diff(a!, b!), enabled: !!a && !!b, refetchInterval: 4000 });
+
+export const useSource = (hash?: string | null) =>
+  useQuery({ queryKey: ["source", hash], queryFn: () => api.source(hash!), enabled: !!hash, staleTime: 0 });

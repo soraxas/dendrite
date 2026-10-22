@@ -80,6 +80,12 @@ The flow of a run spans several modules in `src/dendrite/`:
    - **Labels:** lineage artifact labels (`label`, `producer_node`, `role`) and structured usage `roles` are computed in Python (`Lab.lineage`, `Metadata.experiments_using_artifact`), not in the UI.
    - **Headless screenshots:** headless Chrome's `--virtual-time-budget` stalls the ELK worker. Use `uv run python scripts/screenshot.py OUT.png URL [wait_s]` instead, which captures in real time over CDP and prints console errors.
 6. **`viz.py` / `cli.py`.** Mermaid renderers and the argparse CLI.
+7. **`sources.py`.** Source snapshots of step functions.
+   - They live in `code_snapshots` / `execution_sources`, outside the signature, so they never change cache keys.
+   - They are recorded when an execution starts.
+   - `disk_status` reports `same` only when the snapshot text occurs exactly once in the recorded file.
+   - `write_source` writes only to that recorded path. It checks the client's file hash (409 on mismatch) and replaces atomically.
+   - `PUT /api/sources/{hash}` is gated by `create_app(allow_edit=...)`. `dendrite ui` enables it on loopback hosts or with `--allow-edit`.
 
 ## Invariants to preserve
 

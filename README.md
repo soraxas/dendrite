@@ -114,6 +114,7 @@ Lab(store_url="s3://lineage/prod", storage_options={"endpoint_url": "http://mini
 - node details: signature, the execution it reused and which experiment computed it, params, inputs/outputs, and metric sparklines
 - artifact lineage: artifacts (data) and executions (computation) are drawn as distinct node types, and artifacts are labelled by output name. The selection is kept in the URL and the side panel always describes it. "Used by" reads like *produced by extract_frames · read by colmap, train_splats*.
 - an experiment diff: params, per-node reuse, and metric deltas
+- code: every run records a snapshot of its step's source, with file and line. You can view it in an editor. While the file still contains exactly that code, you can also edit and save it back. Saving asks for confirmation, refuses if the file changed underneath you, and is only enabled when `dendrite ui` runs on localhost (or with `--allow-edit`).
 
 The built UI ships inside the wheel, so installing and running dendrite never needs Node.js. If the bundle hasn't been built (for example in a fresh clone), `dendrite ui` falls back to the older single-file page and says so. `/api/info` reports which UI is active.
 

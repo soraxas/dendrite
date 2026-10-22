@@ -15,6 +15,23 @@ export interface Info {
   db: string;
   store: string;
   ui: "react" | "legacy";
+  edit: boolean;
+}
+
+export interface SourceInfo {
+  hash: string;
+  file: string | null;
+  display: string | null;
+  line: number | null;
+  module: string | null;
+  qualname: string | null;
+}
+
+export interface SourceSnapshot extends SourceInfo {
+  source: string;
+  status: "same" | "changed" | "missing";
+  file_sha: string | null;
+  editable: boolean;
 }
 
 export interface TreeEntry {
@@ -135,6 +152,7 @@ export interface Execution {
   outputs: Record<string, string>;
   metrics: { key: string; step: number; value: number }[];
   used_by?: { experiment_id: string; node: string; status: string; name: string | null }[];
+  source?: SourceInfo | null;
 }
 
 export type Preview =
@@ -166,11 +184,28 @@ export interface Diff {
   metrics: { node: string; key: string; a: number | null; b: number | null }[];
 }
 
-async function get<T>(path: string): Promise<T> {
-  const r = await fetch(path);
-  if (!r.ok) throw new Error(`${r.status} ${(await r.text()).slice(0, 200)}`);
+export class ApiError extends Error {
+  constructor(public status: number, message: string) {
+    super(message);
+  }
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const r = await fetch(path, init);
+  if (!r.ok) {
+    const body = await r.text();
+    let detail = body;
+    try {
+      detail = JSON.parse(body).detail ?? body;
+    } catch {
+      /* not JSON */
+    }
+    throw new ApiError(r.status, String(detail).slice(0, 300));
+  }
   return r.json() as Promise<T>;
 }
+
+const get = <T,>(path: string) => request<T>(path);
 
 export const api = {
   info: () => get<Info>("/api/info"),
@@ -180,5 +215,12 @@ export const api = {
   artifact: (h: string) => get<ArtifactDetail>(`/api/artifacts/${encodeURIComponent(h)}`),
   lineage: (h: string) => get<Lineage>(`/api/artifacts/${encodeURIComponent(h)}/lineage`),
   execution: (id: string) => get<Execution>(`/api/executions/${encodeURIComponent(id)}`),
+  source: (h: string) => get<SourceSnapshot>(`/api/sources/${encodeURIComponent(h)}`),
+  saveSource: (h: string, source: string, file_sha: string) =>
+    request<{ file_sha: string }>(`/api/sources/${encodeURIComponent(h)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ source, file_sha }),
+    }),
   downloadUrl: (h: string) => `/api/artifacts/${encodeURIComponent(h)}/download`,
 };

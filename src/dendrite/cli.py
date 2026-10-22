@@ -117,10 +117,18 @@ def cmd_ui(lab: Lab, args) -> None:
 
     for mod in args.imports or []:
         importlib.import_module(mod)
+    import ipaddress
+
+    try:
+        loopback = args.host == "localhost" or ipaddress.ip_address(args.host).is_loopback
+    except ValueError:
+        loopback = False
+    allow_edit = args.allow_edit or loopback
     print(f"dendrite UI on http://{args.host}:{args.port}  ({lab})")
+    print(f"code editing {'enabled' if allow_edit else 'disabled (use --allow-edit)'}")
     if ui_mode() == "legacy":
         print("serving the legacy UI; run scripts/build-ui.sh to build the React UI")
-    uvicorn.run(create_app(lab), host=args.host, port=args.port, log_level="warning")
+    uvicorn.run(create_app(lab, allow_edit=allow_edit), host=args.host, port=args.port, log_level="warning")
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -145,6 +153,11 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("--host", default="127.0.0.1")
     s.add_argument("--port", type=int, default=8454)
     s.add_argument("--import", dest="imports", action="append", help="module to import (registers pipelines)")
+    s.add_argument(
+        "--allow-edit",
+        action="store_true",
+        help="let the UI save edited step source to disk even when not bound to localhost",
+    )
     args = p.parse_args(argv)
     lab = Lab(args.home, db_url=args.db_url, store_url=args.store_url)
     try:
