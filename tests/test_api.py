@@ -1,0 +1,46 @@
+from fastapi.testclient import TestClient
+
+from dendrite.server import create_app
+
+from . import toy
+
+
+def test_api_endpoints(lab, source):
+    a = lab.create(toy.toy, inputs={"src": source}, name="base").run()
+    b = a.fork({"train.iterations": 4}, name="fork").run()
+    client = TestClient(create_app(lab))
+
+    assert "<title>Dendrite Lineage</title>" in client.get("/").text
+    tree = client.get("/api/experiments").json()
+    assert [e["id"] for e in tree] == [a.id, b.id]
+    assert tree[1]["parent_id"] == a.id and tree[1]["counts"] == {"cached": 2, "computed": 1}
+
+    dag = client.get(f"/api/experiments/{b.id}/dag").json()
+    by_id = {n["id"]: n for n in dag["nodes"]}
+    assert by_id["extract"]["status"] == "cached" and by_id["extract"]["execution_experiment"] == a.id
+    assert {e["label"] for e in dag["edges"]} == {"src", "rows", "features"}
+    assert dag["mermaid"].startswith("flowchart LR")
+
+    detail = client.get(f"/api/experiments/{a.id}").json()
+    assert detail["children"] == [b.id] and detail["metrics"]["train"]["score"] == 360
+
+    diff = client.get("/api/diff", params={"a": a.id, "b": b.id}).json()
+    assert diff["params"][0]["key"] == "train.iterations"
+
+    model = b.output("train", "model")
+    art = client.get(f"/api/artifacts/{model.hash[:12]}").json()
+    assert art["present"] and art["preview"]["type"] == "text" and art["producer"]["node"] == "train"
+    rows = client.get(f"/api/artifacts/{a.output('extract').hash}").json()
+    assert rows["preview"]["type"] == "manifest" and rows["preview"]["count"] == 4
+    feats = client.get(f"/api/artifacts/{a.output('featurize').hash}").json()
+    assert feats["preview"] == {"type": "value", "repr": "[3, 7, 11, 15]"}
+
+    lin = client.get(f"/api/artifacts/{model.hash}/lineage").json()
+    assert len(lin["ancestors"]) == 3
+
+    ex = client.get(f"/api/executions/{by_id['extract']['execution_id']}").json()
+    assert {u["experiment_id"] for u in ex["used_by"]} == {a.id, b.id}
+    assert ex["spec"]["op"] == "extract"
+
+    assert client.get(f"/api/artifacts/{model.hash}/download").text.startswith("[3, 7, 11, 15]")
+    assert client.get("/api/experiments/nope").status_code == 404

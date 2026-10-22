@@ -1,0 +1,23 @@
+schema: spec-driven
+context: |
+  dendrite is an artifact-first experiment lineage, global caching and forking layer on Prefect 3.
+  Stack:
+  - Python 3.12, managed with uv (src layout, package `dendrite`)
+  - Prefect is installed editable from the sibling checkout ../prefect (3.9.x); check APIs against that source
+  - SQLAlchemy Core for metadata (SQLite by default, PostgreSQL via psycopg). No ORM, no Alembic yet
+  - fsspec for the artifact store (local filesystem, S3/MinIO/GCS)
+  - FastAPI + uvicorn serve the API, plus a build-free vanilla-JS SPA at src/dendrite/ui/index.html (no npm toolchain)
+  Core invariants:
+  - Execution signatures never include experiment or flow-run ids
+  - Only params a node consumes are hashed
+  - Artifacts are content-addressed and immutable
+  - Only ArtifactRefs cross Prefect task boundaries
+  - Publishing an execution is a single DB transaction
+  Tests:
+  - `uv run pytest`, which uses the Prefect test harness and a moto S3 server
+  - The Postgres suite runs when DENDRITE_TEST_PG_URL is set
+rules:
+  specs:
+    - Every requirement needs at least one testable WHEN/THEN scenario that maps to a pytest case.
+  tasks:
+    - Include a verification task that names the tests to add or update.
