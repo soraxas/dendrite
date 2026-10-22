@@ -36,5 +36,5 @@ The system SHALL let a user open any artifact and see its producing execution, i
 The system SHALL provide a `dendrite` CLI with `list`, `show`, `diff`, `dag` (Mermaid), `tree`, `lineage` and `ui` commands.
 
 #### Scenario: Launch UI
-- **WHEN** `dendrite ui --port 8765` is run
+- **WHEN** `dendrite ui --port 8454` is run
 - **THEN** the API and SPA are served on that port against the configured DB and store

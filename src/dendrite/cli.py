@@ -126,7 +126,7 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("--mermaid", action="store_true")
     s = sub.add_parser("ui", help="serve the lineage web UI")
     s.add_argument("--host", default="127.0.0.1")
-    s.add_argument("--port", type=int, default=8765)
+    s.add_argument("--port", type=int, default=8454)
     s.add_argument("--import", dest="imports", action="append", help="module to import (registers pipelines)")
     args = p.parse_args(argv)
     lab = Lab(args.home, db_url=args.db_url, store_url=args.store_url)

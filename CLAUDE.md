@@ -28,7 +28,7 @@ uv run pytest tests/test_lineage.py::test_artifact_fork_pins_node   # single tes
 uv run pytest -k pin                       # by keyword
 DENDRITE_TEST_PG_URL=postgresql+psycopg://user:pw@host:port/db uv run pytest tests/test_postgres.py
 uv run python examples/recon.py            # demo: baseline + config fork + pinned fork (DEMO_SLEEP=2 to slow nodes)
-uv run dendrite ui --port 8765             # API + SPA; also: list | show | diff | dag | tree | lineage
+uv run dendrite ui --port 8454             # API + SPA; also: list | show | diff | dag | tree | lineage
 uv build                                   # wheel must contain dendrite/ui/index.html
 ```
 

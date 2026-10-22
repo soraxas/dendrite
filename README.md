@@ -28,7 +28,7 @@ Experiment API (create · fork · pin · diff)     dendrite ui (live DAG, lineag
 ```bash
 uv sync                                   # prefect comes from ../prefect (editable)
 uv run python examples/recon.py           # baseline + config fork + artifact fork
-uv run dendrite ui                        # http://127.0.0.1:8765 (read-only; no imports needed)
+uv run dendrite ui                        # http://127.0.0.1:8454 (read-only; no imports needed)
 ```
 
 ```python
