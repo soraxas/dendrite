@@ -9,13 +9,13 @@ import { nodeTypes, type HoverCard, type Port } from "./nodes";
 const toPorts = (m?: Record<string, ArtifactRef | null>): Port[] =>
   Object.entries(m ?? {}).flatMap(([name, r]) => (r ? [{ name, hash: r.hash, sub: `${r.kind} · ${fmtSize(r.size)}` }] : []));
 
-/** The node's one-line status, in user terms ("Reused from baseline · saved 314ms"). */
+/** The node's one-line status, in user terms ("Reused from baseline · took 314ms"). */
 function statusLine(n: DagNode, self: string, nameOf: (id: string) => string): string {
   const other = n.execution_experiment && n.execution_experiment !== self ? nameOf(n.execution_experiment) : null;
   const d = fmtDur(n.duration);
   switch (n.status) {
-    case "computed": return `Ran${d ? ` · ${d}` : ""}`;
-    case "cached": return `Reused${other ? ` from ${other}` : ""}${d ? ` · saved ${d}` : ""}`;
+    case "computed": return `Ran${d ? ` · took ${d}` : ""}`;
+    case "cached": return `Reused${other ? ` from ${other}` : ""}${d ? ` · took ${d}` : ""}`;
     case "pinned": return `Frozen${other ? ` to ${other}'s result` : ""}`;
     case "running": return `Running${d ? ` · ${d}` : "…"}`;
     case "waiting": return "Waiting for an identical run…";
@@ -25,7 +25,7 @@ function statusLine(n: DagNode, self: string, nameOf: (id: string) => string): s
   }
 }
 
-function hoverFor(n: DagNode, line: string): HoverCard {
+function hoverFor(n: DagNode, line: string, origin: string | null): HoverCard {
   const s = STATUS[n.status as keyof typeof STATUS];
   const facts: [string, string][] = [];
   const params = Object.entries(n.params ?? {});
@@ -33,7 +33,9 @@ function hoverFor(n: DagNode, line: string): HoverCard {
   if (params.length > 4) facts.push(["…", `${params.length - 4} more parameters`]);
   const outs = Object.keys(n.outputs ?? {});
   if (outs.length) facts.push(["produces", outs.join(", ")]);
-  return { title: `${n.name} — ${line}`, body: s?.explain ?? "", facts, hint: "Click to select it and pick its input or output data" };
+  const body = origin && n.status === "cached" ? `${s.explain} The result comes from ${origin}'s run of this step.` : (s?.explain ?? "");
+  const hint = origin ? `Click the name "${origin}" to open that run · click the step to pick its data` : "Click to select it and pick its input or output data";
+  return { title: `${n.name} — ${line}`, body, facts, hint };
 }
 
 interface Props {
@@ -42,11 +44,13 @@ interface Props {
   selected?: string;
   onSelect: (id: string) => void;
   onArtifact: (hash: string) => void;
+  /** Open another experiment with a step selected (follow a reused result to its origin). */
+  onOpenSource: (expId: string, node: string) => void;
   /** Data currently selected in the panel; its chip stays highlighted on the selected step. */
   activeArtifact?: string;
 }
 
-export function DagView({ dag, nameOf, selected, onSelect, onArtifact, activeArtifact }: Props) {
+export function DagView({ dag, nameOf, selected, onSelect, onArtifact, onOpenSource, activeArtifact }: Props) {
   const nodes: GraphNode[] = useMemo(
     () =>
       dag.nodes.map((n) => {
@@ -67,10 +71,21 @@ export function DagView({ dag, nameOf, selected, onSelect, onArtifact, activeArt
         }
         const line = statusLine(n, dag.experiment.id, nameOf);
         const outs = Object.keys(n.outputs ?? {});
+        const origin = n.execution_experiment && n.execution_experiment !== dag.experiment.id ? n.execution_experiment : null;
+        const d = fmtDur(n.duration);
+        const source =
+          origin && (n.status === "cached" || n.status === "pinned")
+            ? {
+                verb: n.status === "cached" ? "Reused from" : "Frozen to",
+                label: nameOf(origin),
+                rest: n.status === "cached" ? (d ? ` · took ${d}` : "") : "'s result",
+                open: () => onOpenSource(origin, n.name),
+              }
+            : undefined;
         return {
           id: n.id,
           type: "pipelineNode",
-          width: 230,
+          width: 250,
           height: 68,
           minimapColor: `var(--${n.status})`,
           data: {
@@ -78,12 +93,13 @@ export function DagView({ dag, nameOf, selected, onSelect, onArtifact, activeArt
             status: n.status,
             line2: line,
             line3: outs.length ? `→ ${outs.join(", ")}` : "",
-            hover: hoverFor(n, line),
+            source,
+            hover: hoverFor(n, line, origin ? nameOf(origin) : null),
             ports: { inputs: toPorts(n.inputs), outputs: toPorts(n.outputs), active: activeArtifact, onPick: onArtifact },
           },
         };
       }),
-    [dag, nameOf, onArtifact, activeArtifact],
+    [dag, nameOf, onArtifact, onOpenSource, activeArtifact],
   );
   const edges = useMemo(() => mergeEdges(dag.edges), [dag.edges]);
   const present = useMemo(() => new Set(dag.nodes.filter((n) => n.kind === "node").map((n) => n.status as string)), [dag.nodes]);

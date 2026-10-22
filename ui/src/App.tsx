@@ -77,6 +77,7 @@ export function App() {
   const setSel = useCallback((sel?: string) => navigate({ ...route, sel }, { replace: true }), [navigate, route]);
   const nav: Nav = useMemo(() => ({
     openExp: (id) => navigate({ view: "dag", exp: id }),
+    openStep: (expId, node) => navigate({ view: "dag", exp: expId, sel: `node:${node}` }),
     selectArtifact: (h) => setSel(`artifact:${h}`),
     selectExec: (id) => setSel(`exec:${id}`),
     trace: (h) => navigate({ view: "lineage", artifact: h, exp: route.exp, sel: `artifact:${h}` }),
@@ -137,6 +138,7 @@ export function App() {
           selected={graphSel}
           onSelect={(gid) => setSel(gid.startsWith("input:") ? gid : `node:${gid}`)}
           onArtifact={nav.selectArtifact}
+          onOpenSource={nav.openStep}
           activeArtifact={kind === "artifact" ? id : undefined}
         />
       );

@@ -8,6 +8,7 @@ import { CodeModal } from "./CodeModal";
 
 export interface Nav {
   openExp: (id: string) => void;
+  openStep: (expId: string, node: string) => void;
   selectArtifact: (hash: string) => void;
   selectExec: (id: string) => void;
   trace: (hash: string) => void;
@@ -84,7 +85,6 @@ export function ExperimentDetail({ dag, tree, nav }: { dag: Dag; tree: { id: str
   const steps = dag.nodes.filter((n) => n.kind === "node");
   const counts: Record<string, number> = {};
   for (const n of steps) counts[n.status] = (counts[n.status] ?? 0) + 1;
-  const saved = steps.filter((n) => n.status === "cached").reduce((a, n) => a + (n.duration ?? 0), 0);
   const children = tree.filter((x) => x.parent_id === e.id);
   const own = flatten(e.params);
   return (
@@ -94,7 +94,6 @@ export function ExperimentDetail({ dag, tree, nav }: { dag: Dag; tree: { id: str
         <dl className="kv">
           <dt>status</dt><dd>{EXPERIMENT_STATUS[e.status] ?? e.status}</dd>
           <dt>steps</dt><dd>{Object.entries(counts).map(([k, v]) => `${v} ${statusLabel(k).toLowerCase()}`).join(", ") || "—"}</dd>
-          <dt>time saved</dt><dd>{saved ? `${fmtDur(saved)} by reusing earlier results` : "—"}</dd>
           {e.started_at != null && (<><dt>took</dt><dd>{fmtDur((e.finished_at ?? Date.now() / 1000) - e.started_at)}</dd></>)}
           {e.parent_id && (<><dt>fork of</dt><dd><a onClick={() => nav.openExp(e.parent_id!)}>{nav.nameOf(e.parent_id)}</a></dd></>)}
           {children.length > 0 && (
@@ -150,6 +149,50 @@ function Sparklines({ execId }: { execId: string }) {
   );
 }
 
+/** Which run's result a reused/frozen step took, with links to that experiment and run. */
+function ReusedFrom({ execId, step, self, frozen, nav }: { execId: string; step: string; self: string; frozen: boolean; nav: Nav }) {
+  const { data: ex } = useExecution(execId);
+  if (!ex) return null;
+  const origin = ex.experiment_id;
+  const took = ex.finished_at != null ? fmtDur(ex.finished_at - ex.started_at) : null;
+  return (
+    <section className="reused-from">
+      <h3>{frozen ? "Frozen to the result of" : "Result reused from"}</h3>
+      {origin && origin !== self ? (
+        <div>
+          <a onClick={() => nav.openStep(origin, step)}>{nav.nameOf(origin)}</a>
+          <span className="muted"> · its {step} run</span>
+        </div>
+      ) : (
+        <div className="muted">an earlier run of this experiment</div>
+      )}
+      <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
+        ran {fmtTime(ex.started_at)}{took ? ` · took ${took}` : ""} · run <a className="mono" onClick={() => nav.selectExec(ex.id)}>{short(ex.id, 8)}</a>
+      </div>
+      {(ex.used_by?.length ?? 0) > 1 && <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>shared by {ex.used_by!.length} experiment steps</div>}
+    </section>
+  );
+}
+
+/** The other direction: experiments whose steps took this run's result. */
+function ReusedBy({ execId, self, nav }: { execId: string; self: string; nav: Nav }) {
+  const { data: ex } = useExecution(execId);
+  const others = (ex?.used_by ?? []).filter((u) => u.experiment_id !== self);
+  if (!others.length) return null;
+  return (
+    <section className="reused-from">
+      <h3>Result reused by</h3>
+      {others.map((u) => (
+        <div key={`${u.experiment_id}.${u.node}`} className="usage">
+          <a onClick={() => nav.openStep(u.experiment_id, u.node)}>{u.name || u.experiment_id}</a>{" "}
+          <span className="mono muted">{u.experiment_id}</span>{" "}
+          <span className="muted" style={{ fontSize: 12 }}>· {statusLabel(u.status).toLowerCase()}</span>
+        </div>
+      ))}
+    </section>
+  );
+}
+
 function CodeSection({ execId, step }: { execId: string; step: string }) {
   const { data: ex } = useExecution(execId);
   const src = ex?.source;
@@ -173,7 +216,6 @@ function CodeSection({ execId, step }: { execId: string; step: string }) {
 
 export function NodeDetail({ n, dag, nav }: { n: DagNode; dag: Dag; nav: Nav }) {
   const metrics = Object.entries(n.metrics ?? {});
-  const fromOther = n.execution_experiment && n.execution_experiment !== dag.experiment.id ? n.execution_experiment : null;
   const pending = n.status === "queued" || n.status === "running" || n.status === "waiting";
   const s = STATUS[n.status as keyof typeof STATUS];
   return (
@@ -182,16 +224,15 @@ export function NodeDetail({ n, dag, nav }: { n: DagNode; dag: Dag; nav: Nav }) 
       <section>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
           <span className="badge" style={{ color: `var(--${n.status})` }}>{statusLabel(n.status)}</span>
-          {n.duration != null && <span className="muted">{n.status === "cached" ? `saved ${fmtDur(n.duration)}` : fmtDur(n.duration)}</span>}
+          {n.duration != null && <span className="muted">took {fmtDur(n.duration)}</span>}
         </div>
-        <p className="explain">
-          {s?.explain}
-          {fromOther && (n.status === "cached" || n.status === "pinned") && (
-            <> Results come from <a onClick={() => nav.openExp(fromOther)}>{nav.nameOf(fromOther)}</a>.</>
-          )}
-        </p>
+        <p className="explain">{s?.explain}</p>
         {n.error && <pre className="err" style={{ marginTop: 10 }}>{n.error}</pre>}
       </section>
+      {n.execution_id && (n.status === "cached" || n.status === "pinned") && (
+        <ReusedFrom execId={n.execution_id} step={n.name} self={dag.experiment.id} frozen={n.status === "pinned"} nav={nav} />
+      )}
+      {n.execution_id && n.status === "computed" && <ReusedBy execId={n.execution_id} self={dag.experiment.id} nav={nav} />}
       <section>
         <h3>Inputs</h3>
         {Object.keys(n.inputs ?? {}).length ? Object.entries(n.inputs ?? {}).map(([k, r]) => <ArtifactChip key={k} name={k} r={r} nav={nav} />) : <Muted />}

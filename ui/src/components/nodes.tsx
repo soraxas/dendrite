@@ -106,14 +106,39 @@ function Shell({ data, className, style, children, label }: { data: Base; classN
 
 const tone = (name: string): CSSProperties => ({ background: `var(--${name}-bg)`, borderColor: `var(--${name})` });
 
-export type PipelineData = Base & { name: string; status: string; line2: string; line3: string };
+export type PipelineData = Base & {
+  name: string;
+  status: string;
+  line2: string;
+  line3: string;
+  /** For reused/frozen steps: the experiment whose result was taken, as a link. */
+  source?: { verb: string; label: string; rest: string; open: () => void };
+};
 export function PipelineNode({ data }: NodeProps & { data: PipelineData }) {
   const animated = data.status === "running" || data.status === "waiting";
+  const src = data.source;
   return (
     <Shell data={data} className={`${data.status} ${animated ? "animated" : ""}`} style={tone(data.status)} label={`${data.name}: ${data.line2}`}>
       <div className="accent" style={{ background: `var(--${data.status})` }} />
       <div className="t1">{data.name}</div>
-      <div className="t2">{data.line2}</div>
+      {src ? (
+        <div className="t2">
+          {src.verb}{" "}
+          <a
+            className="src-link nodrag"
+            title={`Open ${src.label} with this step selected`}
+            onClick={(e) => {
+              e.stopPropagation();
+              src.open();
+            }}
+          >
+            {src.label}
+          </a>
+          {src.rest}
+        </div>
+      ) : (
+        <div className="t2">{data.line2}</div>
+      )}
       <div className="t3">{data.line3}</div>
     </Shell>
   );

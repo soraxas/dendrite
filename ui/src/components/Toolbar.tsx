@@ -1,19 +1,18 @@
 import { useState } from "react";
 import type { Dag, TreeEntry } from "../api";
 import { EXPERIMENT_STATUS } from "../copy";
-import { fmtDur, fmtVal } from "../format";
+import { fmtVal } from "../format";
 import { useDiff } from "../queries";
 import type { Route } from "../router";
 
 const statusTone = (s: string) => (s === "completed" ? "computed" : s === "created" ? "queued" : s);
 
-/** "Changed iterations 30000 → 60000 · reused 2 of 4 steps (saved 0.9s)" */
+/** "Changed iterations 30000 → 60000 · reused 2 of 4 steps" */
 function Story({ dag, nameOf }: { dag: Dag; nameOf: (id: string) => string }) {
   const e = dag.experiment;
   const { data: diff } = useDiff(e.parent_id ? e.id : undefined, e.parent_id ?? undefined);
   const steps = dag.nodes.filter((n) => n.kind === "node");
   const reused = steps.filter((n) => n.status === "cached" || n.status === "pinned");
-  const saved = steps.filter((n) => n.status === "cached").reduce((a, n) => a + (n.duration ?? 0), 0);
   const parts: string[] = [];
   if (e.parent_id && diff) {
     const changes = diff.params.map((p) => `${p.key} ${p.b == null ? "default" : fmtVal(p.b)} → ${p.a == null ? "default" : fmtVal(p.a)}`);
@@ -23,7 +22,7 @@ function Story({ dag, nameOf }: { dag: Dag; nameOf: (id: string) => string }) {
     if (!changes.length && !pins.length) parts.push(`Same settings as ${nameOf(e.parent_id)}`);
   }
   if (steps.length && e.status !== "created") {
-    parts.push(reused.length ? `reused ${reused.length} of ${steps.length} steps${saved ? ` (saved ${fmtDur(saved)})` : ""}` : `ran all ${steps.length} steps`);
+    parts.push(reused.length ? `reused ${reused.length} of ${steps.length} steps` : `ran all ${steps.length} steps`);
   }
   if (!parts.length) return null;
   const text = parts.join(" · ");
