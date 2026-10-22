@@ -41,5 +41,8 @@ dev = [
 prefect = { path = "../prefect", editable = true }
 dendrite = { workspace = true }
 
+[tool.prefect.server]
+analytics_enabled = false
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
