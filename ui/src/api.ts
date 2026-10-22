@@ -24,6 +24,8 @@ export interface TreeEntry {
   pipeline: string;
   status: ExperimentStatus;
   created_at: number;
+  started_at: number | null;
+  finished_at: number | null;
   counts: Partial<Record<RunStatus, number>>;
 }
 

@@ -1,34 +1,73 @@
 import { useState } from "react";
-import type { ExperimentSummary, TreeEntry } from "../api";
+import type { Dag, TreeEntry } from "../api";
+import { EXPERIMENT_STATUS } from "../copy";
+import { fmtDur, fmtVal } from "../format";
+import { useDiff } from "../queries";
 import type { Route } from "../router";
-import { expColor } from "./Sidebar";
 
-export function Toolbar({ exp, tree, route, go, nameOf }: { exp: ExperimentSummary; tree: TreeEntry[]; route: Route; go: (r: Route) => void; nameOf: (id: string) => string }) {
+const statusTone = (s: string) => (s === "completed" ? "computed" : s === "created" ? "queued" : s);
+
+/** "Changed iterations 30000 → 60000 · reused 2 of 4 steps (saved 0.9s)" */
+function Story({ dag, nameOf }: { dag: Dag; nameOf: (id: string) => string }) {
+  const e = dag.experiment;
+  const { data: diff } = useDiff(e.parent_id ? e.id : undefined, e.parent_id ?? undefined);
+  const steps = dag.nodes.filter((n) => n.kind === "node");
+  const reused = steps.filter((n) => n.status === "cached" || n.status === "pinned");
+  const saved = steps.filter((n) => n.status === "cached").reduce((a, n) => a + (n.duration ?? 0), 0);
+  const parts: string[] = [];
+  if (e.parent_id && diff) {
+    const changes = diff.params.map((p) => `${p.key} ${p.b == null ? "default" : fmtVal(p.b)} → ${p.a == null ? "default" : fmtVal(p.a)}`);
+    const pins = Object.keys(e.pins ?? {});
+    if (changes.length) parts.push(`Changed ${changes.slice(0, 2).join(", ")}${changes.length > 2 ? ` +${changes.length - 2} more` : ""}`);
+    if (pins.length) parts.push(`froze ${pins.join(", ")}`);
+    if (!changes.length && !pins.length) parts.push(`Same settings as ${nameOf(e.parent_id)}`);
+  }
+  if (steps.length && e.status !== "created") {
+    parts.push(reused.length ? `reused ${reused.length} of ${steps.length} steps${saved ? ` (saved ${fmtDur(saved)})` : ""}` : `ran all ${steps.length} steps`);
+  }
+  if (!parts.length) return null;
+  const text = parts.join(" · ");
+  return <div className="story">{text.charAt(0).toUpperCase() + text.slice(1)}</div>;
+}
+
+export function Toolbar({ dag, tree, route, go, nameOf }: { dag: Dag; tree: TreeEntry[]; route: Route; go: (r: Route) => void; nameOf: (id: string) => string }) {
+  const exp = dag.experiment;
   const others = tree.filter((e) => e.id !== exp.id);
   const [other, setOther] = useState<string>(route.other || exp.parent_id || others[0]?.id || "");
   const pick = others.some((o) => o.id === other) ? other : others[0]?.id ?? "";
   const tab = (view: Route["view"], label: string) => (
-    <button className={route.view === view ? "active" : ""} onClick={() => go({ view, exp: exp.id })}>{label}</button>
+    <button role="tab" aria-selected={route.view === view} className={route.view === view ? "active" : ""} onClick={() => go({ view, exp: exp.id })}>
+      {label}
+    </button>
   );
   return (
     <div className="toolbar">
-      <h2>{exp.name || exp.id}</h2>
-      <span className="badge" style={{ color: `var(--${expColor(exp.status)})` }}>{exp.status}</span>
-      <span className="mono muted">{exp.id}</span>
-      {exp.parent_id && (
-        <span className="muted">forked from <a onClick={() => go({ view: "dag", exp: exp.parent_id! })}>{nameOf(exp.parent_id)}</a></span>
-      )}
+      <div className="tb-title">
+        <div className="tb-row">
+          <h2>{exp.name || exp.id}</h2>
+          <span className="badge" style={{ color: `var(--${statusTone(exp.status)})` }}>{EXPERIMENT_STATUS[exp.status] ?? exp.status}</span>
+          {exp.parent_id && (
+            <span className="muted">
+              fork of <a onClick={() => go({ view: "dag", exp: exp.parent_id! })}>{nameOf(exp.parent_id)}</a>
+            </span>
+          )}
+        </div>
+        <Story dag={dag} nameOf={nameOf} />
+      </div>
       <span className="spacer" />
-      {tab("dag", "DAG")}
-      {tab("params", "Params")}
-      {tab("metrics", "Metrics")}
+      <div className="tabs" role="tablist">
+        {tab("dag", "Pipeline")}
+        {tab("params", "Parameters")}
+        {tab("metrics", "Metrics")}
+      </div>
       {others.length > 0 && (
-        <span style={{ display: "inline-flex", gap: 4 }}>
-          <select value={pick} onChange={(e) => setOther(e.target.value)} aria-label="Compare with">
-            {others.map((o) => <option key={o.id} value={o.id}>{o.name || o.id} ({o.id})</option>)}
+        <label className="compare">
+          <span className="muted">Compare with</span>
+          <select value={pick} onChange={(e) => setOther(e.target.value)}>
+            {others.map((o) => <option key={o.id} value={o.id}>{o.name || o.id}{others.filter((x) => x.name === o.name).length > 1 ? ` (${o.id})` : ""}</option>)}
           </select>
           <button className={route.view === "diff" ? "active" : ""} onClick={() => go({ view: "diff", exp: exp.id, other: pick })}>Compare</button>
-        </span>
+        </label>
       )}
     </div>
   );

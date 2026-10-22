@@ -1,8 +1,9 @@
 // Detail panel: always describes exactly the selected graph item (selection lives in the URL).
 import type { ReactNode } from "react";
 import { api, type ArtifactRef, type Dag, type DagNode, type Usage } from "../api";
+import { EXPERIMENT_STATUS, STATUS, statusLabel } from "../copy";
 import { describeRoles, flatten, fmtDur, fmtSize, fmtTime, fmtVal, short } from "../format";
-import { useArtifact, useExecution } from "../queries";
+import { useArtifact, useDiff, useExecution } from "../queries";
 
 export interface Nav {
   openExp: (id: string) => void;
@@ -45,28 +46,56 @@ function UsedBy({ usages, nav }: { usages: Usage[]; nav: Nav }) {
   );
 }
 
+function ChangesFromParent({ id, parent, nav }: { id: string; parent: string; nav: Nav }) {
+  const { data: diff } = useDiff(id, parent);
+  if (!diff) return <Muted>…</Muted>;
+  if (!diff.params.length && !diff.inputs.length) return <Muted>Same parameters as {nav.nameOf(parent)}.</Muted>;
+  return (
+    <table>
+      <thead><tr><th>parameter</th><th>{nav.nameOf(parent)}</th><th>this</th></tr></thead>
+      <tbody>
+        {diff.params.map((p) => (
+          <tr key={p.key}>
+            <td className="mono">{p.key}</td>
+            <td className="mono muted">{p.b == null ? "default" : fmtVal(p.b)}</td>
+            <td className="mono"><b>{p.a == null ? "default" : fmtVal(p.a)}</b></td>
+          </tr>
+        ))}
+        {diff.inputs.map((i) => (
+          <tr key={`in:${i.name}`}><td className="mono">input {i.name}</td><td className="mono muted">{short(i.b)}</td><td className="mono"><b>{short(i.a)}</b></td></tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+function Technical({ children }: { children: ReactNode }) {
+  return (
+    <details className="technical">
+      <summary>Technical details</summary>
+      <dl className="kv" style={{ marginTop: 8 }}>{children}</dl>
+    </details>
+  );
+}
+
 export function ExperimentDetail({ dag, tree, nav }: { dag: Dag; tree: { id: string; name: string | null; parent_id: string | null }[]; nav: Nav }) {
   const e = dag.experiment;
-  const nodes = dag.nodes.filter((n) => n.kind === "node");
+  const steps = dag.nodes.filter((n) => n.kind === "node");
   const counts: Record<string, number> = {};
-  for (const n of nodes) counts[n.status] = (counts[n.status] ?? 0) + 1;
-  const saved = nodes.filter((n) => n.status === "cached").reduce((a, n) => a + (n.duration ?? 0), 0);
+  for (const n of steps) counts[n.status] = (counts[n.status] ?? 0) + 1;
+  const saved = steps.filter((n) => n.status === "cached").reduce((a, n) => a + (n.duration ?? 0), 0);
   const children = tree.filter((x) => x.parent_id === e.id);
-  const overrides = Object.keys(flatten(e.params)).length;
+  const own = flatten(e.params);
   return (
     <>
       <Selected kind="experiment" label={e.name || e.id} />
       <section>
         <dl className="kv">
-          <dt>id</dt><dd className="mono">{e.id}</dd>
-          <dt>pipeline</dt><dd>{e.pipeline}</dd>
-          <dt>status</dt><dd>{e.status}</dd>
-          <dt>created</dt><dd>{fmtTime(e.created_at)}</dd>
-          {e.started_at != null && (<><dt>wall time</dt><dd>{fmtDur((e.finished_at ?? Date.now() / 1000) - e.started_at)}</dd></>)}
-          <dt>nodes</dt><dd>{Object.entries(counts).map(([k, v]) => `${v} ${k}`).join(", ") || "—"}</dd>
-          <dt>compute reused</dt><dd>{fmtDur(saved) || "0s"}</dd>
-          {e.flow_run_id && (<><dt>prefect run</dt><dd className="mono">{e.flow_run_id}</dd></>)}
-          {e.parent_id && (<><dt>parent</dt><dd><a onClick={() => nav.openExp(e.parent_id!)}>{nav.nameOf(e.parent_id)}</a></dd></>)}
+          <dt>status</dt><dd>{EXPERIMENT_STATUS[e.status] ?? e.status}</dd>
+          <dt>steps</dt><dd>{Object.entries(counts).map(([k, v]) => `${v} ${statusLabel(k).toLowerCase()}`).join(", ") || "—"}</dd>
+          <dt>time saved</dt><dd>{saved ? `${fmtDur(saved)} by reusing earlier results` : "—"}</dd>
+          {e.started_at != null && (<><dt>took</dt><dd>{fmtDur((e.finished_at ?? Date.now() / 1000) - e.started_at)}</dd></>)}
+          {e.parent_id && (<><dt>fork of</dt><dd><a onClick={() => nav.openExp(e.parent_id!)}>{nav.nameOf(e.parent_id)}</a></dd></>)}
           {children.length > 0 && (
             <><dt>forks</dt><dd>{children.map((c, i) => <span key={c.id}>{i > 0 && ", "}<a onClick={() => nav.openExp(c.id)}>{c.name || c.id}</a></span>)}</dd></>
           )}
@@ -74,10 +103,24 @@ export function ExperimentDetail({ dag, tree, nav }: { dag: Dag; tree: { id: str
         {e.error && <pre className="err" style={{ marginTop: 10 }}>{e.error}</pre>}
       </section>
       <section>
-        <h3>Overrides</h3>
-        {overrides ? <pre>{JSON.stringify(e.params, null, 2)}</pre> : <Muted>none (all defaults)</Muted>}
+        <h3>{e.parent_id ? `Changed from ${nav.nameOf(e.parent_id)}` : "Parameters set"}</h3>
+        {e.parent_id ? (
+          <ChangesFromParent id={e.id} parent={e.parent_id} nav={nav} />
+        ) : Object.keys(own).length ? (
+          <table><tbody>{Object.entries(own).map(([k, v]) => <tr key={k}><td className="mono">{k}</td><td className="mono">{fmtVal(v)}</td></tr>)}</tbody></table>
+        ) : (
+          <Muted>All defaults.</Muted>
+        )}
       </section>
-      <section className="muted" style={{ fontSize: 13 }}>Click a node to inspect it, or an output to trace its lineage.</section>
+      <section>
+        <Technical>
+          <dt>id</dt><dd className="mono">{e.id}</dd>
+          <dt>pipeline</dt><dd>{e.pipeline}</dd>
+          <dt>created</dt><dd>{fmtTime(e.created_at)}</dd>
+          {e.flow_run_id && (<><dt>Prefect run</dt><dd className="mono">{e.flow_run_id}</dd></>)}
+        </Technical>
+      </section>
+      <section className="muted" style={{ fontSize: 13 }}>Hover a step to see what happened; click it for details.</section>
     </>
   );
 }
@@ -108,24 +151,23 @@ function Sparklines({ execId }: { execId: string }) {
 
 export function NodeDetail({ n, dag, nav }: { n: DagNode; dag: Dag; nav: Nav }) {
   const metrics = Object.entries(n.metrics ?? {});
-  const fromOther = n.execution_experiment && n.execution_experiment !== dag.experiment.id;
+  const fromOther = n.execution_experiment && n.execution_experiment !== dag.experiment.id ? n.execution_experiment : null;
   const pending = n.status === "queued" || n.status === "running" || n.status === "waiting";
+  const s = STATUS[n.status as keyof typeof STATUS];
   return (
     <>
-      <Selected kind="node" label={n.name} />
+      <Selected kind="step" label={n.name} />
       <section>
-        <dl className="kv">
-          <dt>status</dt><dd><span className="badge" style={{ color: `var(--${n.status})` }}>{n.status}</span></dd>
-          {n.duration != null && (<><dt>{n.status === "cached" ? "saved" : "duration"}</dt><dd>{fmtDur(n.duration)}</dd></>)}
-          {n.signature && (<><dt>signature</dt><dd className="mono" title={n.signature}>{short(n.signature, 16)}…</dd></>)}
-          {n.execution_id && (
-            <><dt>execution</dt><dd>
-              <a className="mono" onClick={() => nav.selectExec(n.execution_id!)}>{n.execution_id}</a>
-              {fromOther && <span className="muted"> (computed by <a onClick={() => nav.openExp(n.execution_experiment!)}>{nav.nameOf(n.execution_experiment!)}</a>)</span>}
-            </dd></>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+          <span className="badge" style={{ color: `var(--${n.status})` }}>{statusLabel(n.status)}</span>
+          {n.duration != null && <span className="muted">{n.status === "cached" ? `saved ${fmtDur(n.duration)}` : fmtDur(n.duration)}</span>}
+        </div>
+        <p className="explain">
+          {s?.explain}
+          {fromOther && (n.status === "cached" || n.status === "pinned") && (
+            <> Results come from <a onClick={() => nav.openExp(fromOther)}>{nav.nameOf(fromOther)}</a>.</>
           )}
-          {n.started_at && (<><dt>started</dt><dd>{fmtTime(n.started_at)}</dd></>)}
-        </dl>
+        </p>
         {n.error && <pre className="err" style={{ marginTop: 10 }}>{n.error}</pre>}
       </section>
       <section>
@@ -134,13 +176,14 @@ export function NodeDetail({ n, dag, nav }: { n: DagNode; dag: Dag; nav: Nav }) 
       </section>
       <section>
         <h3>Outputs</h3>
-        {Object.keys(n.outputs ?? {}).length ? Object.entries(n.outputs ?? {}).map(([k, r]) => <ArtifactChip key={k} name={k} r={r} nav={nav} />) : <Muted>{pending ? "pending…" : "—"}</Muted>}
+        {Object.keys(n.outputs ?? {}).length ? Object.entries(n.outputs ?? {}).map(([k, r]) => <ArtifactChip key={k} name={k} r={r} nav={nav} />) : <Muted>{pending ? "not produced yet" : "—"}</Muted>}
+        {Object.keys(n.outputs ?? {}).length > 0 && <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>Click an output to preview it and trace where it came from.</div>}
       </section>
       <section>
-        <h3>Params</h3>
+        <h3>Parameters</h3>
         {n.params && Object.keys(n.params).length ? (
           <table><tbody>{Object.entries(n.params).map(([k, v]) => <tr key={k}><td className="mono">{k}</td><td className="mono">{fmtVal(v)}</td></tr>)}</tbody></table>
-        ) : <Muted />}
+        ) : <Muted>{pending ? "resolved when the step starts" : "none"}</Muted>}
       </section>
       {metrics.length > 0 && (
         <section>
@@ -149,6 +192,13 @@ export function NodeDetail({ n, dag, nav }: { n: DagNode; dag: Dag; nav: Nav }) 
           {n.execution_id && <Sparklines execId={n.execution_id} />}
         </section>
       )}
+      <section>
+        <Technical>
+          {n.signature && (<><dt>signature</dt><dd className="mono" title="Hash of code, inputs and parameters; identical signatures are reused.">{n.signature}</dd></>)}
+          {n.execution_id && (<><dt>run</dt><dd><a className="mono" onClick={() => nav.selectExec(n.execution_id!)}>{n.execution_id}</a></dd></>)}
+          {n.started_at && (<><dt>started</dt><dd>{fmtTime(n.started_at)}</dd></>)}
+        </Technical>
+      </section>
     </>
   );
 }
@@ -156,12 +206,12 @@ export function NodeDetail({ n, dag, nav }: { n: DagNode; dag: Dag; nav: Nav }) 
 export function ArtifactDetailPanel({ hash, label, nav, canTrace }: { hash: string; label?: string; nav: Nav; canTrace: boolean }) {
   const { data: a, error } = useArtifact(hash);
   if (error) return <section className="err">{String(error)}</section>;
-  if (!a) return <><Selected kind="artifact" label={label ?? short(hash)} /><section className="muted">Loading…</section></>;
+  if (!a) return <><Selected kind="data" label={label ?? short(hash)} /><section className="muted">Loading…</section></>;
   const p = a.preview;
   const name = label ?? a.filename ?? a.kind;
   return (
     <>
-      <Selected kind="artifact" label={name} />
+      <Selected kind="data" label={name} />
       <section>
         <h4>{name}</h4>
         <dl className="kv">
@@ -173,7 +223,7 @@ export function ArtifactDetailPanel({ hash, label, nav, canTrace }: { hash: stri
           <dd>{a.producer ? <><a onClick={() => nav.selectExec(a.producer!.id)}>{a.producer.node}</a> <span className="mono muted">{short(a.producer.id, 8)}</span></> : "source input"}</dd>
         </dl>
         <div style={{ marginTop: 10, display: "flex", gap: 6 }}>
-          {canTrace && <button onClick={() => nav.trace(a.hash)}>Trace lineage</button>}
+          {canTrace && <button className="primary" onClick={() => nav.trace(a.hash)} title="Show everything that produced this, and everything built from it, across all experiments">Trace lineage</button>}
           {a.kind === "file" && a.present && <a href={api.downloadUrl(a.hash)}><button>Download</button></a>}
         </div>
       </section>
@@ -205,11 +255,11 @@ export function ArtifactDetailPanel({ hash, label, nav, canTrace }: { hash: stri
 export function ExecutionDetailPanel({ id, nav }: { id: string; nav: Nav }) {
   const { data: x, error } = useExecution(id);
   if (error) return <section className="err">{String(error)}</section>;
-  if (!x) return <><Selected kind="execution" label={short(id, 8)} /><section className="muted">Loading…</section></>;
+  if (!x) return <><Selected kind="computation" label={short(id, 8)} /><section className="muted">Loading…</section></>;
   const used = x.used_by ?? [];
   return (
     <>
-      <Selected kind="execution" label={`${x.node} · ${short(x.id, 8)}`} />
+      <Selected kind="computation" label={`${x.node} · ${short(x.id, 8)}`} />
       <section>
         <dl className="kv">
           <dt>id</dt><dd className="mono">{x.id}</dd>
@@ -233,11 +283,11 @@ export function ExecutionDetailPanel({ id, nav }: { id: string; nav: Nav }) {
         {!Object.keys(x.outputs).length && <Muted />}
       </section>
       <section>
-        <h3>Reused by {used.length} node run{used.length === 1 ? "" : "s"}</h3>
+        <h3>Used by {used.length} experiment step{used.length === 1 ? "" : "s"}</h3>
         {used.map((u) => (
           <div className="usage" key={`${u.experiment_id}.${u.node}`}>
             <a onClick={() => nav.openExp(u.experiment_id)}>{u.name || u.experiment_id}</a> <span className="mono muted">{u.experiment_id}</span>
-            <div className="roles">{u.node} · {u.status}</div>
+            <div className="roles">{u.node} · {statusLabel(u.status).toLowerCase()}</div>
           </div>
         ))}
       </section>

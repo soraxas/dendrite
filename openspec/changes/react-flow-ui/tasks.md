@@ -46,3 +46,17 @@
 - [x] 6.3 Add `tests/test_packaging.py`, which builds a wheel with `DENDRITE_SKIP_UI_CHECK` unset against a stub bundle, asserts that `dist/index.html` and `legacy.html` are in the wheel, and asserts the build fails when the bundle is missing. Mark it slow and skip it when `uv` is unavailable
 - [x] 6.4 Check that `npm run build` passes (tsc type-check plus vite build), and that the lineage and live DAG views match the spec scenarios via headless Chrome screenshots against `examples/recon.py` with `DEMO_SLEEP=2`
 - [x] 6.5 Update `README.md` and `CLAUDE.md` with the UI dev loop, the build/release steps, the legacy fallback, and the new Node requirement for UI work only
+
+## 7. UX clarity pass
+
+- [x] 7.1 Add a shared user-facing status vocabulary (`ui/src/copy.ts`) used by nodes, legends, sidebar, panels and diff
+- [x] 7.2 Sidebar: heading with a fork hint, compact indentation, plain outcome line ("Reused 2 of 4 steps"), status glyph only for states that need attention, and the id moved to a tooltip
+- [x] 7.3 Top bar: replace db/store paths with a "Lab" popover, and show a live indicator only while something runs
+- [x] 7.4 Toolbar: story line (changes from parent, steps reused, time saved), Pipeline/Parameters/Metrics tabs, and a labelled "Compare with"
+- [x] 7.5 Node hover cards via `NodeToolbar`; legends show only the outcomes present; input nodes show filename and size
+- [x] 7.6 Lineage mode: mode chip, tinted cross-hatched canvas, banner with "across all experiments" and a back button, and controls/minimap kept clear of the banner
+- [x] 7.7 Detail panel: "Changed from <parent>" table instead of raw JSON, outcome explanation, and ids, signatures and Prefect run tucked under "Technical details"
+- [x] 7.8 Visual check with `scripts/screenshot.py` (now supports hover) for the pipeline, a hover card, and lineage
+- [x] 7.9 Sidebar: 232px wide, collapsible to a 40px rail (remembered per browser), hint moved to an ⓘ tooltip, and relative last-run time per experiment (`started_at`/`finished_at` added to the tree API)
+- [x] 7.10 Selected step shows its input chips on the incoming side and output chips on the outgoing side; picking a chip opens that data's panel while the step stays selected and the chip highlighted
+- [x] 7.11 Re-fit the graph when the canvas is resized (e.g. sidebar collapse)

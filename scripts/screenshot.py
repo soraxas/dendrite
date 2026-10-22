@@ -1,10 +1,10 @@
-"""Real-time headless Chrome screenshot over CDP (macOS Chrome path): screenshot.py OUT.png URL [wait_s] [w h] [click_selector]
+"""Real-time headless Chrome screenshot over CDP (macOS Chrome path): screenshot.py OUT.png URL [wait_s] [w h] [click_selector] [hover_selector]"""
 import asyncio, base64, json, subprocess, sys, tempfile, time, urllib.request
 import websockets
 
 CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 
-async def main(out, url, wait=3.0, w=1500, h=900, click=None):
+async def main(out, url, wait=3.0, w=1500, h=900, click=None, hover=None):
     prof = tempfile.mkdtemp()
     proc = subprocess.Popen([CHROME, "--headless=new", "--disable-gpu", "--remote-debugging-port=9333", f"--user-data-dir={prof}",
                              f"--window-size={w},{h}", "about:blank"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -37,6 +37,20 @@ async def main(out, url, wait=3.0, w=1500, h=900, click=None):
                     if m.get("method") in ("Runtime.consoleAPICalled", "Runtime.exceptionThrown", "Log.entryAdded"): logs.append(m)
                 except asyncio.TimeoutError:
                     pass
+            if hover:
+                r = await call("Runtime.evaluate", returnByValue=True, expression=(
+                    f"(() => {{ const r = document.querySelector({json.dumps(hover)})?.getBoundingClientRect();"
+                    " return r ? [r.x + r.width / 2, r.y + r.height / 2] : null; })()"))
+                pt = r.get("result", {}).get("value")
+                if not pt:
+                    print("hover target not found:", hover, r)
+                if pt:
+                    for dx in (-30, 0):  # move onto the element so mouseenter fires
+                        await call("Input.dispatchMouseEvent", type="mouseMoved", x=pt[0] + dx, y=pt[1])
+                        await asyncio.sleep(0.15)
+                    await asyncio.sleep(0.6)
+                    found = await call("Runtime.evaluate", returnByValue=True, expression="!!document.querySelector('.hovercard')")
+                    print("hover target", pt, "hovercard shown:", found.get("result", {}).get("value"))
             if click:
                 await call("Runtime.evaluate", expression=f"document.querySelector({json.dumps(click)})?.click()")
                 await asyncio.sleep(1.5)
@@ -51,4 +65,4 @@ async def main(out, url, wait=3.0, w=1500, h=900, click=None):
         proc.terminate()
 
 a = sys.argv
-asyncio.run(main(a[1], a[2], float(a[3]) if len(a) > 3 else 3.0, *(int(x) for x in a[4:6]) if len(a) > 5 else (1500, 900), a[6] if len(a) > 6 else None))
+asyncio.run(main(a[1], a[2], float(a[3]) if len(a) > 3 else 3.0, *(int(x) for x in a[4:6]) if len(a) > 5 else (1500, 900), a[6] if len(a) > 6 and a[6] else None, a[7] if len(a) > 7 else None))

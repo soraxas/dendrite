@@ -285,6 +285,8 @@ class Lab:
                     "pipeline": e.pipeline_name,
                     "status": e.status,
                     "created_at": e.created_at,
+                    "started_at": e._row["started_at"],
+                    "finished_at": e._row["finished_at"],
                     "counts": counts,
                 }
             )

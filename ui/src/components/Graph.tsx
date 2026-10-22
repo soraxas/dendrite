@@ -1,6 +1,7 @@
 // React Flow canvas fed by ELK positions and routed edges.
 import {
   Background,
+  BackgroundVariant,
   BaseEdge,
   Controls,
   EdgeLabelRenderer,
@@ -93,11 +94,13 @@ interface Props {
   focusId?: string;
   onSelect: (id: string) => void;
   legend: ReactNode;
+  /** Lineage gets its own canvas look so it's obvious the graph no longer shows one experiment. */
+  variant?: "pipeline" | "lineage";
 }
 
 const MIN_LEGIBLE_ZOOM = 0.65;
 
-function Canvas({ nodes, edges, nodeTypes, selectedId, focusId, onSelect, legend }: Props) {
+function Canvas({ nodes, edges, nodeTypes, selectedId, focusId, onSelect, legend, variant = "pipeline" }: Props) {
   const box = useRef<HTMLDivElement>(null);
   const size = useSize(box);
   const shapeKey = useMemo(
@@ -163,6 +166,18 @@ function Canvas({ nodes, edges, nodeTypes, selectedId, focusId, onSelect, legend
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layout]);
 
+  // Re-fit when the canvas is resized (e.g. the sidebar collapses), debounced.
+  const fittedSize = useRef<{ width: number; height: number } | null>(null);
+  useEffect(() => {
+    if (!layout || !size.width) return;
+    const prev = fittedSize.current;
+    fittedSize.current = size;
+    if (!prev || (Math.abs(prev.width - size.width) < 2 && Math.abs(prev.height - size.height) < 2)) return;
+    const t = setTimeout(() => fitView({ padding: 0.12, maxZoom: 1.2, minZoom: MIN_LEGIBLE_ZOOM, duration: 150 }), 150);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [size.width, size.height, layout]);
+
   return (
     <div ref={box} style={{ position: "absolute", inset: 0 }}>
       <ReactFlow
@@ -178,13 +193,17 @@ function Canvas({ nodes, edges, nodeTypes, selectedId, focusId, onSelect, legend
         onNodeClick={(_, n) => onSelect(n.id)}
         proOptions={{ hideAttribution: true }}
       >
-        <Background gap={24} size={1} color="var(--line)" />
-        <Controls showInteractive={false} position="bottom-right" />
+        {variant === "lineage" ? (
+          <Background variant={BackgroundVariant.Cross} gap={28} size={6} color="var(--lineage-grid)" bgColor="var(--lineage-bg)" />
+        ) : (
+          <Background variant={BackgroundVariant.Dots} gap={22} size={1.2} color="var(--line-strong)" />
+        )}
+        <Controls showInteractive={false} position="top-right" />
         {nodes.length > 8 && (
           <MiniMap
             pannable
             zoomable
-            position="top-right"
+            position="bottom-right"
             nodeColor={(n) => nodes.find((x) => x.id === n.id)?.minimapColor ?? "var(--edge)"}
             maskColor="color-mix(in srgb, var(--bg) 70%, transparent)"
             style={{ background: "var(--panel)" }}

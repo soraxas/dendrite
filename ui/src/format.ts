@@ -42,3 +42,14 @@ export function describeRoles(roles: { kind: string; node: string | null; name: 
   }
   return parts.join(" · ");
 }
+
+/** "just now", "5m ago", "3h ago", "2d ago", then a date. */
+export function fmtAgo(t?: number | null, now = Date.now() / 1000): string {
+  if (!t) return "";
+  const s = Math.max(0, now - t);
+  if (s < 45) return "just now";
+  if (s < 3600) return `${Math.round(s / 60)}m ago`;
+  if (s < 86400) return `${Math.round(s / 3600)}h ago`;
+  if (s < 7 * 86400) return `${Math.round(s / 86400)}d ago`;
+  return new Date(t * 1000).toLocaleDateString();
+}

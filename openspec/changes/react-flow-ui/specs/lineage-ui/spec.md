@@ -74,3 +74,21 @@ The UI SHALL keep a single selection, encoded in the URL. The graph SHALL highli
 #### Scenario: Selection survives polling and reload
 - **WHEN** the page polls or is reloaded with a selection in the URL
 - **THEN** the same item remains selected and highlighted
+
+### Requirement: Plain-language outcomes and hover explanations
+The UI SHALL describe step outcomes in user terms: Ran, Reused, Frozen, Running, Waiting, Queued and Failed. It SHALL use that same vocabulary in nodes, legends, the sidebar, panels and the diff. Hovering any graph node SHALL show a card that explains, in one sentence, what happened and why, plus the step's key facts (parameters and outputs for steps; producer and size for data). Legends SHALL list only the outcomes present on screen.
+
+#### Scenario: Hovering a reused step
+- **WHEN** a user hovers a step that was reused from another experiment
+- **THEN** the card names the source experiment, and explains that an identical run (same code, inputs and parameters) was reused, along with the time saved
+
+#### Scenario: Experiment story
+- **WHEN** a forked experiment is opened
+- **THEN** the toolbar states what changed from its parent (e.g. `iterations 30000 → 60000`) and how many steps were reused, without the user opening any panel
+
+### Requirement: Distinct lineage mode
+The lineage view SHALL be visually distinct from the pipeline view: a mode label, a different canvas background, and a banner. The banner SHALL state that lineage spans all experiments, and SHALL offer a way back to the originating experiment.
+
+#### Scenario: Entering lineage
+- **WHEN** a user clicks "Trace lineage" on an output
+- **THEN** the canvas switches to the lineage background, the toolbar shows a "Lineage" label, and a banner offers "Back to <experiment>"

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Dag, Lineage } from "./api";
 import { ArtifactDetailPanel, ExecutionDetailPanel, ExperimentDetail, NodeDetail, type Nav } from "./components/DetailPanel";
 import { DagView } from "./components/DagView";
@@ -6,8 +6,7 @@ import { LineageView } from "./components/LineageView";
 import { DiffPage, MetricsPage, ParamsPage } from "./components/Pages";
 import { Sidebar } from "./components/Sidebar";
 import { Toolbar } from "./components/Toolbar";
-import { short } from "./format";
-import { isBusy, useDag, useDiff, useExperiments, useInfo, useLineage } from "./queries";
+import { useDag, useDiff, useExperiments, useInfo, useLineage } from "./queries";
 import { splitSel, useRoute, type Route } from "./router";
 
 /** Best human label for an artifact hash within the current DAG: the output (or input) name. */
@@ -20,12 +19,43 @@ function dagLabel(dag: Dag | undefined, hash: string): string | undefined {
   return undefined;
 }
 
+/** The graph node to keep selected while one of its data items is open: producer, else input, else first reader. */
+function ownerOf(dag: Dag, hash: string): string | undefined {
+  const nodes = dag.nodes;
+  return (
+    nodes.find((n) => n.kind === "node" && Object.values(n.outputs ?? {}).some((r) => r?.hash === hash))?.id ??
+    nodes.find((n) => n.kind === "input" && n.artifact?.hash === hash)?.id ??
+    nodes.find((n) => n.kind === "node" && Object.values(n.inputs ?? {}).some((r) => r?.hash === hash))?.id
+  );
+}
+
 function lineageLabel(lineage: Lineage | undefined, hash: string) {
   return lineage?.artifacts.find((a) => a.hash === hash)?.label;
 }
 
+const SIDEBAR_KEY = "dendrite.sidebarCollapsed";
+
+function readCollapsed(): boolean {
+  try {
+    return localStorage.getItem(SIDEBAR_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
 export function App() {
   const [route, navigate] = useRoute();
+  const [collapsed, setCollapsed] = useState(readCollapsed);
+  const toggleSidebar = useCallback(() => {
+    setCollapsed((c) => {
+      try {
+        localStorage.setItem(SIDEBAR_KEY, c ? "0" : "1");
+      } catch {
+        /* per-browser convenience only */
+      }
+      return !c;
+    });
+  }, []);
   const { data: tree = [] } = useExperiments();
   const { data: info } = useInfo();
   const inLineage = route.view === "lineage";
@@ -55,7 +85,7 @@ export function App() {
 
   const { kind, id } = splitSel(route.sel);
   const go = (r: Route) => navigate(r);
-  const busy = isBusy(dag) || tree.some((e) => e.status === "running");
+  const running = tree.filter((e) => e.status === "running");
 
   // ---- main area
   let toolbar = null;
@@ -66,28 +96,50 @@ export function App() {
     graphSel = kind === "artifact" || kind === "exec" ? id : focus?.hash;
     toolbar = (
       <div className="toolbar">
-        {route.exp && <a onClick={() => nav.openExp(route.exp!)}>← {nameOf(route.exp)}</a>}
-        <h2>Lineage of {focus ? <span style={{ color: "var(--accent)" }}>{focus.label}</span> : "…"}</h2>
-        {focus && (
-          <span className="muted">
-            {focus.kind} · <span className="mono">{short(focus.hash, 12)}</span>
-            {focus.producer_node ? ` · produced by ${focus.producer_node}` : " · source input"} · {lineage.ancestors.length} upstream / {lineage.descendants.length} downstream computations
-          </span>
-        )}
+        <div className="tb-title">
+          <div className="tb-row">
+            <span className="mode-chip">Lineage</span>
+            <h2>{focus ? focus.label : "…"}</h2>
+          </div>
+          {focus && (
+            <div className="story">
+              {focus.producer_node ? `Produced by ${focus.producer_node}` : "Source input"} · {lineage.ancestors.length} computation{lineage.ancestors.length === 1 ? "" : "s"} upstream ·{" "}
+              {lineage.descendants.length} downstream
+            </div>
+          )}
+        </div>
       </div>
     );
     if (lineageQ.error) body = <div className="empty err">{String(lineageQ.error)}</div>;
     else if (lineage) {
       const execIds = new Set(lineage.executions.map((x) => x.id));
-      body = <LineageView lineage={lineage} selected={graphSel} nameOf={nameOf} onSelect={(gid) => setSel(execIds.has(gid) ? `exec:${gid}` : `artifact:${gid}`)} />;
+      body = (
+        <LineageView
+          lineage={lineage}
+          selected={graphSel}
+          nameOf={nameOf}
+          back={route.exp ? { label: nameOf(route.exp), go: () => nav.openExp(route.exp!) } : undefined}
+          onSelect={(gid) => setSel(execIds.has(gid) ? `exec:${gid}` : `artifact:${gid}`)}
+        />
+      );
     }
   } else if (dag) {
-    toolbar = <Toolbar key={dag.experiment.id} exp={dag.experiment} tree={tree} route={route} go={go} nameOf={nameOf} />;
-    graphSel = kind === "node" ? id : kind === "input" ? `input:${id}` : undefined;
+    toolbar = <Toolbar key={dag.experiment.id} dag={dag} tree={tree} route={route} go={go} nameOf={nameOf} />;
+    graphSel = kind === "node" ? id : kind === "input" ? `input:${id}` : kind === "artifact" && id ? ownerOf(dag, id) : undefined;
     if (route.view === "params") body = <ParamsPage dag={dag} onArtifact={nav.selectArtifact} />;
     else if (route.view === "metrics") body = <MetricsPage dag={dag} />;
     else if (route.view === "diff") body = <DiffPage diff={diffQ.data} nameOf={nameOf} openExp={nav.openExp} />;
-    else body = <DagView dag={dag} nameOf={nameOf} selected={graphSel} onSelect={(gid) => setSel(gid.startsWith("input:") ? gid : `node:${gid}`)} />;
+    else
+      body = (
+        <DagView
+          dag={dag}
+          nameOf={nameOf}
+          selected={graphSel}
+          onSelect={(gid) => setSel(gid.startsWith("input:") ? gid : `node:${gid}`)}
+          onArtifact={nav.selectArtifact}
+          activeArtifact={kind === "artifact" ? id : undefined}
+        />
+      );
   } else if (dagQ.error) body = <div className="empty err">{String(dagQ.error)}</div>;
 
   // ---- detail panel: exactly the selected item
@@ -110,16 +162,29 @@ export function App() {
   }
 
   return (
-    <div className="app">
+    <div className={`app ${collapsed ? "side-collapsed" : ""}`}>
       <header className="top">
         <span className="brand">dendrite</span>
-        <span className="live">
-          <i className="dot" style={{ background: busy ? "var(--running)" : "var(--queued)" }} />
-          {busy ? "running" : "idle"}
-        </span>
-        {info && <span className="meta">db {info.db} · store {info.store}</span>}
+        {running.length > 0 && (
+          <span className="live" title="The page updates every second while something runs.">
+            <i className="dot pulse" style={{ background: "var(--running)" }} />
+            {running.length} running
+          </span>
+        )}
+        <span className="spacer" />
+        {info && (
+          <details className="lab">
+            <summary title="Where results are stored">Lab</summary>
+            <div className="lab-pop">
+              <dl className="kv">
+                <dt>metadata</dt><dd className="mono">{info.db}</dd>
+                <dt>artifacts</dt><dd className="mono">{info.store}</dd>
+              </dl>
+            </div>
+          </details>
+        )}
       </header>
-      <Sidebar tree={tree} selected={route.exp} onOpen={nav.openExp} />
+      <Sidebar tree={tree} selected={route.exp} onOpen={nav.openExp} collapsed={collapsed} onToggle={toggleSidebar} />
       <main>
         {toolbar}
         <div className="view">{body}</div>

@@ -1,4 +1,5 @@
 import type { Dag, Diff } from "../api";
+import { statusLabel } from "../copy";
 import { flatten, fmtVal, short } from "../format";
 
 export function ParamsPage({ dag, onArtifact }: { dag: Dag; onArtifact: (h: string) => void }) {
@@ -10,7 +11,7 @@ export function ParamsPage({ dag, onArtifact }: { dag: Dag; onArtifact: (h: stri
         <tr key={key}>
           <td className="mono">{key}</td>
           <td className="mono">{fmtVal(v)}</td>
-          <td>{key in overrides ? "experiment override" : "default / call site"}</td>
+          <td>{key in overrides ? "set by this experiment" : "default"}</td>
         </tr>
       );
     }),
@@ -48,13 +49,13 @@ export function ParamsPage({ dag, onArtifact }: { dag: Dag; onArtifact: (h: stri
 export function MetricsPage({ dag }: { dag: Dag }) {
   const rows = dag.nodes.filter((n) => n.kind === "node").flatMap((n) =>
     Object.entries(n.metrics ?? {}).map(([k, v]) => (
-      <tr key={`${n.name}.${k}`}><td>{n.name}</td><td className="mono">{k}</td><td className="num">{fmtVal(v)}</td><td>{n.status}</td></tr>
+      <tr key={`${n.name}.${k}`}><td>{n.name}</td><td className="mono">{k}</td><td className="num">{fmtVal(v)}</td><td>{statusLabel(n.status)}</td></tr>
     )),
   );
   return (
     <div className="pad">
       <table>
-        <thead><tr><th>node</th><th>metric</th><th className="num">value (last step)</th><th>status</th></tr></thead>
+        <thead><tr><th>step</th><th>metric</th><th className="num">value (last logged)</th><th>outcome</th></tr></thead>
         <tbody>{rows.length ? rows : <tr><td colSpan={4} className="muted">No metrics logged.</td></tr>}</tbody>
       </table>
     </div>
@@ -87,15 +88,26 @@ export function DiffPage({ diff, nameOf, openExp }: { diff?: Diff; nameOf: (id: 
           </table>
         </>
       )}
-      <h3>Nodes</h3>
+      <h3>Steps</h3>
       <table>
-        <thead><tr><th>node</th><th>A</th><th>B</th><th>reuse</th></tr></thead>
+        <thead><tr><th>step</th><th>A</th><th>B</th><th>between them</th></tr></thead>
         <tbody>
           {diff.nodes.map((n) => {
-            const verdict = n.same_execution ? "shared execution" : n.same_outputs ? "same outputs" : n.same_signature ? "same signature" : "differs";
+            const [verdict, why] = n.same_execution
+              ? ["Shared", "Both experiments use the very same run of this step."]
+              : n.same_outputs
+                ? ["Same result", "Ran separately but produced identical data."]
+                : n.same_signature
+                  ? ["Same setup", "Same code, inputs and parameters."]
+                  : ["Different", "Inputs or parameters differ, so this step ran differently."];
             const col = n.same_execution || n.same_outputs ? "cached" : "computed";
             return (
-              <tr key={n.node}><td>{n.node}</td><td>{n.a_status ?? "—"}</td><td>{n.b_status ?? "—"}</td><td><span className="badge" style={{ color: `var(--${col})` }}>{verdict}</span></td></tr>
+              <tr key={n.node}>
+                <td>{n.node}</td>
+                <td>{n.a_status ? statusLabel(n.a_status) : "—"}</td>
+                <td>{n.b_status ? statusLabel(n.b_status) : "—"}</td>
+                <td><span className="badge" title={why} style={{ color: `var(--${col})` }}>{verdict}</span></td>
+              </tr>
             );
           })}
         </tbody>
