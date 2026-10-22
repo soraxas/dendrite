@@ -90,6 +90,39 @@ Only the params a node consumes go into its signature. Changing `train_splats.it
 - `@artifact_task(cache=False)` marks non-deterministic nodes. They always execute, and lineage is still recorded.
 - `hash_source=False` together with `version="…"` keeps cosmetic code edits from invalidating the cache.
 
+### The step contract
+
+dendrite splits work the way Temporal does, with a softer rule.
+
+**The pipeline function only wires steps together.** It may branch on params, but it shouldn't do real work or have side effects. It runs on every run, and also whenever the UI plans a draft.
+
+**A step can do anything** (GPU, network, writing files), but it must be *hermetic in what it declares*. Its outputs should depend only on what goes into its signature:
+
+- its code
+- its params
+- its artifact inputs
+- `DENDRITE_ENV` and the declared `packages`
+
+Anything else is a **hidden input**, and the cache can't see it. A hidden input changing won't trigger a recompute, so stale results get reused. Common ones, and their fixes:
+
+| Hidden input | Fix |
+|---|---|
+| Reading a file that wasn't passed in | Pass it as an artifact: `lab.ingest(path)`, or an experiment input |
+| Environment variables, the clock, hostnames | Make them params, or put them in `DENDRITE_ENV` |
+| Unseeded randomness | Add a `seed` param |
+| A changed helper function | Bump `version=`. Only the step's own source is fingerprinted |
+| Inherently fresh data, such as "latest" from an API | `@artifact_task(cache=False)` |
+
+Params don't need type hints, but they must be JSON-serialisable (paths, sets, dataclasses and pydantic models are converted). Values are hashed exactly, so `30000`, `30000.0` and `"30000"` give different signatures. Anything large or non-JSON should be an artifact instead.
+
+**Guard for undeclared reads.** dendrite warns when a step opens a file for reading under the project directory that isn't one of its declared inputs. Set `DENDRITE_CHECK_READS` to choose what happens:
+
+- `warn`: the default
+- `error`: fail the step
+- `off`: no check
+
+The check is best-effort: it sees Python-level opens only, not C extensions or subprocesses.
+
 ## Configuration
 
 | env var | default | |
