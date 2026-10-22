@@ -155,12 +155,15 @@ td.num, th.num { font-variant-numeric: tabular-nums; text-align: right; }
 .elk-edge-label.hl { color: var(--accent); font-weight: 600; }
 
 @media (max-width: 1100px) {
-  .app { grid-template-columns: 240px minmax(0, 1fr); grid-template-rows: 48px minmax(60vh, 1fr) auto; height: auto; min-height: 100vh; }
-  aside.detail { grid-column: 1 / -1; border-left: 0; border-top: 1px solid var(--line); }
+  /* Keep the viewport-height layout so the sidebar still scrolls on its own; details sit under the graph. */
+  .app { grid-template-columns: 240px minmax(0, 1fr); grid-template-rows: 48px minmax(0, 1fr) minmax(0, 40vh); }
+  aside.sidebar { grid-row: 2 / 4; }
+  aside.detail { grid-column: 2; border-left: 0; border-top: 1px solid var(--line); }
 }
 @media (max-width: 700px) {
-  .app { grid-template-columns: minmax(0, 1fr); }
-  aside.sidebar { max-height: 30vh; border-right: 0; border-bottom: 1px solid var(--line); }
+  .app { grid-template-columns: minmax(0, 1fr); grid-template-rows: 48px minmax(0, 30vh) minmax(0, 1fr) minmax(0, 35vh); }
+  aside.sidebar { grid-row: auto; border-right: 0; border-bottom: 1px solid var(--line); }
+  aside.detail { grid-column: 1; }
 }
 
 /* sidebar sizing + collapse */
