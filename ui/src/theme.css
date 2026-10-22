@@ -203,3 +203,11 @@ aside.sidebar.collapsed { display: flex; flex-direction: column; align-items: ce
 .modal-foot { display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-top: 1px solid var(--line); min-height: 52px; }
 .confirm { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; width: 100%; font-size: 13px; }
 .confirm span:first-child { flex: 1; }
+
+/* sidebar rows: ~10px per nesting level; glyph lives in the row's left padding */
+ul.tree { padding: 2px 4px 16px; }
+ul.tree.children { padding: 0; margin: 0 0 0 9px; border-left: 1px solid var(--line); }
+.exp { position: relative; gap: 0; padding: 5px 6px 6px 12px; }
+.glyph { position: absolute; left: 3px; top: 11px; width: 6px; height: 6px; margin: 0; }
+.bar { display: flex; height: 3px; border-radius: 2px; overflow: hidden; margin-top: 5px; background: var(--line); }
+.bar span { display: block; height: 100%; }

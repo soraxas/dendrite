@@ -39,7 +39,7 @@ def colmap(frames: Path, matcher: str = "sequential") -> tuple[Path, Path]:
     cams.write_text(json.dumps({"matcher": matcher, "n_cameras": n}))
     sparse = workdir() / "sparse"
     sparse.mkdir()
-    (sparse / "points3D.txt").write_text("\n".join(f"{i} {i * 0.1:.2f}" for i in range(n * 10)))
+    (sparse / "points3D.txt").write_text("\n".join(f"-{i} {i * 0.1:.2f}" for i in range(n * 10)))
     return cams, sparse
 
 

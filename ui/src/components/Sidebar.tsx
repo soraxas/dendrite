@@ -1,6 +1,6 @@
 import { useState } from "react";
-import type { TreeEntry } from "../api";
-import { EXPERIMENT_STATUS } from "../copy";
+import { RUN_STATUSES, type TreeEntry } from "../api";
+import { EXPERIMENT_STATUS, STATUS } from "../copy";
 import { fmtAgo, fmtTime } from "../format";
 
 /** Plain-language outcome, e.g. "Reused 2 of 4 steps" — the number users care about. */
@@ -25,9 +25,25 @@ function lastRun(e: TreeEntry): { text: string; title: string } {
 }
 
 function Glyph({ status }: { status: TreeEntry["status"] }) {
-  // Only states that need attention get a mark; "done" is the quiet default.
-  if (status === "completed") return <span className="glyph" aria-hidden />;
+  // Only states that need attention get a mark; "done" is the quiet default. It sits in the
+  // row's left padding so it never pushes the text (or the indentation) right.
+  if (status === "completed") return null;
   return <span className={`glyph ${status}`} title={EXPERIMENT_STATUS[status]} aria-label={EXPERIMENT_STATUS[status]} />;
+}
+
+/** Step outcomes at a glance, coloured like the graph legend; the tooltip spells it out. */
+function OutcomeBar({ e }: { e: TreeEntry }) {
+  const parts = RUN_STATUSES.filter((s) => e.counts[s]);
+  const total = parts.reduce((a, s) => a + (e.counts[s] ?? 0), 0);
+  if (!total) return null;
+  const label = parts.map((s) => `${e.counts[s]} ${STATUS[s].label.toLowerCase()}`).join(" · ");
+  return (
+    <div className="bar" title={label} aria-label={label}>
+      {parts.map((s) => (
+        <span key={s} style={{ width: `${(100 * (e.counts[s] ?? 0)) / total}%`, background: `var(--${s})` }} />
+      ))}
+    </div>
+  );
 }
 
 interface Props {
@@ -78,6 +94,7 @@ export function Sidebar({ tree, selected, onOpen, collapsed, onToggle }: Props) 
               <span className="when">{when.text}</span>
             </div>
             <div className="sub">{outcome(e)}</div>
+            <OutcomeBar e={e} />
           </div>
         </div>
         {kids.length > 0 && <ul className="tree children">{kids.map(item)}</ul>}
