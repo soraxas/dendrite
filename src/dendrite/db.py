@@ -8,6 +8,8 @@ Entities are kept deliberately separate:
 * ``artifacts``    – immutable content-addressed outputs
 * ``execution_inputs`` / ``execution_outputs`` – the lineage edges
 * ``leases``       – one row per signature currently being computed
+* ``experiment_flags`` – per-experiment flags (``keep``); a separate table because
+  ``create_all`` can't add columns to an existing ``experiments`` table
 """
 
 from __future__ import annotations
@@ -144,6 +146,20 @@ leases = sa.Table(
 )
 
 
+experiment_flags = sa.Table(
+    "experiment_flags",
+    meta,
+    sa.Column("experiment_id", sa.String(32), sa.ForeignKey("experiments.id"), primary_key=True),
+    sa.Column("keep", sa.Boolean, nullable=False, default=False),
+    sa.Column("updated_at", sa.Float, nullable=False),
+)
+
+# Experiment rows carry their keep flag.
+_EXPERIMENT_ROW = sa.select(experiments, sa.func.coalesce(experiment_flags.c.keep, False).label("keep")).outerjoin(
+    experiment_flags, experiment_flags.c.experiment_id == experiments.c.id
+)
+
+
 def _new_id() -> str:
     return uuid.uuid4().hex[:16]
 
@@ -253,6 +269,44 @@ class Metadata:
             )
         return res.rowcount == 1
 
+    def set_keep(self, exp_id: str, keep: bool) -> None:
+        with self.tx() as conn:
+            res = conn.execute(
+                experiment_flags.update().where(experiment_flags.c.experiment_id == exp_id).values(keep=keep, updated_at=time.time())
+            )
+            if res.rowcount == 0:
+                conn.execute(experiment_flags.insert().values(experiment_id=exp_id, keep=keep, updated_at=time.time()))
+
+    def delete_experiments(
+        self, ids: list[str], refuse_status: Iterable[str] = ("running",), reparent: dict[str, str | None] | None = None
+    ) -> None:
+        """Delete experiments (children first), their node runs and flags in one transaction.
+
+        ``reparent`` moves surviving forks (child id -> new parent id) first. Executions,
+        artifacts, metrics and lineage edges stay. Raises ``ValueError`` (and changes
+        nothing) if any has a refused status or a fork outside ``ids`` that isn't reparented.
+        """
+        if not ids:
+            return
+        with self.tx() as conn:
+            for child, parent in (reparent or {}).items():
+                conn.execute(experiments.update().where(experiments.c.id == child).values(parent_id=parent))
+            rows = conn.execute(sa.select(experiments.c.id, experiments.c.status).where(experiments.c.id.in_(ids))).all()
+            if len(rows) != len(set(ids)):
+                raise ValueError("some experiments no longer exist")
+            busy = [i for i, st in rows if st in set(refuse_status)]
+            if busy:
+                raise ValueError(f"experiment {busy[0]} is running")
+            outside = conn.execute(
+                sa.select(experiments.c.id).where(experiments.c.parent_id.in_(ids), experiments.c.id.not_in(ids))
+            ).first()
+            if outside:
+                raise ValueError(f"experiment {outside[0]} is forked from one being deleted")
+            conn.execute(node_runs.delete().where(node_runs.c.experiment_id.in_(ids)))
+            conn.execute(experiment_flags.delete().where(experiment_flags.c.experiment_id.in_(ids)))
+            for exp_id in ids:  # ``ids`` lists children before parents (parent_id is a foreign key)
+                conn.execute(experiments.delete().where(experiments.c.id == exp_id))
+
     def delete_draft(self, exp_id: str) -> None:
         """Delete a draft that has no children; raises ``ValueError`` otherwise."""
         with self.tx() as conn:
@@ -267,23 +321,23 @@ class Metadata:
 
     def experiment(self, key: str) -> dict | None:
         with self.ro() as conn:
-            row = conn.execute(sa.select(experiments).where(experiments.c.id == key)).mappings().first()
+            row = conn.execute(_EXPERIMENT_ROW.where(experiments.c.id == key)).mappings().first()
             if row is None:
                 row = (
                     conn.execute(
-                        sa.select(experiments)
+                        _EXPERIMENT_ROW
                         .where(experiments.c.name == key)
                         .order_by(experiments.c.created_at.desc())
                     )
                     .mappings()
                     .first()
                 )
-        return dict(row) if row else None
+        return dict(row, keep=bool(row["keep"])) if row else None
 
     def experiments(self) -> list[dict]:
         with self.ro() as conn:
-            rows = conn.execute(sa.select(experiments).order_by(experiments.c.created_at)).mappings().all()
-        return [dict(r) for r in rows]
+            rows = conn.execute(_EXPERIMENT_ROW.order_by(experiments.c.created_at)).mappings().all()
+        return [dict(r, keep=bool(r["keep"])) for r in rows]
 
     # -- node runs -----------------------------------------------------------------
     def clear_node_runs(self, exp_id: str) -> None:
@@ -372,6 +426,52 @@ class Metadata:
             labels = sorted({r["kind"] if r["node"] is None else f"{legacy[r['kind']]}:{r['node']}" for r in rs})
             out.append({"id": e["id"], "name": e["name"], "roles": rs, "role_labels": labels})
         return out
+
+    # -- bulk reads for storage accounting -----------------------------------------
+    def all_node_runs(self) -> list[dict]:
+        with self.ro() as conn:
+            rows = conn.execute(
+                sa.select(
+                    node_runs.c.experiment_id, node_runs.c.node, node_runs.c.status, node_runs.c.execution_id,
+                    node_runs.c.outputs, node_runs.c.finished_at,
+                )
+            ).mappings().all()
+        return [dict(r) for r in rows]
+
+    def all_artifacts(self) -> dict[str, dict]:
+        with self.ro() as conn:
+            rows = conn.execute(sa.select(artifacts)).mappings().all()
+        return {r["hash"]: dict(r) for r in rows}
+
+    def successful_executions(self) -> list[dict]:
+        """Successful executions with their output hashes (``outputs``: name -> hash)."""
+        with self.ro() as conn:
+            rows = conn.execute(
+                sa.select(executions.c.id, executions.c.node, executions.c.experiment_id, executions.c.started_at, executions.c.finished_at)
+                .where(executions.c.status == "success")
+            ).mappings().all()
+            outs = conn.execute(
+                sa.select(execution_outputs.c.execution_id, execution_outputs.c.name, execution_outputs.c.artifact_hash)
+                .join(executions, executions.c.id == execution_outputs.c.execution_id)
+                .where(executions.c.status == "success")
+                .order_by(execution_outputs.c.position)
+            ).all()
+        by_exec: dict[str, dict[str, str]] = {}
+        for eid, name, h in outs:
+            by_exec.setdefault(eid, {})[name] = h
+        return [dict(r, outputs=by_exec.get(r["id"], {})) for r in rows]
+
+    def running_executions(self) -> list[dict]:
+        with self.ro() as conn:
+            rows = conn.execute(
+                sa.select(executions.c.id, executions.c.signature, executions.c.started_at).where(executions.c.status == "running")
+            ).mappings().all()
+        return [dict(r) for r in rows]
+
+    def active_leases(self) -> list[dict]:
+        with self.ro() as conn:
+            rows = conn.execute(sa.select(leases).where(leases.c.expires_at > time.time())).mappings().all()
+        return [dict(r) for r in rows]
 
     # -- executions ----------------------------------------------------------------
     def latest_success_for_node(self, node: str) -> dict | None:

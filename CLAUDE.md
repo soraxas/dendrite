@@ -31,6 +31,7 @@ uv run python examples/recon.py            # demo: baseline + config fork + pinn
 uv run dendrite ui --port 8454 --import examples.recon   # API + SPA; --import enables draft previews
 uv run dendrite run <exp> --import examples.recon        # run a draft made in the UI
 uv run dendrite check --import examples.recon            # static checks; exit 1 on errors
+uv run dendrite du                                       # storage inventory; rm | keep | evict | gc | clean preview unless --yes
                                            # also: list | show | diff | dag | tree | lineage
 cd ui && npm run dev                       # hot-reloading UI, /api proxied to :8454 (Node 20+; UI work only)
 cd ui && npm run build                     # tsc type-check + vite build into src/dendrite/ui/dist (git-ignored)
@@ -47,6 +48,7 @@ Configuration env vars:
 - `DENDRITE_STORE_URL` (a directory, or an fsspec URL such as `s3://bucket/prefix`)
 - `DENDRITE_ENV`, which is mixed into every signature (for example an image digest)
 - `DENDRITE_CHECK_READS`: `warn` (default), `error` or `off`, for the undeclared-read guard
+- `DENDRITE_GC_GRACE`: seconds (default 3600) during which GC skips freshly written objects
 
 ## Architecture
 
@@ -124,6 +126,16 @@ The flow of a run spans several modules in `src/dendrite/`:
    - `write_source` writes only to that recorded path. It checks the client's file hash (409 on mismatch) and replaces atomically.
    - `PUT /api/sources/{hash}` is gated by `create_app(allow_edit=...)`. `dendrite ui` enables it on loopback hosts or with `--allow-edit`.
 
+11. **`storage.py`.** Storage accounting and reclamation, exposed as `Lab.storage()/gc()/evict()/clean()` and `Experiment.delete()/keep()`.
+   - **Reachability defines what is kept.** Roots are each existing experiment's input hashes, pin hashes and node-run outputs, plus the members of directory manifests. Anything else in `objects/` is collectable. There is no reference counting.
+   - **Metadata is never deleted by reclamation.** `Lab.delete(ids, forks=…)` removes only `experiments`, their `node_runs` and `experiment_flags` rows (`Metadata.delete_experiments`, one transaction, children first). With `forks="keep"` it first re-parents surviving forks to the nearest surviving ancestor, in the same transaction. Executions keep their `experiment_id`, which the UI labels "deleted experiment".
+   - **Stuck runs.** `Experiment.mark_stopped()` turns a `running` experiment left by a crashed process into `failed`, which unblocks the busy guard.
+   - **Safety.** Blobs written within the grace period are skipped. Applying GC or evict, and `clean()`, refuse while an experiment is `running` or a lease is held (`StorageBusy`), unless forced. Eviction refuses pinned outputs (`EvictRefused`). `gc(hashes=…)` intersects a fresh report with the previewed hashes.
+   - **Checkouts.** Deleting blobs also drops their checkouts (`store.drop_checkouts`), because local checkouts are hardlinks that would keep the bytes alive.
+   - **Age-based GC.** `gc(older_than=…)` treats node-run outputs of executions last used before the cutoff as non-roots. It spares what kept experiments, any pin, or each pipeline's newest completed experiment reach.
+   - **Stores.** `ArtifactStore.iter_objects()` lists `(hash, size, mtime)`. `FsspecStore` caches dir manifests locally under `cache/manifests/`.
+   - **Server.** The server caches the inventory for 30 s (`?refresh=1`). Every mutation endpoint requires `allow_edit`; previews (`/api/gc`, `/evict` without `apply`) don't. The UI is `ui/src/components/Storage.tsx`, at `#/storage`.
+
 ## Invariants to preserve
 
 - Signatures must never include experiment ids or flow-run ids. That is what makes cross-experiment reuse work.
@@ -131,6 +143,7 @@ The flow of a run spans several modules in `src/dendrite/`:
 - Only `ArtifactRef`s cross Prefect task boundaries. Never pass large data through Prefect.
 - A cache hit must `store.verify()` its outputs, including every member of a directory manifest. A missing blob means recompute.
 - Experiment config (params, inputs, pins) is frozen at its first run. Before that, only `draft` experiments are editable. Re-running only replaces node_runs.
+- **Reclaiming space never risks a wrong result.** It may only delete blobs, never metadata rows or anything a cache hit could trust without `verify()`. Anything deleted must recompute when needed. `tests/test_storage.py` covers this.
 - **Plans are side-effect free.** A plan never writes node_runs, executions, blobs or leases, never touches Prefect, and never calls step functions. `tests/test_plan.py::test_plan_writes_nothing` checks this.
 - **Step contract** (README, "The step contract"):
   - The pipeline body only wires steps together.
@@ -159,6 +172,7 @@ Spec-driven changes live in `openspec/`:
 - `openspec/config.yaml` holds project context.
 - `openspec/specs/` holds the baseline specs from the archived `add-artifact-lineage` change.
 - `openspec/changes/draft-experiments/` is drafts, plans and the step contract (phase 1 of the editing UI).
+- `openspec/changes/storage-management/` is the storage inventory, delete, evict, GC and clean-up change.
 - `openspec/changes/react-flow-ui/` is the React Flow UI change. Archive it with `openspec archive react-flow-ui` once it has been reviewed.
 - Use `/opsx:propose`, `/opsx:apply` and `/opsx:archive` for new work.
 - Validate with `openspec validate <change>`.

@@ -164,6 +164,7 @@ The check is best-effort: it sees Python-level opens only, not C extensions or s
 | `DENDRITE_DB_URL` | `sqlite:///$HOME/lineage.db` | any SQLAlchemy URL, e.g. `postgresql+psycopg://user:pw@host/db` (`uv sync --extra postgres`) |
 | `DENDRITE_STORE_URL` | `$HOME/store` | a directory, or an fsspec URL such as `s3://bucket/prefix` (`uv sync --extra s3`) |
 | `DENDRITE_ENV` | — | extra environment fingerprint (e.g. an OCI image digest) mixed into every signature |
+| `DENDRITE_GC_GRACE` | `3600` | seconds: clean-up skips stored objects written more recently than this (in-flight uploads) |
 
 For MinIO, pass storage options:
 
@@ -227,10 +228,43 @@ A plan has two limits:
 - **It's an upper bound.** A step downstream of one that will run is shown as "will run". If the earlier step turns out to produce the same output, it is reused after all.
 - **It can stop early.** If the pipeline function branches on the *contents* of a result that doesn't exist yet, the preview stops there and says so.
 
+### Storage: see where the space goes, and reclaim it
+
+The **Storage** page (top bar) and `dendrite du` show:
+- store totals, split into data an experiment still uses and data that can be cleaned up
+- per experiment, its size and what deleting it frees. Results shared by forks are counted once, so "frees" is only the part no other experiment uses.
+- cache entries, with how often each was reused and when it was last used
+- the largest artifacts, and local scratch (checkouts and leftover step folders)
+
+Reclaiming space never costs correctness. A cache hit checks that every output blob exists, so anything deleted is simply recomputed when a run needs it again.
+
+- **Delete experiments.** One at a time, or select several (or "select old": finished more than N days ago and not kept) and delete them together. Forks you keep re-attach to the nearest ancestor that stays, so you can drop an old baseline and keep the fork that won. Execution and lineage records stay (shown as "deleted experiment"), and results other experiments use stay too.
+- **Evict a cache entry.** Its stored outputs are deleted and the step recomputes next time. Refused if another experiment has frozen that result.
+- **Clean up.** Deletes stored data no existing experiment reaches, such as leftovers from failed runs or data only deleted experiments used. Optionally it also evicts cache unused for N days, sparing experiments marked **keep**, frozen results, and each pipeline's newest run.
+
+Every deletion previews first, and confirming deletes exactly what was previewed. Clean-up skips objects written within `DENDRITE_GC_GRACE`, unless you include them while nothing runs (for example right after deleting experiments). Applying refuses while a run is in progress; if a run crashed and left its experiment "running", mark it stopped from the Storage page. All of this works from the UI alone.
+
+```bash
+dendrite du                         # where the space goes
+dendrite rm EXP [--forks|--keep-forks] --yes   # delete an experiment; previews without --yes
+dendrite keep EXP [--off]           # spare it from age-based clean-up
+dendrite evict EXEC_ID --yes        # drop one step's stored outputs
+dendrite gc [--older-than 30] --yes # delete what nothing uses (and cache unused for 30 days)
+dendrite clean                      # clear local checkouts and leftover step folders
+```
+
+```python
+lab.storage()                         # the inventory the page shows
+lab.delete([a.id, b.id], forks="keep") # lineage stays; kept forks re-attach upward; then:
+lab.gc(dry_run=False)                 # or lab.gc(older_than=30 * 86400, dry_run=False)
+lab.evict(execution_id, dry_run=False)
+```
+
 The built UI ships inside the wheel, so installing and running dendrite never needs Node.js. If the bundle hasn't been built (for example in a fresh clone), `dendrite ui` falls back to the older single-file page and says so. `/api/info` reports which UI is active.
 
 ```bash
 dendrite list | show EXP | diff A B | dag EXP | tree | lineage HASH [--mermaid] | run EXP | check | ui
+dendrite du | rm EXP | keep EXP | evict EXEC | gc | clean
 ```
 
 Each run also publishes a Prefect markdown artifact (`dendrite-<exp id>`) with the node table and a Mermaid DAG, so the lineage is visible in the Prefect UI too.

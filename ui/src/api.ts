@@ -46,6 +46,7 @@ export interface TreeEntry {
   started_at: number | null;
   finished_at: number | null;
   counts: Partial<Record<RunStatus, number>>;
+  keep?: boolean;
 }
 
 export interface ExperimentSummary {
@@ -62,6 +63,7 @@ export interface ExperimentSummary {
   finished_at: number | null;
   flow_run_id: string | null;
   error: string | null;
+  keep?: boolean;
 }
 
 export interface DagNode {
@@ -266,6 +268,72 @@ export interface Diff {
   metrics: { node: string; key: string; a: number | null; b: number | null }[];
 }
 
+export interface StorageExperiment {
+  id: string;
+  name: string | null;
+  pipeline: string;
+  status: ExperimentStatus;
+  parent_id: string | null;
+  keep: boolean;
+  created_at: number;
+  finished_at: number | null;
+  forks: string[];
+  bytes: number; // everything it reaches
+  exclusive: number; // reached by no other experiment: freed by deleting it, then cleaning up
+  with_forks: number; // freed by deleting it and its forks
+}
+
+export interface CacheEntry {
+  execution_id: string;
+  node: string;
+  experiment_id: string | null;
+  finished_at: number | null;
+  duration: number | null;
+  outputs: Record<string, string>;
+  bytes: number;
+  present: boolean;
+  uses: number;
+  reused: number;
+  last_used: number | null;
+  live: boolean;
+}
+
+export interface Inventory {
+  computed_at: number;
+  store: {
+    url: string;
+    objects: number;
+    bytes: number;
+    live: { objects: number; bytes: number };
+    shared: { objects: number; bytes: number };
+    collectable: { objects: number; bytes: number };
+  };
+  experiments: StorageExperiment[];
+  cache: CacheEntry[];
+  largest: { hash: string; kind: string; filename: string | null; size: number; producer_node: string | null; present: boolean; live: boolean; experiments: number }[];
+  scratch: Record<string, number>;
+  busy: string[];
+}
+
+export interface ReclaimReport {
+  dry_run: boolean;
+  deleted: { hash: string; size: number; why: string }[];
+  bytes: number;
+  skipped: { hash: string; size: number; why: string }[];
+  groups: Record<string, { count: number; bytes: number }>;
+}
+
+/** What happens to forks of a deleted experiment: refuse, delete them, or keep them (re-attached upward). */
+export type ForkMode = "refuse" | "delete" | "keep";
+
+export interface GcRequest {
+  older_than_days?: number | null;
+  force?: boolean;
+  apply?: boolean;
+  hashes?: string[];
+  include_recent?: boolean; // skip the grace period (applying still refuses while work runs)
+}
+
 export class ApiError extends Error {
   constructor(public status: number, message: string, public code?: string) {
     super(message);
@@ -318,5 +386,19 @@ export const api = {
   fork: (id: string, name?: string) => send<ExperimentSummary>("POST", `${exp(id)}/fork`, { name: name ?? null }),
   editDraft: (id: string, edit: DraftEdit) => send<ExperimentSummary>("PATCH", exp(id), edit),
   discard: (id: string) => send<{ deleted: string }>("DELETE", exp(id)),
+  deleteExperiment: (id: string, forks: ForkMode = "refuse") =>
+    send<{ deleted: string; ids: string[]; reparented: Record<string, string | null>; parent_id: string | null }>("DELETE", `${exp(id)}?forks=${forks}`),
+  deleteMany: (ids: string[], forks: ForkMode = "refuse", force = false) =>
+    send<{ deleted: string[]; reparented: Record<string, string | null> }>("POST", "/api/experiments/delete", { ids, forks, force }),
+  estimate: (ids: string[], forks: ForkMode = "keep") => send<{ ids: string[]; bytes: number }>("POST", "/api/storage/estimate", { ids, forks }),
+  stop: (id: string) => send<ExperimentSummary>("POST", `${exp(id)}/stop`),
+  evictArtifact: (hash: string, apply = false, force = false) =>
+    send<ReclaimReport>("POST", `/api/artifacts/${encodeURIComponent(hash)}/evict`, { apply, force }),
+  keep: (id: string, keep: boolean) => send<ExperimentSummary>("POST", `${exp(id)}/keep`, { keep }),
+  storage: (refresh = false) => get<Inventory>(`/api/storage${refresh ? "?refresh=1" : ""}`),
+  evict: (execId: string, apply = false, force = false) =>
+    send<ReclaimReport>("POST", `/api/executions/${encodeURIComponent(execId)}/evict`, { apply, force }),
+  gc: (req: GcRequest) => send<ReclaimReport>("POST", "/api/gc", req),
+  clean: (force = false) => send<{ removed: number; bytes: number }>("POST", "/api/storage/clean", { force }),
   downloadUrl: (h: string) => `/api/artifacts/${encodeURIComponent(h)}/download`,
 };

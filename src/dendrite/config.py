@@ -15,6 +15,8 @@ class Settings:
     # Undeclared-read guard (guard.py): "warn" | "error" | "off", and the directory it watches.
     check_reads: str = "warn"
     project_root: Path = Path(".")
+    # Garbage collection skips blobs modified more recently than this (seconds): in-flight uploads.
+    gc_grace: float = 3600.0
 
     @classmethod
     def resolve(
@@ -27,7 +29,13 @@ class Settings:
         check = os.environ.get("DENDRITE_CHECK_READS", "warn").lower()
         if check not in ("warn", "error", "off"):
             raise ValueError(f"DENDRITE_CHECK_READS must be warn, error or off, not {check!r}")
+        grace = os.environ.get("DENDRITE_GC_GRACE", "3600")
+        try:
+            gc_grace = float(grace)
+        except ValueError:
+            raise ValueError(f"DENDRITE_GC_GRACE must be a number of seconds, not {grace!r}") from None
         return cls(
+            gc_grace=gc_grace,
             check_reads=check,
             project_root=Path.cwd().resolve(),
             home=root,

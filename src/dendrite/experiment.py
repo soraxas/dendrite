@@ -298,6 +298,104 @@ class Lab:
     def experiments(self) -> list["Experiment"]:
         return [Experiment(self, r) for r in self.db.experiments()]
 
+    # -- deleting ------------------------------------------------------------------
+    def delete(self, ids: Iterable[str], *, forks: str = "refuse", force: bool = False) -> dict[str, Any]:
+        """Delete experiments in one transaction; lineage and executions stay (see ``storage.py``).
+
+        ``forks`` decides what happens to forks of a deleted experiment that weren't selected:
+        ``"refuse"`` (raise ``ValueError``), ``"delete"`` (delete them too) or ``"keep"``
+        (they become forks of the nearest ancestor that stays, or of nothing). Running
+        experiments are refused unless ``force``. Returns ``{"deleted", "reparented"}``.
+        """
+        rows = {r["id"]: r for r in self.db.experiments()}
+        targets = set(ids)
+        unknown = targets - set(rows)
+        if unknown:
+            raise KeyError(f"no experiment {sorted(unknown)[0]!r}")
+        if forks not in ("refuse", "delete", "keep"):
+            raise ValueError("forks must be 'refuse', 'delete' or 'keep'")
+        kids: dict[str, list[str]] = {}
+        for r in rows.values():
+            kids.setdefault(r["parent_id"], []).append(r["id"])
+        if forks == "delete":
+            stack = list(targets)
+            while stack:
+                for c in kids.get(stack.pop(), []):
+                    if c not in targets:
+                        targets.add(c)
+                        stack.append(c)
+        reparent: dict[str, str | None] = {}
+        for r in rows.values():
+            if r["id"] not in targets and r["parent_id"] in targets:
+                if forks == "refuse":
+                    raise ValueError(f"experiment {r['parent_id']} has fork {r['id']}; delete or keep its forks")
+                up = r["parent_id"]
+                while up in targets:
+                    up = rows[up]["parent_id"]
+                reparent[r["id"]] = up
+
+        def depth(eid: str) -> int:
+            d = 0
+            while rows[eid]["parent_id"] in rows:
+                eid, d = rows[eid]["parent_id"], d + 1
+            return d
+
+        order = sorted(targets, key=depth, reverse=True)  # children before parents
+        self.db.delete_experiments(order, refuse_status=() if force else ("running",), reparent=reparent)
+        return {"deleted": order, "reparented": reparent}
+
+    def deletion_estimate(self, ids: Iterable[str], forks: str = "keep") -> dict[str, Any]:
+        """Bytes that deleting ``ids`` (and with ``forks="delete"`` their forks) would free after GC."""
+        from .storage import Storage
+
+        targets = set(ids)
+        if forks == "delete":
+            rows = self.db.experiments()
+            grew = True
+            while grew:
+                more = {r["id"] for r in rows if r["parent_id"] in targets} - targets
+                targets |= more
+                grew = bool(more)
+        return {"ids": sorted(targets), "bytes": Storage(self).frees(targets)}
+
+    # -- storage -------------------------------------------------------------------
+    def storage(self) -> dict[str, Any]:
+        """Where the space goes: store totals (live vs collectable), per experiment, cache
+        entries, the largest artifacts and local scratch. See ``storage.py``."""
+        from .storage import Storage
+
+        return Storage(self).inventory()
+
+    def gc(
+        self,
+        older_than: float | None = None,
+        *,
+        dry_run: bool = True,
+        grace: float | None = None,
+        force: bool = False,
+        hashes: Iterable[str] | None = None,
+    ) -> dict[str, Any]:
+        """Delete blobs no experiment reaches (a dry run unless ``dry_run=False``).
+
+        ``older_than`` (seconds) also evicts cache last used before then, sparing kept
+        experiments, pins and each pipeline's newest completed run.
+        """
+        from .storage import Storage
+
+        return Storage(self).gc(older_than, dry_run=dry_run, grace=grace, force=force, hashes=hashes)
+
+    def evict(self, target: str, *, dry_run: bool = True, force: bool = False) -> dict[str, Any]:
+        """Delete an execution's (or artifact's) output blobs; they recompute when next needed."""
+        from .storage import Storage
+
+        return Storage(self).evict(target, dry_run=dry_run, force=force)
+
+    def clean(self, *, force: bool = False) -> dict[str, Any]:
+        """Clear local checkouts and stale step workdirs (never stored objects)."""
+        from .storage import Storage
+
+        return Storage(self).clean(force=force)
+
     def tree(self) -> list[dict[str, Any]]:
         """Flat list of experiments with parent links (the fork tree)."""
         out = []
@@ -312,6 +410,7 @@ class Lab:
                     "parent_id": e.parent_id,
                     "pipeline": e.pipeline_name,
                     "status": e.status,
+                    "keep": e.kept,
                     "created_at": e.created_at,
                     "started_at": e._row["started_at"],
                     "finished_at": e._row["finished_at"],
@@ -369,6 +468,7 @@ class Experiment:
     created_at = property(lambda self: self._row["created_at"])
     flow_run_id = property(lambda self: self._row["flow_run_id"])
     error = property(lambda self: self._row["error"])
+    kept = property(lambda self: bool(self._row.get("keep")))
 
     @property
     def pipeline(self) -> Pipeline:
@@ -496,6 +596,48 @@ class Experiment:
             self.lab.db.delete_draft(self.id)
         except ValueError as e:
             raise NotADraft(str(e)) from None
+
+    def descendants(self) -> list["Experiment"]:
+        """Every fork of this experiment, recursively, children before their parents."""
+        rows = self.lab.db.experiments()
+        kids: dict[str, list[dict]] = {}
+        for r in rows:
+            kids.setdefault(r["parent_id"], []).append(r)
+        out: list[Experiment] = []
+
+        def walk(eid: str) -> None:
+            for r in kids.get(eid, []):
+                walk(r["id"])
+                out.append(Experiment(self.lab, r))
+
+        walk(self.id)
+        return out
+
+    def delete(self, forks: bool = False, *, keep_forks: bool = False, force: bool = False) -> list[str]:
+        """Delete this experiment, returning the ids deleted.
+
+        With forks, pass ``forks=True`` to delete them too, or ``keep_forks=True`` to keep
+        them as forks of this one's parent. Executions, artifacts, metrics and lineage stay,
+        so other experiments keep reusing shared results; ``lab.gc()`` then frees what only
+        the deleted experiments reached. Refused for running experiments (``force=True`` for
+        one left ``running`` by a crash).
+        """
+        mode = "delete" if forks else "keep" if keep_forks else "refuse"
+        return self.lab.delete([self.id], forks=mode, force=force)["deleted"]
+
+    def mark_stopped(self) -> "Experiment":
+        """Mark a ``running`` experiment whose process died as failed, so clean-up can proceed."""
+        ok = self.lab.db.update_experiment_if(
+            self.id, "running", status="failed", finished_at=time.time(), error="marked as stopped (its run was no longer active)"
+        )
+        if not ok:
+            raise ValueError(f"experiment {self.id} is not running")
+        return self.refresh()
+
+    def keep(self, flag: bool = True) -> "Experiment":
+        """Protect everything this experiment reaches from age-based ``lab.gc(older_than=…)``."""
+        self.lab.db.set_keep(self.id, flag)
+        return self.refresh()
 
     # -- checking ------------------------------------------------------------------
     def check(self) -> list[dict[str, Any]]:
@@ -732,6 +874,7 @@ class Experiment:
             "finished_at": r["finished_at"],
             "flow_run_id": r["flow_run_id"],
             "error": r["error"],
+            "keep": bool(r.get("keep")),
         }
 
     def diff(self, other: "Experiment") -> dict[str, Any]:

@@ -3,8 +3,9 @@ import { useState, type ReactNode } from "react";
 import { api, type ArtifactRef, type Dag, type DagNode, type PlanNode, type Usage } from "../api";
 import { EXPERIMENT_STATUS, PLAN, STATUS, statusLabel } from "../copy";
 import { describeRoles, flatten, fmtDur, fmtSize, fmtTime, fmtVal, short } from "../format";
-import { useArtifact, useDiff, useExecution, useSource } from "../queries";
+import { useArtifact, useDiff, useExecution, useSource, useStorage } from "../queries";
 import { CodeModal } from "./CodeModal";
+import { DeleteExperiment, descendantsOf, StopButton } from "./Storage";
 
 export interface Nav {
   openExp: (id: string) => void;
@@ -80,8 +81,16 @@ function Technical({ children }: { children: ReactNode }) {
   );
 }
 
-export function ExperimentDetail({ dag, tree, nav }: { dag: Dag; tree: { id: string; name: string | null; parent_id: string | null }[]; nav: Nav }) {
+export function ExperimentDetail({ dag, tree, nav, canEdit = false, onDeleted }: {
+  dag: Dag;
+  tree: { id: string; name: string | null; parent_id: string | null }[];
+  nav: Nav;
+  canEdit?: boolean;
+  onDeleted?: (parent: string | null) => void;
+}) {
   const e = dag.experiment;
+  const { data: inv } = useStorage();
+  const size = inv?.experiments.find((x) => x.id === e.id);
   const steps = dag.nodes.filter((n) => n.kind === "node");
   const counts: Record<string, number> = {};
   const outcome = (n: PlanNode) => (n.plan ? (n.plan === "run" ? "will run" : PLAN[n.plan].label.toLowerCase()) : statusLabel(n.status).toLowerCase());
@@ -100,6 +109,7 @@ export function ExperimentDetail({ dag, tree, nav }: { dag: Dag; tree: { id: str
           {children.length > 0 && (
             <><dt>forks</dt><dd>{children.map((c, i) => <span key={c.id}>{i > 0 && ", "}<a onClick={() => nav.openExp(c.id)}>{c.name || c.id}</a></span>)}</dd></>
           )}
+          {size && (<><dt>size</dt><dd title="Everything it uses, and the part no other experiment uses">{fmtSize(size.bytes)} ({fmtSize(size.exclusive)} only here)</dd></>)}
         </dl>
         {e.error && <pre className="err" style={{ marginTop: 10 }}>{e.error}</pre>}
       </section>
@@ -121,6 +131,21 @@ export function ExperimentDetail({ dag, tree, nav }: { dag: Dag; tree: { id: str
           {e.flow_run_id && (<><dt>Prefect run</dt><dd className="mono">{e.flow_run_id}</dd></>)}
         </Technical>
       </section>
+      {e.status !== "draft" && onDeleted && (
+        <section>
+          {e.status === "running" ? (
+            <StopButton e={e} canEdit={canEdit} />
+          ) : (
+            <DeleteExperiment
+              exp={e}
+              forks={descendantsOf(tree, e.id)}
+              canEdit={canEdit}
+              nameOf={nav.nameOf}
+              onDeleted={(_, parent) => onDeleted(parent)}
+            />
+          )}
+        </section>
+      )}
       <section className="muted" style={{ fontSize: 13 }}>Hover a step to see what happened; click it for details.</section>
     </>
   );

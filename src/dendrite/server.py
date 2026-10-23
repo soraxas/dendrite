@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pickle
+import time
 from importlib import resources
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,7 @@ from pydantic import BaseModel
 from . import runtime
 from .experiment import _PIPELINES, Experiment, Lab, NotADraft, _ref_dict
 from .sources import SourceConflict, disk_status, write_source
+from .storage import EvictRefused, StorageBusy
 from .store import ArtifactRef
 from .viz import lineage_mermaid, mermaid, tree_mermaid
 
@@ -90,6 +92,41 @@ class DraftEdit(BaseModel):
     floats: list[str] = []
 
 
+class BulkDelete(BaseModel):
+    ids: list[str]
+    forks: str = "refuse"  # refuse | delete | keep (forks become forks of the nearest kept ancestor)
+    force: bool = False  # also experiments stuck as running
+
+
+class EstimateRequest(BaseModel):
+    ids: list[str]
+    forks: str = "keep"
+
+
+class CleanRequest(BaseModel):
+    force: bool = False
+
+
+class KeepRequest(BaseModel):
+    keep: bool = True
+
+
+class EvictRequest(BaseModel):
+    force: bool = False
+    apply: bool = False  # otherwise a dry run
+
+
+class GcRequest(BaseModel):
+    older_than_days: float | None = None
+    force: bool = False
+    apply: bool = False  # otherwise a dry run
+    hashes: list[str] | None = None  # apply only these: the hashes of the previewed report
+    # Skip the grace period. Safe when nothing runs: applying still refuses while work is in progress.
+    include_recent: bool = False
+
+
+STORAGE_TTL = 30.0  # seconds the inventory is cached (listing a large bucket is slow)
+
 EDIT_DISABLED = "editing is disabled; start `dendrite ui` on localhost or with --allow-edit"
 
 
@@ -155,13 +192,101 @@ def create_app(lab: Lab | None = None, ui_dir: Path = UI_DIR, allow_edit: bool =
             raise HTTPException(400, str(e)) from None
 
     @app.delete("/api/experiments/{exp_id}")
-    def discard(exp_id: str) -> dict[str, Any]:
+    def delete_experiment(exp_id: str, forks: str = "refuse") -> dict[str, Any]:
+        """Delete an experiment that isn't running. ``?forks=delete`` (or ``1``) deletes its
+        forks too; ``?forks=keep`` keeps them as forks of its parent."""
+        require_edit()
+        exp = _experiment(lab, exp_id)
+        mode = {"1": "delete", "true": "delete", "0": "refuse", "false": "refuse"}.get(forks, forks)
+        try:
+            out = lab.delete([exp_id], forks=mode)
+        except ValueError as e:
+            raise HTTPException(409, str(e)) from None
+        storage_cache.clear()
+        return {"deleted": exp_id, "ids": out["deleted"], "reparented": out["reparented"], "parent_id": exp.parent_id}
+
+    @app.post("/api/experiments/delete")
+    def delete_many(req: BulkDelete) -> dict[str, Any]:
+        """Delete several experiments in one transaction."""
         require_edit()
         try:
-            _experiment(lab, exp_id).discard()
-        except NotADraft as e:
+            out = lab.delete(req.ids, forks=req.forks, force=req.force)
+        except KeyError as e:
+            raise HTTPException(404, str(e.args[0])) from None
+        except ValueError as e:
             raise HTTPException(409, str(e)) from None
-        return {"deleted": exp_id}
+        finally:
+            storage_cache.clear()
+        return out
+
+    @app.post("/api/storage/estimate")
+    def estimate(req: EstimateRequest) -> dict[str, Any]:
+        """What deleting these experiments would free after clean-up (read-only)."""
+        return lab.deletion_estimate(req.ids, forks=req.forks)
+
+    @app.post("/api/experiments/{exp_id}/stop")
+    def mark_stopped(exp_id: str) -> dict[str, Any]:
+        """Mark an experiment left ``running`` by a crashed process as failed."""
+        require_edit()
+        try:
+            out = _experiment(lab, exp_id).mark_stopped().summary()
+        except ValueError as e:
+            raise HTTPException(409, str(e)) from None
+        storage_cache.clear()
+        return out
+
+    storage_cache: dict[str, Any] = {}
+
+    def busy_or_refused(fn, *args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except StorageBusy as e:
+            raise HTTPException(409, {"code": "busy", "message": str(e)}) from None
+        except EvictRefused as e:
+            raise HTTPException(409, {"code": "pinned", "message": str(e)}) from None
+        finally:
+            storage_cache.clear()
+
+    @app.get("/api/storage")
+    def storage(refresh: bool = False) -> dict[str, Any]:
+        hit = storage_cache.get("inventory")
+        if refresh or hit is None or time.time() - hit["computed_at"] > STORAGE_TTL:
+            hit = storage_cache["inventory"] = lab.storage()
+        return hit
+
+    @app.post("/api/experiments/{exp_id}/keep")
+    def keep(exp_id: str, req: KeepRequest) -> dict[str, Any]:
+        require_edit()
+        storage_cache.clear()
+        return _experiment(lab, exp_id).keep(req.keep).summary()
+
+    @app.post("/api/executions/{exec_id}/evict")
+    def evict(exec_id: str, req: EvictRequest) -> dict[str, Any]:
+        if lab.db.execution(exec_id) is None:
+            raise HTTPException(404, f"no execution {exec_id!r}")
+        if req.apply:
+            require_edit()
+        return busy_or_refused(lab.evict, exec_id, dry_run=not req.apply, force=req.force)
+
+    @app.post("/api/artifacts/{key}/evict")
+    def evict_artifact(key: str, req: EvictRequest) -> dict[str, Any]:
+        ref = _artifact(lab, key)
+        if req.apply:
+            require_edit()
+        return busy_or_refused(lab.evict, ref.hash, dry_run=not req.apply, force=req.force)
+
+    @app.post("/api/gc")
+    def gc(req: GcRequest) -> dict[str, Any]:
+        if req.apply:
+            require_edit()
+        older = req.older_than_days * 86400 if req.older_than_days is not None else None
+        grace = 0.0 if req.include_recent else None
+        return busy_or_refused(lab.gc, older, dry_run=not req.apply, force=req.force, hashes=req.hashes, grace=grace)
+
+    @app.post("/api/storage/clean")
+    def clean(req: CleanRequest | None = None) -> dict[str, Any]:
+        require_edit()
+        return busy_or_refused(lab.clean, force=bool(req and req.force))
 
     def pipeline(name: str):
         runtime.refresh_modules()  # a saved edit (here or on disk) reloads before it is shown

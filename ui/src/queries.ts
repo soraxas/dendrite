@@ -46,6 +46,11 @@ export const usePlan = (id?: string) =>
     retry: (n, e) => !(e instanceof ApiError && e.status === 409) && n < 2,
   });
 
+/** Storage inventory. Listing a large bucket is slow, so it never polls: mutations invalidate
+ *  ["storage"] and the page has a refresh link (the server also caches it for 30 s). */
+export const useStorage = (enabled = true) =>
+  useQuery({ queryKey: ["storage"], queryFn: () => api.storage(), enabled, staleTime: 60000 });
+
 export const useShape = (pipeline?: string) =>
   useQuery({
     queryKey: ["shape", pipeline],

@@ -266,3 +266,43 @@ button.primary.err { color: var(--failed); border-color: var(--failed); }
 .shape-graph { flex: 1; position: relative; min-height: 0; }
 .gnode.dynamic { border-style: dotted !important; }
 @media (max-width: 1100px) { .code-view { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); } .code-pane { border-right: 0; border-bottom: 1px solid var(--line); } }
+
+/* storage */
+button.danger { border-color: var(--failed); color: var(--failed); }
+button.danger:hover:not(:disabled) { background: var(--failed-bg); }
+button.top-link { font-size: 13px; color: var(--muted); padding: 3px 10px; }
+button.top-link.active { color: var(--accent); border-color: var(--accent); }
+.storage { max-width: 1100px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.tile { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; display: grid; gap: 2px; align-content: start; }
+.tile-label { font-size: 12px; color: var(--muted); }
+.tile-value { font-size: 20px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.tile button { justify-self: start; margin-top: 4px; font-size: 12px; padding: 2px 8px; }
+.storage-note { font-size: 12.5px; margin: 8px 0 0; }
+.cleanup { margin-top: 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; display: grid; gap: 8px; }
+.pad .cleanup h3 { margin: 0; }
+.cleanup-opts { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 13px; }
+.cleanup-opts input[type=number] { width: 64px; font: inherit; color: inherit; background: var(--bg); border: 1px solid var(--line-strong); border-radius: 6px; padding: 2px 6px; }
+.cleanup .preview { display: grid; gap: 6px; font-size: 13px; }
+.cleanup .ok { color: var(--computed); font-size: 13px; }
+.storage-table td.actions { width: 1%; white-space: nowrap; }
+.storage-table th, .storage-table td.num { white-space: nowrap; }
+.storage-table td.actions .storage-confirm { white-space: normal; min-width: 320px; }
+.storage-table tr.muted td { color: var(--muted); }
+.storage-confirm { background: var(--failed-bg); border: 1px solid var(--failed); border-radius: 8px; padding: 8px 10px; }
+.storage-confirm .fork-list { display: block; margin-top: 6px; }
+.keep { display: inline-flex; align-items: center; gap: 4px; font-size: 12.5px; color: var(--muted); white-space: nowrap; }
+.storage-help p { font-size: 13px; margin: 0 0 8px; }
+.fork-choice { border: 0; margin: 8px 0 0; padding: 0; display: grid; gap: 3px; }
+.fork-choice legend { padding: 0; margin-bottom: 3px; font-weight: 600; }
+.fork-choice label { display: flex; gap: 6px; align-items: baseline; }
+.select-old { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 13px; margin-bottom: 8px; }
+.select-old input[type=number] { width: 64px; font: inherit; color: inherit; background: var(--bg); border: 1px solid var(--line-strong); border-radius: 6px; padding: 2px 6px; }
+.bulk-bar { display: grid; gap: 8px; padding: 8px 10px; margin-bottom: 8px; border: 1px solid var(--accent); background: var(--accent-bg); border-radius: 8px; font-size: 13px; }
+.bulk-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.storage-table tr.picked td { background: var(--accent-bg); }
+.busy-note { margin-top: 10px; padding: 8px 12px; border: 1px solid var(--running); background: var(--running-bg); border-radius: 8px; font-size: 13px; display: grid; gap: 6px; }
+.busy-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tile-ask { display: grid; gap: 4px; font-size: 12px; }
+.tile-ask button { justify-self: start; }
+.cleanup .force { display: block; }

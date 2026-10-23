@@ -1,8 +1,10 @@
-// Hash routing: #/exp/:id[/params|metrics|diff/:other] and #/artifact/:hash[/from/:exp],
+// Hash routing: #/exp/:id[/params|metrics|diff/:other], #/artifact/:hash[/from/:exp] and
+// #/storage[/cache|largest],
 // with the graph selection in a `sel` query param so it survives polling, reloads and links.
 import { useCallback, useSyncExternalStore } from "react";
 
-export type View = "home" | "dag" | "code" | "params" | "metrics" | "diff" | "lineage";
+export type View = "home" | "dag" | "code" | "params" | "metrics" | "diff" | "lineage" | "storage";
+export type StorageTab = "experiments" | "cache" | "largest";
 
 export interface Route {
   view: View;
@@ -10,6 +12,7 @@ export interface Route {
   other?: string;
   artifact?: string;
   sel?: string; // "<kind>:<id>" — node:<name> | input:<name> | artifact:<hash> | exec:<id>
+  tab?: StorageTab;
 }
 
 export function parse(hash: string): Route {
@@ -22,6 +25,10 @@ export function parse(hash: string): Route {
     if (sub === "params" || sub === "metrics" || sub === "code") return { view: sub, exp: parts[1], sel };
     return { view: "dag", exp: parts[1], sel };
   }
+  if (parts[0] === "storage") {
+    const tab = parts[1] === "cache" || parts[1] === "largest" ? parts[1] : "experiments";
+    return { view: "storage", tab, sel };
+  }
   if (parts[0] === "artifact" && parts[1]) {
     return { view: "lineage", artifact: parts[1], exp: parts[2] === "from" ? parts[3] : undefined, sel };
   }
@@ -31,7 +38,8 @@ export function parse(hash: string): Route {
 export function href(r: Route): string {
   const enc = encodeURIComponent;
   let path = "#/";
-  if (r.view === "lineage" && r.artifact) path = `#/artifact/${enc(r.artifact)}${r.exp ? `/from/${enc(r.exp)}` : ""}`;
+  if (r.view === "storage") path = `#/storage${r.tab && r.tab !== "experiments" ? `/${r.tab}` : ""}`;
+  else if (r.view === "lineage" && r.artifact) path = `#/artifact/${enc(r.artifact)}${r.exp ? `/from/${enc(r.exp)}` : ""}`;
   else if (r.exp) {
     path = `#/exp/${enc(r.exp)}`;
     if (r.view === "params" || r.view === "metrics" || r.view === "code") path += `/${r.view}`;

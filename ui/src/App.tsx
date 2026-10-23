@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { Dag, Lineage, PlanNode } from "./api";
+import { ApiError, type Dag, type Lineage, type PlanNode } from "./api";
 import { ArtifactDetailPanel, ExecutionDetailPanel, ExperimentDetail, NodeDetail, type Nav } from "./components/DetailPanel";
 import { CodeView } from "./components/CodeView";
 import { DagView } from "./components/DagView";
@@ -7,6 +7,7 @@ import { DraftBar, DraftStepEditor } from "./components/Draft";
 import { LineageView } from "./components/LineageView";
 import { DiffPage, MetricsPage, ParamsPage } from "./components/Pages";
 import { Sidebar } from "./components/Sidebar";
+import { StoragePage } from "./components/Storage";
 import { Toolbar } from "./components/Toolbar";
 import { useDag, useDiff, useExperiments, useInfo, useLineage, usePlan } from "./queries";
 import { parse, splitSel, useRoute, type Route } from "./router";
@@ -71,6 +72,7 @@ export function App() {
   const { data: tree = [] } = useExperiments();
   const { data: info } = useInfo();
   const inLineage = route.view === "lineage";
+  const inStorage = route.view === "storage";
   // A draft has no runs yet; its graph is the plan of what running it would do.
   const isDraft = !inLineage && tree.find((e) => e.id === route.exp)?.status === "draft";
   const planQ = usePlan(isDraft ? route.exp : undefined);
@@ -86,9 +88,10 @@ export function App() {
     if (route.view === "home" && tree.length) navigate({ view: "dag", exp: tree[tree.length - 1].id }, { replace: true });
   }, [route.view, tree, navigate]);
 
+  // Executions outlive deleted experiments, so a result can name an experiment that's gone.
   const nameOf = useCallback((id: string) => {
     const e = tree.find((x) => x.id === id);
-    return e ? e.name || e.id : id;
+    return e ? e.name || e.id : tree.length ? `deleted experiment ${id}` : id;
   }, [tree]);
 
   const setSel = useCallback((sel?: string) => navigate({ ...route, sel }, { replace: true }), [navigate, route]);
@@ -109,7 +112,26 @@ export function App() {
   let toolbar = null;
   let body = <div className="empty">{tree.length ? "Loading…" : "No experiments yet — create and run one with dendrite.Lab()."}</div>;
   let graphSel: string | undefined;
-  if (inLineage) {
+  if (inStorage) {
+    toolbar = (
+      <div className="toolbar">
+        <div className="tb-title">
+          <div className="tb-row"><span className="mode-chip">Storage</span><h2>Where the space goes</h2></div>
+          <div className="story">Delete old experiments, evict cache you can recompute, and clean up what nothing uses.</div>
+        </div>
+      </div>
+    );
+    body = (
+      <StoragePage
+        tab={route.tab ?? "experiments"}
+        go={(tab) => navigate({ view: "storage", tab }, { replace: true })}
+        canEdit={canEdit}
+        nameOf={nameOf}
+        openExp={nav.openExp}
+        openArtifact={(h) => navigate({ view: "lineage", artifact: h, sel: `artifact:${h}` })}
+      />
+    );
+  } else if (inLineage) {
     const focus = lineage?.artifact;
     graphSel = kind === "artifact" || kind === "exec" ? id : focus?.hash;
     toolbar = (
@@ -175,11 +197,26 @@ export function App() {
           planned={!!plan}
         />
       );
-  } else if (dagQ.error) body = <div className="empty err">{String(dagQ.error)}</div>;
+  } else if (dagQ.error) {
+    body =
+      dagQ.error instanceof ApiError && dagQ.error.status === 404 && tree.length && !tree.some((e) => e.id === route.exp) ? (
+        <div className="empty">This experiment was deleted. Its results' lineage is still recorded, and other experiments keep using shared results.</div>
+      ) : (
+        <div className="empty err">{String(dagQ.error)}</div>
+      );
+  }
 
   // ---- detail panel: exactly the selected item
   let detail = null;
-  if (kind === "node" && dag) {
+  if (inStorage) {
+    detail = (
+      <section className="muted storage-help">
+        <h3>How space is counted</h3>
+        <p><b>Frees</b> is what deleting an experiment and then cleaning up gives back: data no other experiment uses. Results shared by forks are counted once and stay while anything uses them.</p>
+        <p>Evicted or cleaned-up results recompute the next time a run needs them. Lineage records always stay.</p>
+      </section>
+    );
+  } else if (kind === "node" && dag) {
     const n = dag.nodes.find((x) => x.kind === "node" && x.id === id);
     detail = !n ? null : plan ? (
       <DraftStepEditor key={n.id} n={n as PlanNode} plan={plan} canEdit={canEdit} nameOf={nameOf} openStep={nav.openStep} />
@@ -197,7 +234,15 @@ export function App() {
   } else if (inLineage && lineage) {
     detail = <ArtifactDetailPanel hash={lineage.artifact.hash} label={lineage.artifact.label} nav={nav} canTrace={false} />;
   } else if (dag) {
-    detail = <ExperimentDetail dag={dag} tree={tree} nav={nav} />;
+    detail = (
+      <ExperimentDetail
+        dag={dag}
+        tree={tree}
+        nav={nav}
+        canEdit={canEdit}
+        onDeleted={(parent) => navigate(parent ? { view: "dag", exp: parent } : { view: "home" })}
+      />
+    );
   }
 
   return (
@@ -211,6 +256,9 @@ export function App() {
           </span>
         )}
         <span className="spacer" />
+        <button className={`top-link ${inStorage ? "active" : ""}`} title="Storage use, deleting experiments and cleaning up" onClick={() => navigate({ view: "storage" })}>
+          Storage
+        </button>
         {info && (
           <details className="lab">
             <summary title="Where results are stored">Lab</summary>

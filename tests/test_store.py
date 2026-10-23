@@ -46,10 +46,39 @@ def test_value_roundtrip(store):
     assert store.load(ref) == {"a": [1, 2]}
 
 
+def test_iter_objects_and_delete_many(store, tmp_path):
+    import time
+
+    d = tmp_path / "d"
+    d.mkdir()
+    (d / "x.txt").write_text("x")
+    (d / "y.txt").write_text("yy")
+    ref = store.put_path(d)
+    val = store.put_value([1])
+    listed = {h: (size, mtime) for h, size, mtime in store.iter_objects()}
+    members = {h for _, h, _ in store.manifest(ref)}
+    assert set(listed) == {ref.hash, val.hash, *members}
+    assert listed[val.hash][0] == val.size
+    assert all(abs(m - time.time()) < 60 for _, m in listed.values())
+    store.delete_many([val.hash, *members])
+    assert {h for h, _, _ in store.iter_objects()} == {ref.hash}
+    assert not store.verify(ref)
+
+
+def test_unknown_mtime_counts_as_fresh():
+    import time
+
+    from dendrite.store import _mtime
+
+    assert _mtime({"LastModified": "2026-01-02T03:04:05Z"}) == pytest.approx(1767323045.0)
+    assert abs(_mtime({"size": 3}) - time.time()) < 5
+
+
 def test_s3_backend_with_moto(tmp_path, source):
     moto_server = pytest.importorskip("moto.moto_server.threaded_moto_server")
     pytest.importorskip("s3fs")
     import socket
+    import time
 
     from dendrite import Lab
 
@@ -71,5 +100,20 @@ def test_s3_backend_with_moto(tmp_path, source):
         assert {n["status"] for n in b.node_runs() if n["node"] != "train"} == {"cached"}
         assert b.load("featurize") == [3, 7, 11, 15]
         assert lab.store.fs.exists(f"lineage/runs/objects/{a.output('extract').hash[:2]}")
+        # Storage accounting lists S3 objects with real modification times, so the grace
+        # period protects a fresh (possibly still uploading) blob.
+        listed = list(lab.store.iter_objects())
+        assert listed and all(abs(m - time.time()) < 300 for _, _, m in listed)
+        orphan = lab.store.put_value("in flight").hash
+        assert {"hash": orphan, "size": dict((h, s) for h, s, _ in lab.store.iter_objects())[orphan], "why": "grace"} in lab.gc()["skipped"]
+        lab.store.delete(orphan)
+        # Deleting the parent frees only its own step.
+        inv = lab.storage()
+        assert inv["store"]["objects"] == len(list(lab.store.iter_objects())) > 0
+        a_train = set(a.node_outputs("train").values())
+        a.delete(keep_forks=True)
+        report = lab.gc(dry_run=False, grace=0)
+        assert {x["hash"] for x in report["deleted"]} == a_train
+        assert b.load("featurize") == [3, 7, 11, 15]
     finally:
         server.stop()

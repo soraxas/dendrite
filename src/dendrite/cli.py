@@ -160,6 +160,111 @@ def cmd_run(lab: Lab, args) -> None:
     print(exp.refresh().status)
 
 
+def fmt_bytes(n: float) -> str:
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if abs(n) < 1024 or unit == "TB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024
+    return f"{n} B"
+
+
+def cmd_du(lab: Lab, args) -> None:
+    inv = lab.storage()
+    if args.json:
+        print(json.dumps(inv, indent=2, default=str))
+        return
+    st = inv["store"]
+    print(f"store {st['url']}: {st['objects']} objects, {fmt_bytes(st['bytes'])}")
+    print(
+        f"  live {fmt_bytes(st['live']['bytes'])} (shared {fmt_bytes(st['shared']['bytes'])})"
+        f" · collectable {fmt_bytes(st['collectable']['bytes'])} · scratch "
+        + ", ".join(f"{k} {fmt_bytes(v)}" for k, v in inv["scratch"].items())
+    )
+    print()
+    rows = [
+        [e["id"], e["name"] or "", e["status"], "keep" if e["keep"] else "", fmt_bytes(e["bytes"]), fmt_bytes(e["exclusive"]),
+         fmt_bytes(e["with_forks"]) if e["forks"] else ""]
+        for e in sorted(inv["experiments"], key=lambda e: -e["exclusive"])
+    ]
+    print(_table(rows, ["id", "name", "status", "", "size", "only here", "with forks"]))
+    print()
+    rows = [
+        [c["execution_id"], c["node"], fmt_bytes(c["bytes"]), str(c["reused"]), _fmt_time(c["last_used"]),
+         "" if c["present"] else "evicted", "" if c["live"] else "unreferenced"]
+        for c in inv["cache"][: args.top]
+    ]
+    print(_table(rows, ["execution", "step", "size", "reused", "last used", "", ""]))
+    for why in inv["busy"]:
+        print(f"note: {why}")
+
+
+def _print_report(report: dict, verb: str, yes: bool) -> None:
+    for d in report["deleted"]:
+        print(f"  {d['hash'][:12]}  {fmt_bytes(d['size']):>10}  {d['why']}")
+    skipped: dict[str, int] = {}
+    for s in report["skipped"]:
+        skipped[s["why"]] = skipped.get(s["why"], 0) + 1
+    if skipped:
+        print("skipped: " + ", ".join(f"{n} {why}" for why, n in sorted(skipped.items())))
+    n, size = len(report["deleted"]), fmt_bytes(report["bytes"])
+    if report["dry_run"]:
+        print(f"would {verb} {n} object(s), {size}" + ("" if yes else "; re-run with --yes to do it"))
+    else:
+        print(f"{verb}d {n} object(s), {size}")
+
+
+def _reclaim(fn, *a, **kw):
+    from .storage import EvictRefused, StorageBusy
+
+    try:
+        return fn(*a, **kw)
+    except (StorageBusy, EvictRefused, ValueError) as e:
+        sys.exit(f"error: {e}")
+
+
+def cmd_rm(lab: Lab, args) -> None:
+    exp = lab.get(args.experiment)
+    below = exp.descendants()
+    if below and not (args.forks or args.keep_forks):
+        sys.exit(
+            f"error: {exp.id} has fork(s) {', '.join(e.id for e in below)}; pass --forks to delete them too, "
+            "or --keep-forks to keep them as forks of its parent"
+        )
+    est = lab.deletion_estimate([exp.id], forks="delete" if args.forks else "keep")
+    kept = f"; its forks become forks of {exp.parent_id or 'nothing'}" if below and args.keep_forks else ""
+    print(f"delete {', '.join(est['ids'])}; frees ~{fmt_bytes(est['bytes'])} after `dendrite gc` (lineage records stay){kept}")
+    if not args.yes:
+        print("re-run with --yes to delete")
+        return
+    ids = _reclaim(exp.delete, forks=args.forks, keep_forks=args.keep_forks)
+    print(f"deleted {len(ids)} experiment(s)")
+
+
+def cmd_keep(lab: Lab, args) -> None:
+    exp = lab.get(args.experiment).keep(not args.off)
+    print(f"{exp.id}: keep {'on' if exp.kept else 'off'}")
+
+
+def cmd_evict(lab: Lab, args) -> None:
+    report = _reclaim(lab.evict, args.target, dry_run=not args.yes, force=args.force)
+    _print_report(report, "evict", args.yes)
+
+
+def cmd_gc(lab: Lab, args) -> None:
+    older = args.older_than * 86400 if args.older_than is not None else None
+    preview = _reclaim(lab.gc, older, force=args.force)
+    if args.yes:  # delete exactly what was listed
+        report = _reclaim(lab.gc, older, dry_run=False, force=args.force, hashes=[d["hash"] for d in preview["deleted"]])
+    else:
+        report = preview
+    _print_report(report, "delete", args.yes)
+
+
+def cmd_clean(lab: Lab, args) -> None:
+    out = _reclaim(lab.clean, force=args.force)
+    print(f"removed {out['removed']} checkout/scratch entr{'y' if out['removed'] == 1 else 'ies'}, {fmt_bytes(out['bytes'])}")
+
+
 def cmd_ui(lab: Lab, args) -> None:
     import uvicorn
 
@@ -205,6 +310,27 @@ def main(argv: list[str] | None = None) -> None:
     s = sub.add_parser("run", help="run a draft (or never-run) experiment in this process")
     s.add_argument("experiment")
     s.add_argument("--import", dest="imports", action="append", help="module to import (registers pipelines)")
+    s = sub.add_parser("du", help="storage use: store totals, per experiment, cache entries")
+    s.add_argument("--json", action="store_true")
+    s.add_argument("--top", type=int, default=20, help="cache entries to list (largest first)")
+    s = sub.add_parser("rm", help="delete an experiment (lineage records stay; then run gc)")
+    s.add_argument("experiment")
+    s.add_argument("--forks", action="store_true", help="also delete its forks")
+    s.add_argument("--keep-forks", action="store_true", help="keep its forks, re-attached to its parent")
+    s.add_argument("--yes", action="store_true", help="delete instead of previewing")
+    s = sub.add_parser("keep", help="protect an experiment's data from age-based gc")
+    s.add_argument("experiment")
+    s.add_argument("--off", action="store_true", help="remove the protection")
+    s = sub.add_parser("evict", help="delete an execution's (or artifact's) stored outputs; they recompute when needed")
+    s.add_argument("target", help="execution id or artifact hash/prefix")
+    s.add_argument("--force", action="store_true", help="even if pinned or while runs are in progress")
+    s.add_argument("--yes", action="store_true", help="evict instead of previewing")
+    s = sub.add_parser("gc", help="delete stored data no experiment uses")
+    s.add_argument("--older-than", type=float, metavar="DAYS", help="also evict cache unused for DAYS")
+    s.add_argument("--force", action="store_true", help="even while runs are in progress")
+    s.add_argument("--yes", action="store_true", help="delete instead of previewing")
+    s = sub.add_parser("clean", help="clear local checkouts and leftover step workdirs")
+    s.add_argument("--force", action="store_true", help="even while runs are in progress")
     s = sub.add_parser("ui", help="serve the lineage web UI")
     s.add_argument("--host", default="127.0.0.1")
     s.add_argument("--port", type=int, default=8454)

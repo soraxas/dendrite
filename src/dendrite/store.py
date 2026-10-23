@@ -16,7 +16,7 @@ import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable, Iterator
 
 from .hashing import canonical_json, sha256_bytes, sha256_file
 
@@ -74,6 +74,14 @@ class ArtifactStore(ABC):
     @abstractmethod
     def delete(self, h: str) -> None: ...
 
+    @abstractmethod
+    def iter_objects(self) -> Iterator[tuple[str, int, float]]:
+        """Every stored object as ``(hash, size, mtime)``; temp files are skipped."""
+
+    def delete_many(self, hashes: Iterable[str]) -> None:
+        for h in hashes:
+            self.delete(h)
+
     @property
     @abstractmethod
     def url(self) -> str: ...
@@ -117,7 +125,10 @@ class ArtifactStore(ABC):
         return ArtifactRef(self._put_object_bytes(data), "value", len(data), None)
 
     def manifest(self, ref: ArtifactRef) -> list[tuple[str, str, int]]:
-        return [tuple(e) for e in json.loads(self.read_bytes(ref.hash))]
+        return [tuple(e) for e in json.loads(self._manifest_bytes(ref.hash))]
+
+    def _manifest_bytes(self, h: str) -> bytes:
+        return self.read_bytes(h)
 
     def verify(self, ref: ArtifactRef) -> bool:
         if not self.has(ref.hash):
@@ -159,6 +170,11 @@ class ArtifactStore(ABC):
 
     def _checkout(self, h: str, dest: Path) -> None:
         self._get_object_file(h, dest)
+
+    def drop_checkouts(self, hashes: Iterable[str]) -> None:
+        """Remove local checkouts of these artifacts (hardlinks would keep deleted bytes alive)."""
+        for h in hashes:
+            shutil.rmtree(self.cache_dir / "checkouts" / h, ignore_errors=True)
 
 
 class LocalStore(ArtifactStore):
@@ -210,6 +226,16 @@ class LocalStore(ArtifactStore):
             os.chmod(p, 0o644)
             p.unlink()
 
+    def iter_objects(self) -> Iterator[tuple[str, int, float]]:
+        for prefix in sorted((self.root / "objects").iterdir()):
+            if not prefix.is_dir() or len(prefix.name) != 2:
+                continue
+            for f in prefix.iterdir():
+                if f.name.startswith("."):  # in-progress writes
+                    continue
+                st = f.stat()
+                yield prefix.name + f.name, st.st_size, st.st_mtime
+
 
 class FsspecStore(ArtifactStore):
     """Any fsspec filesystem: ``s3://bucket/prefix``, ``gs://…``, ``memory://…``.
@@ -250,6 +276,61 @@ class FsspecStore(ArtifactStore):
     def delete(self, h: str) -> None:
         if self.fs.exists(self._obj(h)):
             self.fs.rm_file(self._obj(h))
+
+    def delete_many(self, hashes: Iterable[str]) -> None:
+        paths = [self._obj(h) for h in hashes]
+        for i in range(0, len(paths), 1000):  # S3 DeleteObjects takes at most 1000 keys
+            try:
+                self.fs.rm(paths[i : i + 1000])
+            except FileNotFoundError:
+                for p in paths[i : i + 1000]:
+                    if self.fs.exists(p):
+                        self.fs.rm_file(p)
+
+    def iter_objects(self) -> Iterator[tuple[str, int, float]]:
+        root = f"{self.base}/objects"
+        if not self.fs.exists(root):
+            return
+        for path, info in self.fs.find(root, detail=True).items():
+            parts = path.rstrip("/").split("/")
+            if len(parts) < 2 or len(parts[-2]) != 2 or parts[-1].startswith("."):
+                continue
+            yield parts[-2] + parts[-1], int(info.get("size") or 0), _mtime(info)
+
+    def _manifest_bytes(self, h: str) -> bytes:
+        # Manifests are immutable by content, so a local copy saves a round trip per directory.
+        local = self.cache_dir / "manifests" / h
+        if local.is_file():
+            return local.read_bytes()
+        data = self.read_bytes(h)
+        local.parent.mkdir(parents=True, exist_ok=True)
+        tmp = local.with_name(f".{h}.{uuid.uuid4().hex}")
+        tmp.write_bytes(data)
+        os.replace(tmp, local)
+        return data
+
+
+def _mtime(info: dict[str, Any]) -> float:
+    """Modification time from an fsspec info dict. Unknown counts as *now*, so garbage
+    collection's grace period errs towards keeping a blob that may still be uploading."""
+    import time
+    from datetime import datetime
+
+    for key in ("mtime", "LastModified", "last_modified", "created", "updated", "timeCreated"):
+        v = info.get(key)
+        if v is None:
+            continue
+        if hasattr(v, "timestamp"):
+            return v.timestamp()
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            pass
+        try:
+            return datetime.fromisoformat(str(v).replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            continue
+    return time.time()
 
 
 def open_store(url: str, cache_dir: str | os.PathLike, **storage_options: Any) -> ArtifactStore:
