@@ -46,7 +46,7 @@ Postgres for tests comes from the session fixture `pg_url` in `conftest.py`:
 - **Isolation.** `pg_schema_url` gives each test its own schema and drops it afterwards.
 - **Whole suite.** `DENDRITE_TEST_DB=postgres` switches the shared `lab` fixture to Postgres. Tests that open a second `Lab` or call the CLI must pass `lab.settings.db_url` / `--db-url` along.
 
-CI is `.github/workflows/ci.yml`: pytest on SQLite and on Postgres, plus the UI tests and build. It clones Prefect into `../prefect` at `PREFECT_SHA`, blobless rather than shallow because versioningit needs the tags; bump it together with your local `../prefect`. There is no linter or formatter configured.
+CI is two path-filtered workflows, so a docs-only push runs nothing. `.github/workflows/python.yml` runs pytest on SQLite and on Postgres when `src/`, `tests/`, `examples/` or the packaging files change. `.github/workflows/ui.yml` runs the UI tests and build when `ui/` changes. It clones Prefect into `../prefect` at `PREFECT_SHA`, blobless rather than shallow because versioningit needs the tags; bump it together with your local `../prefect`. There is no linter or formatter configured.
 
 Configuration env vars:
 

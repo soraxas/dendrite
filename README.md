@@ -226,4 +226,4 @@ cd ui && npm test                      # UI tests (Vitest)
 scripts/build-ui.sh && uv build        # release: the build fails without the UI bundle
 ```
 
-Design and requirements live in `openspec/`. CI (`.github/workflows/ci.yml`) runs the tests on SQLite and Postgres, plus the UI tests and build. `CLAUDE.md` describes the architecture in detail.
+Design and requirements live in `openspec/`. CI runs only what a change touches. `python.yml` runs the tests on SQLite and Postgres, and `ui.yml` runs the UI tests and build. Docs-only changes run neither. `CLAUDE.md` describes the architecture in detail.
