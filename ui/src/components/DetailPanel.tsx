@@ -6,6 +6,7 @@ import { EXPERIMENT_STATUS, PLAN, STATUS, statusLabel } from "../copy";
 import { describeRoles, flatten, fmtDur, fmtSize, fmtTime, fmtVal, short } from "../format";
 import { useArtifact, useDiff, useExecution, useSource, useStorage } from "../queries";
 import { CodeModal } from "./CodeModal";
+import { ArtifactPreview } from "./ArtifactPreview";
 import { DeleteExperiment, descendantsOf, StopButton } from "./Storage";
 
 export interface Nav {
@@ -298,7 +299,6 @@ export function ArtifactDetailPanel({ hash, label, nav, canTrace }: { hash: stri
   const { data: a, error } = useArtifact(hash);
   if (error) return <section className="err">{String(error)}</section>;
   if (!a) return <><Selected kind="data" label={label ?? short(hash)} /><section className="muted">Loading…</section></>;
-  const p = a.preview;
   const name = label ?? a.filename ?? a.kind;
   return (
     <>
@@ -324,20 +324,7 @@ export function ArtifactDetailPanel({ hash, label, nav, canTrace }: { hash: stri
       </section>
       <section>
         <h3>Preview</h3>
-        {p.type === "text" && <pre>{p.text}</pre>}
-        {p.type === "value" && <pre>{p.repr}</pre>}
-        {p.type === "manifest" && (
-          <>
-            <table>
-              <thead><tr><th>path ({p.count})</th><th className="num">size</th></tr></thead>
-              <tbody>{p.entries.slice(0, 80).map((e) => <tr key={e.path}><td className="mono">{e.path}</td><td className="num">{fmtSize(e.size)}</td></tr>)}</tbody>
-            </table>
-            {p.count > 80 && <Muted>…and {p.count - 80} more</Muted>}
-          </>
-        )}
-        {p.type === "missing" && <span className="err">Blob missing from store!</span>}
-        {p.type === "too_large" && <Muted>Too large to preview.</Muted>}
-        {p.type === "binary" && <Muted>Binary content.</Muted>}
+        <ArtifactPreview artifact={a} />
       </section>
     </>
   );

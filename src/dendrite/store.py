@@ -171,10 +171,25 @@ class ArtifactStore(ABC):
     def _checkout(self, h: str, dest: Path) -> None:
         self._get_object_file(h, dest)
 
+    def materialize_file(self, h: str) -> Path:
+        """Check out a single blob for preview, without loading a directory's other members."""
+        dest = self.cache_dir / "checkouts" / f"preview-{h}" / "data"
+        if dest.is_file():
+            return dest
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dest.with_name(f".{uuid.uuid4().hex}")
+        try:
+            self._checkout(h, tmp)
+            os.replace(tmp, dest)
+        finally:
+            tmp.unlink(missing_ok=True)
+        return dest
+
     def drop_checkouts(self, hashes: Iterable[str]) -> None:
         """Remove local checkouts of these artifacts (hardlinks would keep deleted bytes alive)."""
         for h in hashes:
             shutil.rmtree(self.cache_dir / "checkouts" / h, ignore_errors=True)
+            shutil.rmtree(self.cache_dir / "checkouts" / f"preview-{h}", ignore_errors=True)
 
 
 class LocalStore(ArtifactStore):

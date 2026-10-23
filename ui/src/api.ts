@@ -422,5 +422,6 @@ export const api = {
     send<ReclaimReport>("POST", `/api/executions/${encodeURIComponent(execId)}/evict`, { apply, force }),
   gc: (req: GcRequest) => send<ReclaimReport>("POST", "/api/gc", req),
   clean: (force = false) => send<{ removed: number; bytes: number }>("POST", "/api/storage/clean", { force }),
-  downloadUrl: (h: string) => `/api/artifacts/${encodeURIComponent(h)}/download`,
+  downloadUrl: (h: string, path?: string) =>
+    `/api/artifacts/${encodeURIComponent(h)}/download${path === undefined ? "" : `?path=${encodeURIComponent(path)}`}`,
 };

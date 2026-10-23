@@ -5,4 +5,5 @@ __pycache__/
 .pytest_cache/
 src/dendrite/ui/dist/
 ui/node_modules/
+ui/public/file-viewer/
 /dist/

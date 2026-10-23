@@ -40,6 +40,17 @@
 }
 
 * { box-sizing: border-box; }
+.file-preview-heading { display: flex; align-items: center; gap: 10px; margin: 10px 0; }
+.file-preview-heading > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.file-preview-heading button { flex: none; }
+.file-preview { height: 440px; min-height: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 6px; }
+.preview-unavailable { padding: 20px; color: var(--muted); }
+.file-entry { border: 0; background: transparent; padding: 2px 0; color: var(--accent); text-align: left; overflow-wrap: anywhere; }
+.file-entry[aria-pressed="true"] { font-weight: 700; text-decoration: underline; }
+.file-preview-dialog { width: 94vw; max-width: 1600px; height: 90dvh; max-height: 94dvh; background: var(--panel); color: var(--ink); border: 1px solid var(--line-strong); border-radius: 10px; padding: 14px; }
+.file-preview-dialog[open] { display: flex; flex-direction: column; }
+.file-preview-dialog::backdrop { background: rgb(0 0 0 / .5); }
+.file-preview-dialog > .file-preview { flex: 1; }
 html, body, #root { margin: 0; height: 100%; }
 body { background: var(--bg); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
 a { color: var(--accent); text-decoration: none; cursor: pointer; }

@@ -428,8 +428,18 @@ def create_app(lab: Lab | None = None, ui_dir: Path = UI_DIR, allow_edit: bool =
         return g
 
     @app.get("/api/artifacts/{key}/download")
-    def download(key: str):
+    def download(key: str, path: str | None = None):
         ref = _artifact(lab, key)
+        if ref.kind == "dir" and path is not None:
+            if not lab.store.has(ref.hash):
+                raise HTTPException(410, "artifact blob is missing from the store")
+            # Match the manifest before touching the filesystem; arbitrary paths are never served.
+            member = next((h for p, h, _ in lab.store.manifest(ref) if p == path), None)
+            if member is None:
+                raise HTTPException(404, "no such file in the directory artifact")
+            if not lab.store.has(member):
+                raise HTTPException(410, "artifact blob is missing from the store")
+            return FileResponse(lab.store.materialize_file(member), filename=Path(path).name)
         if ref.kind != "file":
             raise HTTPException(400, "only file artifacts can be downloaded")
         if not lab.store.verify(ref):
