@@ -81,12 +81,12 @@ The flow of a run spans several modules in `src/dendrite/`:
    - A directory is a manifest blob, and the directory's hash is that manifest's hash.
    - `LocalStore` uses atomic `os.replace` and hardlinked checkouts. `FsspecStore` handles S3, MinIO, GCS and `memory://`, with a local checkout cache.
 5. **`server.py` + `ui/`.**
-   - A FastAPI JSON API (`/api/experiments`, `/api/experiments/{id}/dag`, `/api/diff`, `/api/artifacts/{hash}[/lineage|/download]`, `/api/executions/{id}`, `/api/info`). Keep API changes additive, because the legacy page still reads it. The one exception so far: usage `roles` became structured, and the old strings live on as `role_labels`.
+   - A FastAPI JSON API (`/api/experiments`, `/api/experiments/{id}/dag`, `/api/diff`, `/api/artifacts/{hash}[/lineage|/download]`, `/api/executions/{id}`, `/api/info`).
    - **Shipping the UI:**
      - `ui/` is a React + TS + Vite app (React Flow + elkjs + TanStack Query).
      - It builds into `src/dendrite/ui/dist/`, which is git-ignored and packaged through `[tool.hatch.build] artifacts`.
      - `hatch_build.py` refuses sdist or wheel builds without the bundle. Editable builds and `DENDRITE_SKIP_UI_CHECK=1` are exempt.
-     - `create_app` mounts `dist/` with `StaticFiles` *after* the API routes when the bundle exists. Otherwise it serves the frozen fallback `src/dendrite/ui/legacy.html`; don't add features there.
+     - `create_app` mounts `dist/` with `StaticFiles` *after* the API routes when the bundle exists. Without it, `/` is a short "UI isn't built" page and only the API is served (`/api/info` reports `ui: "missing"`).
    - **Layout:**
      - `ui/src/layout.ts` runs ELK in a web worker. It caches positions per graph shape (node ids plus edges), so status polls never re-lay-out.
      - Edges are drawn from ELK's orthogonal routes by the custom `elk` edge in `Graph.tsx`.

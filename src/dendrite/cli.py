@@ -281,8 +281,8 @@ def cmd_ui(lab: Lab, args) -> None:
     allow_edit = args.allow_edit or loopback
     print(f"dendrite UI on http://{args.host}:{args.port}  ({lab})")
     print(f"code editing {'enabled' if allow_edit else 'disabled (use --allow-edit)'}")
-    if ui_mode() == "legacy":
-        print("serving the legacy UI; run scripts/build-ui.sh to build the React UI")
+    if ui_mode() == "missing":
+        print("the UI isn't built (only the API is served); run scripts/build-ui.sh")
     app = create_app(lab, allow_edit=allow_edit)
 
     class Server(uvicorn.Server):

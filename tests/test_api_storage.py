@@ -5,7 +5,7 @@ from dendrite.cli import main
 from dendrite.server import create_app
 
 from . import toy
-from .test_api import legacy_only
+from .test_api import no_bundle
 
 
 @pytest.fixture(autouse=True)
@@ -17,7 +17,7 @@ def client(lab, tmp_path, edit=True):
     from dendrite import Lab
 
     lab = Lab(lab.home, db_url=lab.settings.db_url)  # picks up DENDRITE_GC_GRACE
-    return TestClient(create_app(lab, ui_dir=legacy_only(tmp_path), allow_edit=edit))
+    return TestClient(create_app(lab, ui_dir=no_bundle(tmp_path), allow_edit=edit))
 
 
 def test_storage_endpoints(lab, source, tmp_path):

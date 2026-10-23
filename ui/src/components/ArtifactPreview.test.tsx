@@ -66,7 +66,7 @@ it("explains when a browser can load audio but cannot decode the video track", a
 });
 
 it("prioritizes preview and shows only two experiment usages until expanded", async () => {
-  const experiments = Array.from({ length: 5 }, (_, i) => ({ id: `e-${i}`, name: `Experiment ${i}`, roles: [], role_labels: ["input video"] }));
+  const experiments = Array.from({ length: 5 }, (_, i) => ({ id: `e-${i}`, name: `Experiment ${i}`, roles: [] }));
   setup(artifact({ experiments }));
   await screen.findByText("Viewing report.pdf");
   const headings = screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent);

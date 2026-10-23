@@ -355,7 +355,7 @@ def test_shape_endpoints(lab, tmp_path, load):
 
     from dendrite.server import create_app
 
-    from .test_api import legacy_only
+    from .test_api import no_bundle
 
     mod = load(STEPS + '''
     @pipeline(name="api_" + __name__)
@@ -366,7 +366,7 @@ def test_shape_endpoints(lab, tmp_path, load):
     name = mod.flow.name
     file = mod.__file__
     before = open(file).read()
-    c = TestClient(create_app(lab, ui_dir=legacy_only(tmp_path)))
+    c = TestClient(create_app(lab, ui_dir=no_bundle(tmp_path)))
 
     s = c.get(f"/api/pipelines/{name}/shape").json()
     assert [n["id"] for n in s["nodes"]] == ["input:video", "extract", "colmap"]
@@ -386,10 +386,10 @@ def test_experiment_check_endpoint(lab, source, tmp_path):
 
     from dendrite.server import create_app
 
-    from .test_api import legacy_only
+    from .test_api import no_bundle
 
     d = lab.create(toy.toy, inputs={"src": source}, params={"trian.iterations": 1}, draft=True)
-    c = TestClient(create_app(lab, ui_dir=legacy_only(tmp_path)))
+    c = TestClient(create_app(lab, ui_dir=no_bundle(tmp_path)))
     assert [f["code"] for f in c.get(f"/api/experiments/{d.id}/check").json()] == ["unknown-step"]
 
 

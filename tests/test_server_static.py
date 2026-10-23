@@ -6,7 +6,6 @@ from dendrite.server import create_app, ui_mode
 def test_serves_react_bundle_when_present(lab, tmp_path):
     ui = tmp_path / "ui"
     (ui / "dist" / "assets").mkdir(parents=True)
-    (ui / "legacy.html").write_text("<html>legacy</html>")
     (ui / "dist" / "index.html").write_text('<html><script src="./assets/app.js"></script>react</html>')
     (ui / "dist" / "assets" / "app.js").write_text("console.log('app')")
     assert ui_mode(ui) == "react"
@@ -19,11 +18,12 @@ def test_serves_react_bundle_when_present(lab, tmp_path):
     assert client.get("/api/experiments").json() == []  # API routes still win over the static mount
 
 
-def test_falls_back_to_legacy_without_bundle(lab, tmp_path):
+def test_without_a_bundle_serves_the_api_and_a_build_hint(lab, tmp_path):
     ui = tmp_path / "ui"
     ui.mkdir()
-    (ui / "legacy.html").write_text("<html>legacy page</html>")
-    assert ui_mode(ui) == "legacy"
+    assert ui_mode(ui) == "missing"
     client = TestClient(create_app(lab, ui_dir=ui))
-    assert "legacy page" in client.get("/").text
-    assert client.get("/api/info").json()["ui"] == "legacy"
+    page = client.get("/")
+    assert page.status_code == 200 and "scripts/build-ui.sh" in page.text
+    assert client.get("/api/info").json()["ui"] == "missing"
+    assert client.get("/api/experiments").json() == []

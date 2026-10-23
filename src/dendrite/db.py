@@ -515,8 +515,7 @@ class Metadata:
     def experiments_using_artifact(self, h: str) -> list[dict]:
         """Experiments that took ``h`` as input, or whose node runs produced or read it.
 
-        ``roles`` is structured (``{"kind": "input"|"produced"|"read", "node", "name"}``);
-        ``role_labels`` keeps the compact ``input`` / ``output:<node>`` / ``consumed:<node>`` form.
+        ``roles`` is ``[{"kind": "input"|"produced"|"read", "node", "name"}]``.
         """
         pat = f"%{h}%"  # hashes are unique hex, so a text match on the JSON is exact enough
         with self.ro() as conn:
@@ -545,14 +544,12 @@ class Metadata:
             for name, v in (nr["inputs"] or {}).items():
                 if v == h:
                     roles.setdefault(nr["experiment_id"], []).append({"kind": "read", "node": nr["node"], "name": name})
-        legacy = {"input": "input", "produced": "output", "read": "consumed"}
         out = []
         for e in exps:  # creation order
             if e["id"] not in roles:
                 continue
             rs = roles[e["id"]]
-            labels = sorted({r["kind"] if r["node"] is None else f"{legacy[r['kind']]}:{r['node']}" for r in rs})
-            out.append({"id": e["id"], "name": e["name"], "roles": rs, "role_labels": labels})
+            out.append({"id": e["id"], "name": e["name"], "roles": rs})
         return out
 
     # -- bulk reads for storage accounting -----------------------------------------

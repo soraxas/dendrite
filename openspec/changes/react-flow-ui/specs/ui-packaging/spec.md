@@ -5,7 +5,7 @@ The system SHALL build the React UI from `ui/` into `src/dendrite/ui/dist/`, a d
 
 #### Scenario: Wheel contains the bundle
 - **WHEN** `scripts/build-ui.sh` is run and then `uv build --wheel` is run
-- **THEN** the wheel contains `dendrite/ui/dist/index.html`, its hashed assets, and `dendrite/ui/legacy.html`
+- **THEN** the wheel contains `dendrite/ui/dist/index.html` and its hashed assets
 
 ### Requirement: Build guard for missing bundle
 The build SHALL fail for sdist and wheel targets when `src/dendrite/ui/dist/index.html` is missing. The exceptions are editable installs and builds run with `DENDRITE_SKIP_UI_CHECK=1`.
@@ -18,8 +18,8 @@ The build SHALL fail for sdist and wheel targets when `src/dendrite/ui/dist/inde
 - **WHEN** `uv sync` is run without a built UI
 - **THEN** the install succeeds
 
-### Requirement: Serve bundle with legacy fallback
-The server SHALL serve the React bundle when it is present. Otherwise it SHALL serve the legacy single-file page. `/api/info` SHALL report which UI is active.
+### Requirement: Serve the bundle, or the API with a build hint
+The server SHALL serve the React bundle when it is present. Otherwise it SHALL serve the API alone, with a short page at `/` explaining how to build the UI. `/api/info` SHALL report which applies.
 
 #### Scenario: Bundle present
 - **WHEN** `dist/index.html` exists and `/` is requested
@@ -27,7 +27,7 @@ The server SHALL serve the React bundle when it is present. Otherwise it SHALL s
 
 #### Scenario: Bundle absent
 - **WHEN** `dist/` does not exist and `/` is requested
-- **THEN** the legacy page is returned, and `/api/info` reports `ui: "legacy"`
+- **THEN** a page explaining how to build the UI is returned, the API works, and `/api/info` reports `ui: "missing"`
 
 ### Requirement: Development server
 The repository SHALL provide a Vite dev server with hot reload. It SHALL proxy `/api` to a running `dendrite ui` backend (default `http://127.0.0.1:8454`).

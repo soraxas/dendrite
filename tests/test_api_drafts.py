@@ -3,12 +3,12 @@ from fastapi.testclient import TestClient
 from dendrite.server import create_app
 
 from . import toy
-from .test_api import legacy_only
+from .test_api import no_bundle
 
 
 def test_draft_endpoints_round_trip(lab, source, tmp_path):
     a = lab.create(toy.toy, inputs={"src": source}, name="base").run()
-    c = TestClient(create_app(lab, ui_dir=legacy_only(tmp_path), allow_edit=True))
+    c = TestClient(create_app(lab, ui_dir=no_bundle(tmp_path), allow_edit=True))
     assert c.get("/api/info").json()["plan"] is True
 
     d = c.post(f"/api/experiments/{a.id}/fork", json={"name": "try"}).json()
@@ -40,7 +40,7 @@ def test_draft_endpoints_round_trip(lab, source, tmp_path):
 def test_draft_endpoints_need_edit(lab, source, tmp_path):
     a = lab.create(toy.toy, inputs={"src": source}).run()
     d = a.fork(draft=True)
-    c = TestClient(create_app(lab, ui_dir=legacy_only(tmp_path)))
+    c = TestClient(create_app(lab, ui_dir=no_bundle(tmp_path)))
     assert c.post(f"/api/experiments/{a.id}/fork", json={}).status_code == 403
     assert c.patch(f"/api/experiments/{d.id}", json={"params": {"train.iterations": 2}}).status_code == 403
     assert c.delete(f"/api/experiments/{d.id}").status_code == 403
@@ -51,7 +51,7 @@ def test_draft_endpoints_need_edit(lab, source, tmp_path):
 def test_plan_without_pipeline_module(lab, source, tmp_path):
     a = lab.create(toy.toy, inputs={"src": source})
     lab.db.update_experiment(a.id, pipeline="not_loaded")
-    r = TestClient(create_app(lab, ui_dir=legacy_only(tmp_path))).get(f"/api/experiments/{a.id}/plan")
+    r = TestClient(create_app(lab, ui_dir=no_bundle(tmp_path))).get(f"/api/experiments/{a.id}/plan")
     assert r.status_code == 409 and r.json()["detail"]["code"] == "pipeline_not_imported"
 
 
@@ -73,7 +73,7 @@ def test_cli_run_freezes_draft(lab, source, capsys):
 
 def test_float_params_survive_json(lab, source, tmp_path):
     a = lab.create(toy.toy, inputs={"src": source}, params={"featurize.scale": 2.0}).run()
-    c = TestClient(create_app(lab, ui_dir=legacy_only(tmp_path), allow_edit=True))
+    c = TestClient(create_app(lab, ui_dir=no_bundle(tmp_path), allow_edit=True))
     d = c.post(f"/api/experiments/{a.id}/fork", json={}).json()
     # a browser sends 2.0 as `2`; listing the key in `floats` keeps it a float, so nothing reruns
     c.patch(f"/api/experiments/{d['id']}", json={"params": {"featurize.scale": 2}, "floats": ["featurize.scale"]})
@@ -85,7 +85,7 @@ def test_float_params_survive_json(lab, source, tmp_path):
 def test_edit_errors_are_client_errors(lab, source, tmp_path):
     a = lab.create(toy.toy, inputs={"src": source}).run()
     root = lab.create(toy.toy, inputs={"src": source}, draft=True)
-    c = TestClient(create_app(lab, ui_dir=legacy_only(tmp_path), allow_edit=True))
+    c = TestClient(create_app(lab, ui_dir=no_bundle(tmp_path), allow_edit=True))
     d = c.post(f"/api/experiments/{a.id}/fork", json={}).json()
     c.post(f"/api/experiments/{d['id']}/fork", json={})
     assert c.delete(f"/api/experiments/{d['id']}").status_code == 409  # it has a fork

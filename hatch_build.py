@@ -21,5 +21,5 @@ class CustomBuildHook(BuildHookInterface):
         if not (Path(self.root) / UI_INDEX).is_file():
             raise RuntimeError(
                 f"{UI_INDEX} is missing: run scripts/build-ui.sh before building a "
-                f"{self.target_name}, or set {SKIP_ENV}=1 to package without the React UI"
+                f"{self.target_name}, or set {SKIP_ENV}=1 to package the API without a UI"
             )

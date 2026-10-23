@@ -34,14 +34,15 @@ def build(project: Path, out: Path):
     )
 
 
-def test_wheel_contains_bundle_and_legacy(tmp_path):
+def test_wheel_contains_the_ui_bundle(tmp_path):
     (tmp_path / "proj").mkdir()
     proj = project_copy(tmp_path / "proj", with_bundle=True)
     res = build(proj, tmp_path / "out")
     assert res.returncode == 0, res.stderr[-2000:]
     (wheel,) = (tmp_path / "out").glob("*.whl")
     names = set(zipfile.ZipFile(wheel).namelist())
-    assert {"dendrite/ui/dist/index.html", "dendrite/ui/dist/assets/app.js", "dendrite/ui/legacy.html"} <= names
+    assert {"dendrite/ui/dist/index.html", "dendrite/ui/dist/assets/app.js"} <= names
+    assert "dendrite/ui/legacy.html" not in names
 
 
 def test_build_fails_without_bundle(tmp_path):

@@ -29,8 +29,18 @@ UI_DIR = Path(str(resources.files("dendrite") / "ui"))
 
 
 def ui_mode(ui_dir: Path = UI_DIR) -> str:
-    """``react`` when the built bundle is present, otherwise the ``legacy`` single-file page."""
-    return "react" if (ui_dir / "dist" / "index.html").is_file() else "legacy"
+    """``react`` when the built UI bundle is present, otherwise ``missing`` (API only)."""
+    return "react" if (ui_dir / "dist" / "index.html").is_file() else "missing"
+
+
+UI_MISSING = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>dendrite</title></head>
+<body style="font: 15px system-ui, sans-serif; max-width: 40rem; margin: 4rem auto; line-height: 1.5">
+<h1>The dendrite UI isn't built</h1>
+<p>This install has no UI bundle (for example a fresh clone). Build it with
+<code>scripts/build-ui.sh</code>, or run <code>cd ui &amp;&amp; npm install &amp;&amp; npm run dev</code>
+for the hot-reloading UI. The JSON API at <a href="/api/info"><code>/api</code></a> works either way.</p>
+</body></html>"""
 
 
 def _experiment(lab: Lab, key: str) -> Experiment:
@@ -220,9 +230,8 @@ def create_app(lab: Lab | None = None, ui_dir: Path = UI_DIR, allow_edit: bool =
         forks too; ``?forks=keep`` keeps them as forks of its parent."""
         require_edit()
         exp = _experiment(lab, exp_id)
-        mode = {"1": "delete", "true": "delete", "0": "refuse", "false": "refuse"}.get(forks, forks)
         try:
-            out = lab.delete([exp_id], forks=mode)
+            out = lab.delete([exp_id], forks=forks)
         except ValueError as e:
             raise HTTPException(409, str(e)) from None
         storage_cache.clear()
@@ -523,10 +532,9 @@ def create_app(lab: Lab | None = None, ui_dir: Path = UI_DIR, allow_edit: bool =
         # so only "/" and the hashed assets need serving.
         app.mount("/", StaticFiles(directory=ui_dir / "dist", html=True), name="ui")
     else:
-        legacy = ui_dir / "legacy.html"
 
         @app.get("/", response_class=HTMLResponse)
-        def spa() -> str:
-            return legacy.read_text(encoding="utf-8")
+        def ui_missing() -> str:
+            return UI_MISSING
 
     return app

@@ -14,7 +14,7 @@ export interface ArtifactRef {
 export interface Info {
   db: string;
   store: string;
-  ui: "react" | "legacy";
+  ui: "react" | "missing";
   edit: boolean;
   plan: boolean;
   pipelines: string[];
@@ -226,7 +226,6 @@ export interface Usage {
   id: string;
   name: string | null;
   roles: Role[];
-  role_labels: string[];
 }
 
 export interface LineageArtifact extends ArtifactRef {

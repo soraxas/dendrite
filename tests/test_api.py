@@ -1,26 +1,24 @@
-import shutil
-
 from fastapi.testclient import TestClient
 
-from dendrite.server import UI_DIR, create_app
+from dendrite.server import create_app
 
 from . import toy
 
 
-def legacy_only(tmp_path):
+def no_bundle(tmp_path):
+    """A UI folder without a built bundle: the app serves the API (and a build hint at /)."""
     ui = tmp_path / "ui"
-    ui.mkdir()
-    shutil.copy(UI_DIR / "legacy.html", ui / "legacy.html")
+    ui.mkdir(exist_ok=True)
     return ui
 
 
 def test_api_endpoints(lab, source, tmp_path, monkeypatch):
     a = lab.create(toy.toy, inputs={"src": source}, name="base").run()
     b = a.fork({"train.iterations": 4}, name="fork").run()
-    client = TestClient(create_app(lab, ui_dir=legacy_only(tmp_path)))
+    client = TestClient(create_app(lab, ui_dir=no_bundle(tmp_path)))
 
-    assert "<title>Dendrite Lineage</title>" in client.get("/").text
-    assert client.get("/api/info").json()["ui"] == "legacy"
+    assert "isn't built" in client.get("/").text
+    assert client.get("/api/info").json()["ui"] == "missing"
     tree = client.get("/api/experiments").json()
     assert [e["id"] for e in tree] == [a.id, b.id]
     assert tree[1]["parent_id"] == a.id and tree[1]["counts"] == {"cached": 2, "computed": 1}
@@ -59,12 +57,12 @@ def test_api_endpoints(lab, source, tmp_path, monkeypatch):
     down = client.get(f"/api/artifacts/{a.output('featurize').hash}/lineage").json()
     assert {x["label"]: x["role"] for x in down["artifacts"]}["model"] == "descendant"
 
-    # Usage roles are structured; the compact strings remain for the CLI and legacy page.
+    # Usage roles say how each experiment used the artifact.
     roles = {e["id"]: e for e in rows["experiments"]}
     assert set(roles) == {a.id, b.id}
     assert {"kind": "produced", "node": "extract", "name": "rows"} in roles[b.id]["roles"]
     assert {"kind": "read", "node": "featurize", "name": "rows"} in roles[b.id]["roles"]
-    assert roles[a.id]["role_labels"] == ["consumed:featurize", "output:extract"]
+    assert "role_labels" not in roles[a.id]
 
     def no_blob_access(*args, **kwargs):
         raise AssertionError("execution icon metadata must not access artifact storage")

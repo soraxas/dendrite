@@ -3,7 +3,7 @@ from fastapi.testclient import TestClient
 from dendrite.server import create_app
 
 from . import toy
-from .test_api import legacy_only
+from .test_api import no_bundle
 
 
 def paths(dag):
@@ -38,7 +38,7 @@ def test_plans_and_shapes_know_stages_before_running(lab, source):
 
 
 def test_pipeline_view_api(lab, tmp_path):
-    ui = legacy_only(tmp_path)
+    ui = no_bundle(tmp_path)
     c = TestClient(create_app(lab, ui_dir=ui, allow_edit=True))
     assert c.get("/api/pipelines/toy/view").json() == {"assign": {}, "styles": {}}
     view = {"assign": {"tag": "Audio"}, "styles": {"Audio": {"label": "Audio", "description": "Transcription", "color": "purple"}}}

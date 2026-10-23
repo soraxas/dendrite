@@ -60,3 +60,8 @@
 - [x] 7.9 Sidebar: 232px wide, collapsible to a 40px rail (remembered per browser), hint moved to an ⓘ tooltip, and relative last-run time per experiment (`started_at`/`finished_at` added to the tree API)
 - [x] 7.10 Selected step shows its input chips on the incoming side and output chips on the outgoing side; picking a chip opens that data's panel while the step stays selected and the chip highlighted
 - [x] 7.11 Re-fit the graph when the canvas is resized (e.g. sidebar collapse)
+
+## 7. Follow-up
+
+- [x] 7.1 Remove the legacy single-file page (`legacy.html`), `role_labels` and the old `?forks=1` spellings: without a bundle the server now serves the API with a build hint
+
