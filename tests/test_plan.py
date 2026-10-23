@@ -183,3 +183,102 @@ def test_plan_reloads_edited_step_module(lab, source, tmp_path, monkeypatch):
         assert outcomes(a.fork(draft=True).plan()) == {"double": ("run", "code")}
     finally:
         sys.modules.pop("edited_steps", None)
+
+
+# -- reasons, estimates and edge cases ---------------------------------------------------------
+def test_input_change_is_the_reason(lab, source, tmp_path):
+    a = lab.create(toy.toy, inputs={"src": source}).run()
+    other = tmp_path / "other.csv"
+    other.write_text("a,b\n9,9\n")
+    p = a.fork(inputs={"src": other}, draft=True).plan()
+    assert outcomes(p)["extract"] == ("run", "inputs")
+
+
+def test_env_change_is_the_reason(lab, source, monkeypatch):
+    a = lab.create(toy.toy, inputs={"src": source}).run()
+    monkeypatch.setenv("DENDRITE_ENV", "image@sha256:new")
+    p = a.fork(draft=True).plan()
+    assert outcomes(p)["extract"] == ("run", "env")
+    assert p["env"]["env"] == "image@sha256:new"
+
+
+def test_estimate_falls_back_to_the_parents_run(lab, source):
+    a = lab.create(toy.toy, inputs={"src": source}).run()
+    parent_train = lab.db.execution(next(n for n in a.node_runs() if n["node"] == "train")["execution_id"])
+    p = a.fork({"train.iterations": 99}, draft=True).plan()
+    train = next(n for n in p["nodes"] if n["name"] == "train")
+    assert train["estimate"] == pytest.approx(parent_train["finished_at"] - parent_train["started_at"])
+
+
+def test_plan_resolves_futures_the_body_waits_on(lab, source):
+    a = lab.create(toy.toy_result, inputs={"src": source}).run()
+    assert outcomes(a.fork(draft=True).plan()) == {n: ("reuse", None) for n in ("extract", "featurize", "train")}
+    p = a.fork({"featurize.scale": 3}, draft=True).plan()
+    assert outcomes(p)["train"] == ("run", "upstream")
+
+
+def test_plan_reports_bad_param_keys_instead_of_raising(lab, source):
+    a = lab.create(toy.toy, inputs={"src": source}).run()
+    p = a.fork({"train.iteratons": 5}, draft=True).plan()
+    assert p["complete"] is False and "iteratons" in p["error"]
+
+
+def test_reset_without_a_parent_drops_the_override(lab, source):
+    d = lab.create(toy.toy, inputs={"src": source}, params={"train.seed": 4, "train.iterations": 3}, draft=True)
+    d.update(reset=["train.seed"])
+    assert d.params == {"train": {"iterations": 3}}
+    d.update(reset=["train.iterations"])
+    assert d.params == {}
+
+
+def test_starting_a_never_run_experiment_twice_fails(lab, source):
+    a = lab.create(toy.toy, inputs={"src": source})
+    stale = lab.get(a.id)
+    a.run()
+    with pytest.raises(NotADraft):
+        stale.run()  # still believes it is "created"; the compare-and-set refuses
+
+
+def test_reload_failure_keeps_the_previous_code(lab, source, tmp_path, monkeypatch):
+    mod = tmp_path / "broken_steps.py"
+    mod.write_text(textwrap.dedent('''
+        from dendrite import artifact_task, pipeline
+
+        @artifact_task
+        def echo(src):
+            return src.read_text()
+
+        @pipeline(name="breaks")
+        def breaks(src):
+            return echo(src)
+    '''))
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.import_module("broken_steps")
+    try:
+        a = lab.create("breaks", inputs={"src": source}).run()
+        mod.write_text("def oops(:\n")
+        st = mod.stat()
+        os.utime(mod, (st.st_atime, st.st_mtime + 5))
+        p = a.fork(draft=True).plan()
+        assert "reloading broken_steps failed" in p["error"]
+        assert outcomes(p) == {"echo": ("reuse", None)}  # planned with the code that was loaded
+    finally:
+        sys.modules.pop("broken_steps", None)
+
+
+def test_param_editor_types():
+    from dendrite.task import _json_type
+
+    assert _json_type(float, 1) == "number"  # annotation wins over the default's type
+    assert _json_type("bool", None) == "boolean"  # `from __future__ import annotations`
+    assert _json_type(inspect_empty(), True) == "boolean"  # bool is not an integer here
+    assert _json_type(inspect_empty(), 3) == "integer"
+    assert _json_type(inspect_empty(), [1]) == "array"
+    assert _json_type(inspect_empty(), None) == "any"
+    assert _json_type(list[int], None) == "any"  # generics fall back to raw JSON
+
+
+def inspect_empty():
+    import inspect
+
+    return inspect.Parameter.empty

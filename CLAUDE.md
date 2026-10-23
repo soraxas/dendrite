@@ -33,6 +33,7 @@ uv run dendrite run <exp> --import examples.recon        # run a draft made in t
                                            # also: list | show | diff | dag | tree | lineage
 cd ui && npm run dev                       # hot-reloading UI, /api proxied to :8454 (Node 20+; UI work only)
 cd ui && npm run build                     # tsc type-check + vite build into src/dendrite/ui/dist (git-ignored)
+cd ui && npm test                          # Vitest + Testing Library (jsdom): UI logic and draft-editing components
 scripts/build-ui.sh && uv build            # release: the build guard fails a wheel/sdist without the bundle
 ```
 
@@ -132,6 +133,7 @@ The flow of a run spans several modules in `src/dendrite/`:
 - `tests/toy.py` defines the toy pipelines and a `CALLS` counter of real executions. Tests assert on that counter to prove cache reuse.
 - Pipelines and tasks are registered by name at import time (`_PIPELINES`), so `Experiment.pipeline` needs the defining module imported.
 - `conftest.py` starts one session-wide `prefect_test_harness`.
+- UI tests live next to the code as `ui/src/**/*.test.ts(x)`. Builders are in `ui/src/test/fixtures.ts`, and `renderWithQuery` gives a fresh QueryClient. Mock the network with `vi.spyOn(api, ...)`. `layout.ts` creates the ELK worker lazily, so graph modules import cleanly under jsdom.
 
 ## OpenSpec
 

@@ -213,6 +213,7 @@ The UI source lives in `ui/` (React + TypeScript + Vite). Working on it needs No
 uv run dendrite ui                 # backend on :8454
 cd ui && npm install && npm run dev   # hot-reloading UI; /api is proxied to :8454 (override with DENDRITE_API=…)
 npm run build                      # type-check + bundle into src/dendrite/ui/dist (git-ignored)
+npm test                           # UI unit and component tests (Vitest, jsdom)
 ```
 
 To release, build the UI first and then the Python package:

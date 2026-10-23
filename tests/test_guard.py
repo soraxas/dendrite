@@ -71,3 +71,30 @@ def test_plan_does_not_trip_the_guard(project, monkeypatch, source):
     a = run(lab, source)
     assert a.fork({"read_extra.extra": str(project / "config.yaml")}, draft=True).plan()["complete"]
     lab.db.dispose()
+
+
+def test_low_level_reads_are_seen_and_writes_are_not(project, monkeypatch):
+    import os
+
+    from dendrite import guard
+
+    target = project / "config.yaml"
+    token = guard.start("step", "warn", project, [])
+    try:
+        with pytest.warns(UndeclaredReadWarning, match="config.yaml"):
+            os.close(os.open(target, os.O_RDONLY))
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", UndeclaredReadWarning)
+            os.close(os.open(target, os.O_RDONLY))  # reported once per step and path
+            with open(project / "out.txt", "w") as f:
+                f.write("writes are not inputs")
+            (project / "helper.py").write_text("x = 1")
+            open(project / "helper.py").close()  # code files are imports, not data
+    finally:
+        assert guard.stop(token).seen == {os.path.realpath(target)}
+
+
+def test_guard_is_idle_outside_steps(project):
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UndeclaredReadWarning)
+        (project / "config.yaml").read_text()

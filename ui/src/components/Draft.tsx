@@ -109,7 +109,7 @@ export function DraftBar({ exp, plan, planError, canEdit, onDiscarded }: {
 const key = (node: string, p: ParamField) => `${node}.${p.name}`;
 
 /** Parse an edited field into the JSON value it means, or an error message. */
-function parse(p: ParamField, text: string): { value?: unknown; error?: string } {
+export function parseParam(p: ParamField, text: string): { value?: unknown; error?: string } {
   const t = text.trim();
   switch (p.json_type) {
     case "integer":
@@ -129,7 +129,7 @@ function parse(p: ParamField, text: string): { value?: unknown; error?: string }
 
 const show = (p: ParamField, v: unknown) => (p.json_type === "string" ? String(v ?? "") : p.json_type === "integer" || p.json_type === "number" ? String(v) : JSON.stringify(v));
 
-function ParamRow({ node, p, onSave, onReset, disabled }: {
+export function ParamRow({ node, p, onSave, onReset, disabled }: {
   node: string;
   p: ParamField;
   onSave: (k: string, v: unknown, float: boolean) => void;
@@ -146,7 +146,7 @@ function ParamRow({ node, p, onSave, onReset, disabled }: {
   }, [p]);
   const k = key(node, p);
   const commit = (raw: string) => {
-    const r = parse(p, raw);
+    const r = parseParam(p, raw);
     setError(r.error && `Enter ${r.error}`);
     if (r.error) return;
     if (JSON.stringify(r.value) === JSON.stringify(p.value)) return;

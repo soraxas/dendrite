@@ -103,3 +103,9 @@ def read_extra(src: Path, extra: str = "", swallow: bool = False) -> str:
 @pipeline(name="toy_reads")
 def toy_reads(src):
     return read_extra(src)
+
+
+@pipeline(name="toy_result")
+def toy_result(src):
+    feats = featurize.submit(extract(src))
+    return train(feats.result())  # bodies may resolve futures themselves

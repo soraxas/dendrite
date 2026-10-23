@@ -80,3 +80,16 @@ def test_float_params_survive_json(lab, source, tmp_path):
     assert lab.get(d["id"]).params == {"featurize": {"scale": 2.0}}
     assert isinstance(lab.get(d["id"]).params["featurize"]["scale"], float)
     assert c.get(f"/api/experiments/{d['id']}/plan").json()["totals"]["run"] == 0
+
+
+def test_edit_errors_are_client_errors(lab, source, tmp_path):
+    a = lab.create(toy.toy, inputs={"src": source}).run()
+    root = lab.create(toy.toy, inputs={"src": source}, draft=True)
+    c = TestClient(create_app(lab, ui_dir=legacy_only(tmp_path), allow_edit=True))
+    d = c.post(f"/api/experiments/{a.id}/fork", json={}).json()
+    c.post(f"/api/experiments/{d['id']}/fork", json={})
+    assert c.delete(f"/api/experiments/{d['id']}").status_code == 409  # it has a fork
+    assert c.patch(f"/api/experiments/{root.id}", json={"pins": {"train": "parent"}}).status_code == 400  # no parent
+    assert c.patch(f"/api/experiments/{d['id']}", json={"pins": {"train": "elsewhere"}}).status_code == 400
+    assert c.patch(f"/api/experiments/{d['id']}", json={"params": {"nodot": 1}}).status_code == 400
+    assert c.patch(f"/api/experiments/nope", json={}).status_code == 404

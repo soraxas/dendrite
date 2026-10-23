@@ -10,7 +10,7 @@ import { planSummary } from "./Draft";
 const statusTone = (s: string) => (s === "completed" ? "computed" : s === "created" ? "queued" : s);
 
 /** "Fork…": a draft child with the same settings, opened straight away for editing. */
-function ForkButton({ dag, canEdit, open }: { dag: Dag; canEdit: boolean; open: (id: string) => void }) {
+export function ForkButton({ dag, canEdit, open }: { dag: Dag; canEdit: boolean; open: (id: string) => void }) {
   const qc = useQueryClient();
   const exp = dag.experiment;
   const fork = useMutation({

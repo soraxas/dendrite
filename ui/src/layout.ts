@@ -3,7 +3,8 @@ import ELK, { type ElkNode } from "elkjs/lib/elk-api";
 import workerUrl from "elkjs/lib/elk-worker.min.js?url";
 import { useEffect, useRef, useState } from "react";
 
-const elk = new ELK({ workerUrl });
+// Created on first layout, so importing graph modules (e.g. in tests) never spawns a worker.
+let elk: InstanceType<typeof ELK> | undefined;
 
 export interface LayoutNode {
   id: string;
@@ -58,7 +59,7 @@ async function run(nodes: LayoutNode[], edges: LayoutEdge[], dir: "RIGHT" | "DOW
         labels: e.label ? [{ text: e.label, width: e.label.length * LABEL_CHAR_W + 10, height: 15 }] : [],
       })),
   };
-  const out = await elk.layout(graph);
+  const out = await (elk ??= new ELK({ workerUrl })).layout(graph);
   const pos = new Map<string, Point>();
   for (const c of out.children ?? []) pos.set(c.id, { x: c.x ?? 0, y: c.y ?? 0 });
   const routed: Layout["edges"] = new Map();

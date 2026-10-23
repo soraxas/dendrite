@@ -7,13 +7,13 @@ import { DagLegend, PlanLegend } from "./Legend";
 import { nodeTypes, type HoverCard, type Port } from "./nodes";
 
 // Placeholders (kind "pending") stand for outputs a draft hasn't computed yet; there is nothing to open.
-const toPorts = (m?: Record<string, ArtifactRef | null>): Port[] =>
+export const toPorts = (m?: Record<string, ArtifactRef | null>): Port[] =>
   Object.entries(m ?? {}).flatMap(([name, r]) => (r && (r.kind as string) !== "pending" ? [{ name, hash: r.hash, sub: `${r.kind} · ${fmtSize(r.size)}` }] : []));
 
 const changedParams = (n: PlanNode) => (n.param_schema ?? []).filter((p) => p.changed);
 
 /** A planned step (draft mode): what running the draft would do, and why. */
-function planData(n: PlanNode, self: string, nameOf: (id: string) => string, onOpenSource: (exp: string, node: string) => void) {
+export function planData(n: PlanNode, self: string, nameOf: (id: string) => string, onOpenSource: (exp: string, node: string) => void) {
   const outcome = n.plan ?? "run";
   const copy = PLAN[outcome];
   const origin = n.reuse_from?.experiment_id && n.reuse_from.experiment_id !== self ? n.reuse_from.experiment_id : null;
