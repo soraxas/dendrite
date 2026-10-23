@@ -46,6 +46,20 @@ def test_value_roundtrip(store):
     assert store.load(ref) == {"a": [1, 2]}
 
 
+def test_preview_blob_is_cached_and_reclaimed_with_checkouts(store, tmp_path):
+    file = tmp_path / "original.txt"
+    file.write_text("preview bytes")
+    ref = store.put_path(file)
+    # A differently named file with the same content may already have a regular checkout.
+    assert store.load(ref).read_text() == "preview bytes"
+    preview = store.materialize_file(ref.hash)
+    assert preview.read_text() == "preview bytes"
+    assert store.materialize_file(ref.hash) == preview
+    store.drop_checkouts([ref.hash])
+    assert not preview.exists()
+    assert store.has(ref.hash)
+
+
 def test_iter_objects_and_delete_many(store, tmp_path):
     import time
 

@@ -208,8 +208,15 @@ Lab(store_url="s3://lineage/prod", storage_options={"endpoint_url": "http://mini
 - a live DAG (queued → running/waiting → computed/cached/pinned/failed). Node status updates in place, and the graph is only re-laid-out when new nodes appear.
 - node details: signature, the execution it reused and which experiment computed it, params, inputs/outputs, and metric sparklines
 - artifact lineage: artifacts (data) and executions (computation) are drawn as distinct node types, and artifacts are labelled by output name. The selection is kept in the URL and the side panel always describes it. "Used by" reads like *produced by extract_frames · read by colmap, train_splats*.
+- file previews: select a file artifact or click a directory entry to view supported documents, PDFs, spreadsheets, images, media, archives, CAD and 3D models using [File Viewer](https://github.com/flyfish-dev/file-viewer). **Expand preview** opens a larger viewer. Unknown text formats fall back to plain text; other unsupported files remain downloadable. Python values keep their existing representation.
 - an experiment diff: params, per-node reuse, and metric deltas
 - code: every run records a snapshot of its step's source, with file and line. You can view it in an editor. While the file still contains exactly that code, you can also edit and save it back. Saving asks for confirmation, refuses if the file changed underneath you, and is only enabled when `dendrite ui` runs on localhost (or with `--allow-edit`).
+
+File Viewer uses the Full package's format set. Render engines load when a file preview opens;
+the UI build copies matching workers, WASM, fonts and vendor assets into the Python package
+for local serving. File fidelity depends on the format and browser capabilities. The bundled
+CAD runtime carries AGPL-3.0 licensing, and the binary PowerPoint runtime retains its own
+license and watermark; see the [upstream licenses](https://github.com/flyfish-dev/file-viewer#license).
 
 ### Code view: edit the pipeline and watch its shape
 
