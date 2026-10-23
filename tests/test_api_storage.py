@@ -16,7 +16,7 @@ def no_grace(monkeypatch):
 def client(lab, tmp_path, edit=True):
     from dendrite import Lab
 
-    lab = Lab(lab.home)  # picks up DENDRITE_GC_GRACE
+    lab = Lab(lab.home, db_url=lab.settings.db_url)  # picks up DENDRITE_GC_GRACE
     return TestClient(create_app(lab, ui_dir=legacy_only(tmp_path), allow_edit=edit))
 
 
@@ -115,7 +115,7 @@ def test_gc_busy_is_409(lab, source, tmp_path):
 def test_cli_storage_commands(lab, source, capsys):
     a = lab.create(toy.toy, inputs={"src": source}, name="base").run()
     b = a.fork({"train.iterations": 20}).run()
-    home = ["--home", str(lab.home)]
+    home = ["--home", str(lab.home), "--db-url", lab.settings.db_url]
 
     main([*home, "du"])
     out = capsys.readouterr().out

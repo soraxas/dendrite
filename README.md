@@ -310,8 +310,10 @@ The design and requirements live in OpenSpec: the baseline specs are in `openspe
 
 ```bash
 uv run pytest                                   # SQLite + local/memory/moto-S3 stores, API, packaging
-DENDRITE_TEST_PG_URL=postgresql+psycopg://postgres:pw@localhost:55432/dendrite uv run pytest tests/test_postgres.py
+DENDRITE_TEST_DB=postgres uv run pytest         # the whole suite on Postgres
 ```
+
+Postgres tests start a throwaway `postgres:17-alpine` container with testcontainers when Docker is running, on a random port, and skip otherwise. Set `DENDRITE_TEST_PG_URL` to use an existing server instead (each test gets its own schema), or `DENDRITE_TEST_PG=require` to fail rather than skip. CI (`.github/workflows/ci.yml`) runs the suite on SQLite and on Postgres, plus the UI tests and build, against Prefect cloned at a pinned commit (`PREFECT_SHA`).
 
 ### Web UI
 

@@ -26,7 +26,7 @@ uv sync                                    # installs prefect editable from ../p
 uv run pytest                              # full suite (Prefect test harness + moto S3 server)
 uv run pytest tests/test_lineage.py::test_artifact_fork_pins_node   # single test
 uv run pytest -k pin                       # by keyword
-DENDRITE_TEST_PG_URL=postgresql+psycopg://user:pw@host:port/db uv run pytest tests/test_postgres.py
+DENDRITE_TEST_DB=postgres uv run pytest   # whole suite on Postgres (testcontainers; needs Docker)
 uv run python examples/minimal.py          # smallest setup: two steps, a run and a fork
 uv run python examples/recon.py            # demo: baseline + config fork + pinned fork (DEMO_SLEEP=2 to slow nodes)
 uv run dendrite ui --port 8454 --import examples.recon   # API + SPA; --import enables draft previews
@@ -40,7 +40,13 @@ cd ui && npm test                          # Vitest + Testing Library (jsdom): U
 scripts/build-ui.sh && uv build            # release: the build guard fails a wheel/sdist without the bundle
 ```
 
-The Postgres tests skip unless `DENDRITE_TEST_PG_URL` is set. Each test creates and drops its own schema. There is no linter or formatter configured.
+Postgres for tests comes from the session fixture `pg_url` in `conftest.py`:
+- **Source.** `DENDRITE_TEST_PG_URL` if set, otherwise a throwaway `postgres:17-alpine` container (testcontainers, random port).
+- **Without Docker.** The tests skip, or fail with `DENDRITE_TEST_PG=require`, which CI sets.
+- **Isolation.** `pg_schema_url` gives each test its own schema and drops it afterwards.
+- **Whole suite.** `DENDRITE_TEST_DB=postgres` switches the shared `lab` fixture to Postgres. Tests that open a second `Lab` or call the CLI must pass `lab.settings.db_url` / `--db-url` along.
+
+CI is `.github/workflows/ci.yml`: pytest on SQLite and on Postgres, plus the UI tests and build. It clones Prefect into `../prefect` at `PREFECT_SHA`, blobless rather than shallow because versioningit needs the tags; bump it together with your local `../prefect`. There is no linter or formatter configured.
 
 Configuration env vars:
 

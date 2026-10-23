@@ -1,0 +1,56 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+env:
+  # dendrite builds against a Prefect checkout at ../prefect ([tool.uv.sources] in pyproject.toml).
+  # Bump this together with your local ../prefect.
+  PREFECT_SHA: 7d1688ff034a89a47c900c0e2951c78ff1979f0d
+  DO_NOT_TRACK: "1"
+
+jobs:
+  python:
+    name: pytest (${{ matrix.db }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        db: [sqlite, postgres]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check out Prefect at the pinned commit
+        # Blobless rather than shallow: versioningit reads Prefect's version from its git tags.
+        run: |
+          git clone --filter=blob:none --no-checkout https://github.com/PrefectHQ/prefect ../prefect
+          git -C ../prefect checkout --quiet "$PREFECT_SHA"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - run: uv sync --locked
+      - name: pytest
+        # Every job also runs tests/test_postgres.py against a throwaway postgres:17-alpine
+        # container (testcontainers); DENDRITE_TEST_PG=require fails instead of skipping.
+        # The postgres job additionally runs the whole suite on Postgres.
+        env:
+          DENDRITE_TEST_DB: ${{ matrix.db }}
+          DENDRITE_TEST_PG: require
+        run: uv run pytest -q
+
+  ui:
+    name: UI tests and build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run build

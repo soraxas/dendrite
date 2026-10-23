@@ -1,32 +1,21 @@
-"""Runs the core scenarios against PostgreSQL when DENDRITE_TEST_PG_URL is set."""
-
-import os
-import uuid
+"""Core, draft and storage scenarios on PostgreSQL (a throwaway container unless
+DENDRITE_TEST_PG_URL is set; skipped without Docker). The whole suite can also run on
+Postgres with DENDRITE_TEST_DB=postgres."""
 
 import pytest
-import sqlalchemy as sa
 
 from dendrite import Lab
+from dendrite.storage import StorageBusy
 
 from . import toy
 
-PG = os.environ.get("DENDRITE_TEST_PG_URL")
-pytestmark = pytest.mark.skipif(not PG, reason="set DENDRITE_TEST_PG_URL=postgresql+psycopg://… to run")
-
 
 @pytest.fixture
-def pg_lab(tmp_path):
-    schema = f"t_{uuid.uuid4().hex[:8]}"
-    admin = sa.create_engine(PG)
-    with admin.begin() as c:
-        c.execute(sa.text(f"CREATE SCHEMA {schema}"))
-    url = sa.engine.make_url(PG).update_query_dict({"options": f"-csearch_path={schema}"})
-    lab = Lab(tmp_path / "pg", db_url=url.render_as_string(hide_password=False))
+def pg_lab(tmp_path, pg_schema_url):
+    lab = Lab(tmp_path / "pg", db_url=pg_schema_url)
+    assert lab.db.engine.dialect.name == "postgresql"
     yield lab
     lab.db.dispose()
-    with admin.begin() as c:
-        c.execute(sa.text(f"DROP SCHEMA {schema} CASCADE"))
-    admin.dispose()
 
 
 def test_postgres_fork_pin_lineage_and_lease(pg_lab, source):
@@ -43,3 +32,42 @@ def test_postgres_fork_pin_lineage_and_lease(pg_lab, source):
     assert len(pg_lab.lineage(b.output("train", "model"))["ancestors"]) == 3
     assert pg_lab.db.acquire_lease("s", "w1", 10) and not pg_lab.db.acquire_lease("s", "w2", 10)
     assert pg_lab.db.experiments_using_artifact(a.output("featurize").hash)
+
+
+def test_postgres_drafts_compare_and_set(pg_lab, source):
+    a = pg_lab.create(toy.toy, inputs={"src": source}).run()
+    d = a.fork({"train.iterations": 20}, draft=True)
+    assert d.plan()["totals"]["run"] == 1
+    d.update({"train.iterations": 10})
+    assert d.plan()["totals"]["run"] == 0
+    d.run()
+    assert not pg_lab.db.update_experiment_if(d.id, "draft", name="late edit")
+
+
+def test_postgres_keep_delete_reparent_and_gc(pg_lab, source):
+    a = pg_lab.create(toy.toy, inputs={"src": source}).run()
+    b = a.fork({"train.iterations": 20}).run()
+    c = b.fork({"train.iterations": 30}).run()
+    assert pg_lab.get(a.id).kept is False  # keep comes from an outer join on experiment_flags
+    a.keep()
+    assert pg_lab.tree()[0]["keep"] is True and pg_lab.get(a.id).kept
+    est = pg_lab.deletion_estimate([b.id])
+    assert pg_lab.delete([b.id], forks="keep") == {"deleted": [b.id], "reparented": {c.id: a.id}}
+    assert c.refresh().parent_id == a.id
+    assert pg_lab.gc(dry_run=False, grace=0)["bytes"] == est["bytes"]
+    assert c.load("featurize") == [3, 7, 11, 15]
+    with pytest.raises(ValueError, match="fork"):
+        pg_lab.delete([a.id])
+    assert pg_lab.delete([a.id, c.id])["deleted"] == [c.id, a.id]  # children first: parent_id is a FK
+    assert pg_lab.experiments() == []
+
+
+def test_postgres_running_guard_and_stop(pg_lab, source):
+    a = pg_lab.create(toy.toy, inputs={"src": source}).run()
+    pg_lab.db.update_experiment(a.id, status="running")
+    with pytest.raises(StorageBusy):
+        pg_lab.gc(dry_run=False)
+    with pytest.raises(ValueError, match="running"):
+        a.delete()
+    a.mark_stopped()
+    assert a.delete() == [a.id]
