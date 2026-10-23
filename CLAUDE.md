@@ -27,6 +27,7 @@ uv run pytest                              # full suite (Prefect test harness + 
 uv run pytest tests/test_lineage.py::test_artifact_fork_pins_node   # single test
 uv run pytest -k pin                       # by keyword
 DENDRITE_TEST_PG_URL=postgresql+psycopg://user:pw@host:port/db uv run pytest tests/test_postgres.py
+uv run python examples/minimal.py          # smallest setup: two steps, a run and a fork
 uv run python examples/recon.py            # demo: baseline + config fork + pinned fork (DEMO_SLEEP=2 to slow nodes)
 uv run dendrite ui --port 8454 --import examples.recon   # API + SPA; --import enables draft previews
 uv run dendrite run <exp> --import examples.recon        # run a draft made in the UI

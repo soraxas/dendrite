@@ -27,9 +27,37 @@ Experiment API (create · fork · pin · diff)     dendrite ui (live DAG, lineag
 
 ```bash
 uv sync                                   # prefect comes from ../prefect (editable)
+uv run python examples/minimal.py         # smallest setup: two steps, a run and a fork
 uv run python examples/recon.py           # baseline + config fork + artifact fork
 uv run dendrite ui                        # http://127.0.0.1:8454 (read-only; no imports needed)
 ```
+
+The minimum is a decorator per step and one for the pipeline (`examples/minimal.py`):
+
+```python
+from pathlib import Path
+from dendrite import Lab, artifact_task, pipeline
+
+@artifact_task
+def count_words(text: Path) -> dict:            # an input artifact arrives as a local Path
+    words = text.read_text().split()
+    return {w: words.count(w) for w in words}   # any picklable value becomes an artifact
+
+@artifact_task
+def top(counts: dict, n: int = 3) -> list:      # `n` has a default, so it's a parameter
+    return sorted(counts, key=lambda w: (-counts[w], w))[:n]
+
+@pipeline
+def word_stats(text):
+    return top(count_words(text))
+
+lab = Lab()                                      # .dendrite/: SQLite metadata + local store
+base = lab.create(word_stats, inputs={"text": "speech.txt"}).run()
+more = base.fork({"top.n": 5}).run()             # count_words is reused; only top runs
+more.load("top")
+```
+
+A fuller pipeline, with named outputs, metrics and pinning:
 
 ```python
 from pathlib import Path
