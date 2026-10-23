@@ -14,7 +14,7 @@ def legacy_only(tmp_path):
     return ui
 
 
-def test_api_endpoints(lab, source, tmp_path):
+def test_api_endpoints(lab, source, tmp_path, monkeypatch):
     a = lab.create(toy.toy, inputs={"src": source}, name="base").run()
     b = a.fork({"train.iterations": 4}, name="fork").run()
     client = TestClient(create_app(lab, ui_dir=legacy_only(tmp_path)))
@@ -66,9 +66,18 @@ def test_api_endpoints(lab, source, tmp_path):
     assert {"kind": "read", "node": "featurize", "name": "rows"} in roles[b.id]["roles"]
     assert roles[a.id]["role_labels"] == ["consumed:featurize", "output:extract"]
 
-    ex = client.get(f"/api/executions/{by_id['extract']['execution_id']}").json()
+    def no_blob_access(*args, **kwargs):
+        raise AssertionError("execution icon metadata must not access artifact storage")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(lab.store, "verify", no_blob_access)
+        patch.setattr(lab.store, "has", no_blob_access)
+        patch.setattr(lab.store, "load", no_blob_access)
+        ex = client.get(f"/api/executions/{by_id['extract']['execution_id']}").json()
     assert {u["experiment_id"] for u in ex["used_by"]} == {a.id, b.id}
     assert ex["spec"]["op"] == "extract"
+    assert ex["artifacts"][a.output("extract").hash]["kind"] == "dir"
+    assert set(ex["artifacts"]) == set(ex["inputs"].values()) | set(ex["outputs"].values())
 
     assert client.get(f"/api/artifacts/{model.hash}/download").text.startswith("[3, 7, 11, 15]")
     assert client.get("/api/experiments/nope").status_code == 404

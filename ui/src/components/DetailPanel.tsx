@@ -7,6 +7,7 @@ import { describeRoles, flatten, fmtDur, fmtSize, fmtTime, fmtVal, short } from 
 import { useArtifact, useDiff, useExecution, useSource, useStorage } from "../queries";
 import { CodeModal } from "./CodeModal";
 import { ArtifactPreview } from "./ArtifactPreview";
+import { ArtifactIcon } from "./ArtifactIcon";
 import { DeleteExperiment, descendantsOf, StopButton } from "./Storage";
 
 export interface Nav {
@@ -32,21 +33,31 @@ function ArtifactChip({ name, r, nav }: { name: string; r: ArtifactRef | null | 
   if (!r) return null;
   return (
     <a className="chip" title={r.hash} onClick={() => nav.selectArtifact(r.hash)}>
-      <b>{name}</b> {r.kind} · {short(r.hash, 8)} · {fmtSize(r.size)}
+      <ArtifactIcon kind={r.kind} filename={r.filename} /><b>{name}</b> {r.kind} · {short(r.hash, 8)} · {fmtSize(r.size)}
     </a>
   );
 }
 
+function ExecutionArtifactChip({ name, hash, data, nav }: { name: string; hash: string; data?: ArtifactRef; nav: Nav }) {
+  return <a className="chip" title={data?.filename ?? hash} onClick={() => nav.selectArtifact(hash)}>
+    <ArtifactIcon kind={data?.kind} filename={data?.filename} /><b>{name}</b> {short(hash, 8)}
+  </a>;
+}
+
 function UsedBy({ usages, nav }: { usages: Usage[]; nav: Nav }) {
+  const [expanded, setExpanded] = useState(false);
   if (!usages.length) return <Muted />;
   return (
     <>
-      {usages.map((u) => (
+      {(expanded ? usages : usages.slice(0, 2)).map((u) => (
         <div className="usage" key={u.id}>
           <a onClick={() => nav.openExp(u.id)}>{u.name || u.id}</a> <span className="mono muted">{u.id}</span>
           <div className="roles">{describeRoles(u.roles)}</div>
         </div>
       ))}
+      {usages.length > 2 && <button aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
+        {expanded ? "Show fewer experiments" : `Show ${usages.length - 2} more experiments`}
+      </button>}
     </>
   );
 }
@@ -304,9 +315,8 @@ export function ArtifactDetailPanel({ hash, label, nav, canTrace }: { hash: stri
     <>
       <Selected kind="data" label={name} />
       <section>
-        <h4>{name}</h4>
+        <h4><ArtifactIcon kind={a.kind} filename={a.filename} />{name}</h4>
         <dl className="kv">
-          <dt>hash</dt><dd className="mono">{a.hash}</dd>
           <dt>kind</dt><dd>{a.kind}{a.filename && a.filename !== name ? ` · ${a.filename}` : ""}</dd>
           <dt>size</dt><dd>{fmtSize(a.size)}</dd>
           <dt>in store</dt><dd className={a.present ? "" : "err"}>{a.present ? "yes" : "missing"}</dd>
@@ -317,14 +327,15 @@ export function ArtifactDetailPanel({ hash, label, nav, canTrace }: { hash: stri
           {canTrace && <button className="primary" onClick={() => nav.trace(a.hash)} title="Show everything that produced this, and everything built from it, across all experiments">Trace lineage</button>}
           {a.kind === "file" && a.present && <a href={api.downloadUrl(a.hash)}><button>Download</button></a>}
         </div>
-      </section>
-      <section>
-        <h3>Used by experiments</h3>
-        <UsedBy usages={a.experiments} nav={nav} />
+        <Technical><dt>hash</dt><dd className="mono">{a.hash}</dd></Technical>
       </section>
       <section>
         <h3>Preview</h3>
         <ArtifactPreview artifact={a} />
+      </section>
+      <section>
+        <h3>Used by experiments</h3>
+        <UsedBy key={hash} usages={a.experiments} nav={nav} />
       </section>
     </>
   );
@@ -352,12 +363,12 @@ export function ExecutionDetailPanel({ id, nav }: { id: string; nav: Nav }) {
       </section>
       <section>
         <h3>Inputs</h3>
-        {Object.entries(x.inputs).map(([k, h]) => <a key={k} className="chip" onClick={() => nav.selectArtifact(h)}><b>{k}</b> {short(h, 8)}</a>)}
+        {Object.entries(x.inputs).map(([k, h]) => <ExecutionArtifactChip key={k} name={k} hash={h} data={x.artifacts?.[h]} nav={nav} />)}
         {!Object.keys(x.inputs).length && <Muted />}
       </section>
       <section>
         <h3>Outputs</h3>
-        {Object.entries(x.outputs).map(([k, h]) => <a key={k} className="chip" onClick={() => nav.selectArtifact(h)}><b>{k}</b> {short(h, 8)}</a>)}
+        {Object.entries(x.outputs).map(([k, h]) => <ExecutionArtifactChip key={k} name={k} hash={h} data={x.artifacts?.[h]} nav={nav} />)}
         {!Object.keys(x.outputs).length && <Muted />}
       </section>
       <section>

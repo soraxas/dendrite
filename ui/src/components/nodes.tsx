@@ -3,6 +3,7 @@
 import { Handle, NodeToolbar, Position, type NodeProps } from "@xyflow/react";
 import { useState, type CSSProperties, type ReactNode } from "react";
 import type { GridCell } from "../fanout";
+import { ArtifactIcon, type ArtifactType } from "./ArtifactIcon";
 
 export interface HoverCard {
   title: string;
@@ -11,7 +12,7 @@ export interface HoverCard {
   hint?: string;
 }
 
-export interface Port {
+export interface Port extends ArtifactType {
   name: string;
   hash: string;
   sub: string;
@@ -48,7 +49,7 @@ function PortChips({ ports, active, onPick, side, isVisible, position }: {
               onPick(p.hash);
             }}
           >
-            <b>{p.name}</b> <span className="muted">{p.sub}</span>
+            <ArtifactIcon kind={p.kind} filename={p.filename} /><b>{p.name}</b> <span className="muted">{p.sub}</span>
           </button>
         ))}
       </div>
@@ -284,22 +285,22 @@ export function MoreNode({ data }: NodeProps & { data: MoreData }) {
   );
 }
 
-export type InputData = Base & { name: string; sub: string; configures?: boolean };
+export type InputData = Base & ArtifactType & { name: string; sub: string; configures?: boolean };
 export function InputNode({ data }: NodeProps & { data: InputData }) {
   return (
     <Shell data={data} className={`pill ${data.configures ? "configures" : ""}`} style={tone("input")} label={`input ${data.name}`}>
-      <div className="t1">{data.name}</div>
+      <div className="t1"><ArtifactIcon kind={data.kind} filename={data.filename} />{data.name}</div>
       <div className="t3">{data.configures ? "configures this run" : data.sub}</div>
     </Shell>
   );
 }
 
-export type ArtifactData = Base & { label: string; sub: string; focus: boolean };
+export type ArtifactData = Base & ArtifactType & { label: string; sub: string; focus: boolean };
 export function ArtifactNode({ data }: NodeProps & { data: ArtifactData }) {
   const style = data.focus ? { background: "var(--accent-bg)", borderColor: "var(--accent)", borderWidth: 2.5 } : tone("data");
   return (
     <Shell data={data} className="pill" style={style} label={`data ${data.label}`}>
-      <div className="t1">{data.label}</div>
+      <div className="t1"><ArtifactIcon kind={data.kind} filename={data.filename} />{data.label}</div>
       <div className="t3">{data.sub}</div>
     </Shell>
   );

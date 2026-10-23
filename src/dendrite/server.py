@@ -486,6 +486,9 @@ def create_app(lab: Lab | None = None, ui_dir: Path = UI_DIR, allow_edit: bool =
         ex = lab.db.execution(exec_id)
         if ex is None:
             raise HTTPException(404, f"no execution {exec_id!r}")
+        # Icon metadata comes from one DB query; never materialize or verify blobs for chips.
+        hashes = set(ex["inputs"].values()) | set(ex["outputs"].values())
+        ex["artifacts"] = {h: _ref_dict(ref) for h, ref in lab.db.artifacts_by_hash(hashes).items()}
         ex["used_by"] = lab.db.node_runs_for_execution(exec_id)
         src = lab.db.source_for_execution(exec_id)
         ex["source"] = {**src, "display": _display_path(src["file"])} if src else None

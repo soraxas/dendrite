@@ -50,6 +50,6 @@ describe("data chips", () => {
       features: { hash: "ab", kind: "value", size: 2048, filename: null },
       missing: null,
     });
-    expect(ports).toEqual([{ name: "features", hash: "ab", sub: "value · 2.0 KB" }]);
+    expect(ports).toEqual([{ name: "features", hash: "ab", kind: "value", filename: null, sub: "value · 2.0 KB" }]);
   });
 });

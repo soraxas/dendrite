@@ -34,6 +34,8 @@ export function LineageView({ lineage, selected, onSelect, nameOf, back }: Props
           minimapColor: isFocus ? "var(--accent)" : "var(--data)",
           data: {
             label: a.label,
+            kind: a.kind,
+            filename: a.filename,
             sub: `${a.kind} · ${fmtSize(a.size)}`,
             focus: isFocus,
             hover: {

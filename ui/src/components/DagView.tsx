@@ -10,7 +10,7 @@ import { nodeTypes, type HoverCard, type Port } from "./nodes";
 
 // Placeholders (kind "pending") stand for outputs a draft hasn't computed yet; there is nothing to open.
 export const toPorts = (m?: Record<string, ArtifactRef | null>): Port[] =>
-  Object.entries(m ?? {}).flatMap(([name, r]) => (r && (r.kind as string) !== "pending" ? [{ name, hash: r.hash, sub: `${r.kind} · ${fmtSize(r.size)}` }] : []));
+  Object.entries(m ?? {}).flatMap(([name, r]) => (r && (r.kind as string) !== "pending" ? [{ name, hash: r.hash, kind: r.kind, filename: r.filename, sub: `${r.kind} · ${fmtSize(r.size)}` }] : []));
 
 const changedParams = (n: PlanNode) => (n.param_schema ?? []).filter((p) => p.changed);
 
@@ -296,6 +296,8 @@ export function DagView({
             data: {
               name: n.name,
               sub: [a?.filename, a ? fmtSize(a.size) : null].filter(Boolean).join(" · "),
+              kind: a?.kind,
+              filename: a?.filename,
               configures,
               hover: {
                 title: `Input: ${n.name}`,

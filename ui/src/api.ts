@@ -270,6 +270,7 @@ export interface Execution {
   error: string | null;
   inputs: Record<string, string>;
   outputs: Record<string, string>;
+  artifacts?: Record<string, ArtifactRef>;
   metrics: { key: string; step: number; value: number }[];
   used_by?: { experiment_id: string; node: string; status: string; name: string | null }[];
   source?: SourceInfo | null;
