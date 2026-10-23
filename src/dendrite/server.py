@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import pickle
+import threading
 import time
 from importlib import resources
 from pathlib import Path
@@ -167,6 +168,7 @@ def create_app(lab: Lab | None = None, ui_dir: Path = UI_DIR, allow_edit: bool =
     mode = ui_mode(ui_dir)
     app = FastAPI(title="dendrite", version="0.1.0")
     app.state.lab = lab
+    app.state.closing = threading.Event()  # set on shutdown; ends live-update streams
 
     @app.get("/api/info")
     def info() -> dict[str, Any]:
@@ -396,7 +398,8 @@ def create_app(lab: Lab | None = None, ui_dir: Path = UI_DIR, allow_edit: bool =
             sent, quiet = 0, 0.0
             while limit is None or sent < limit:
                 await asyncio.sleep(EVENT_INTERVAL)
-                if await request.is_disconnected():
+                # End when the client leaves or the server is stopping (so Ctrl+C doesn't wait on us).
+                if app.state.closing.is_set() or await request.is_disconnected():
                     return
                 new_tree, new_per = await run_in_threadpool(lab.db.change_tokens)
                 changed = sorted(k for k in set(per) | set(new_per) if per.get(k) != new_per.get(k))

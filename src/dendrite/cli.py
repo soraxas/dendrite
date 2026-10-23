@@ -283,7 +283,17 @@ def cmd_ui(lab: Lab, args) -> None:
     print(f"code editing {'enabled' if allow_edit else 'disabled (use --allow-edit)'}")
     if ui_mode() == "legacy":
         print("serving the legacy UI; run scripts/build-ui.sh to build the React UI")
-    uvicorn.run(create_app(lab, allow_edit=allow_edit), host=args.host, port=args.port, log_level="warning")
+    app = create_app(lab, allow_edit=allow_edit)
+
+    class Server(uvicorn.Server):
+        def handle_exit(self, sig, frame) -> None:
+            # Live-update streams (/api/events) never finish on their own: end them first, so a
+            # graceful shutdown (Ctrl+C) completes instead of waiting on open browser tabs.
+            app.state.closing.set()
+            super().handle_exit(sig, frame)
+
+    config = uvicorn.Config(app, host=args.host, port=args.port, log_level="warning", timeout_graceful_shutdown=3)
+    Server(config).run()
 
 
 def main(argv: list[str] | None = None) -> None:
