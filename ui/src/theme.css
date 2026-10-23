@@ -318,9 +318,9 @@ button.top-link.active { color: var(--accent); border-color: var(--accent); }
 .live-dot.off { background: var(--queued); }
 
 /* graph changes animate: nodes glide to new positions, new nodes and re-routed edges fade in */
-.react-flow__node { transition: transform 350ms ease; }
+.react-flow__node { transition: transform 350ms cubic-bezier(.4, 0, .2, 1); }
 .react-flow__node > .gnode { animation: node-in 300ms ease both; }
-.react-flow__edge { animation: edge-in 250ms ease 300ms both; }
+.react-flow__edge { animation: edge-in 250ms ease 300ms both; } /* only edges that are new: moved ones morph */
 @keyframes node-in { from { opacity: 0; transform: scale(.94); } to { opacity: 1; transform: none; } }
 @keyframes edge-in { from { opacity: 0; } to { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) {
@@ -341,3 +341,5 @@ button.top-link.active { color: var(--accent); border-color: var(--accent); }
 /* fan-out group cards: a count badge and a stacked edge, so they read as "many of this step" */
 .count-badge { display: inline-block; margin-left: 7px; padding: 0 7px; border-radius: 999px; font-size: 11px; font-weight: 700; line-height: 17px; vertical-align: 1px; color: var(--panel); background: var(--accent); }
 .react-flow__node:has(.gnode.stack) { filter: drop-shadow(5px 5px 0 var(--line-strong)) drop-shadow(5px 5px 0 color-mix(in srgb, var(--line-strong) 55%, transparent)); }
+
+.react-flow__node.from-origin > .gnode { animation: none; } /* grows out of its origin instead of fading */

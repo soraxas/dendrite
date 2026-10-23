@@ -119,6 +119,7 @@ export function DagView({ dag, nameOf, selected, onSelect, onArtifact, onOpenSou
           const s = planned ? summarizePlan(g.members as PlanNode[]) : summarize(g.members);
           return [{
             id: g.id,
+            origins: g.members.map((m) => m.id), // a collapsing group folds out of its items
             type: "pipelineNode",
             width: 250,
             height: 68,
@@ -141,6 +142,7 @@ export function DagView({ dag, nameOf, selected, onSelect, onArtifact, onOpenSou
         }
         const expandedOf = n.kind === "node" ? groups.find((g) => g.members.some((m) => m.id === n.id)) : undefined;
         const member = expandedOf ? { member: { of: `${expandedOf.step} ×${expandedOf.members.length}`, collapse: () => onToggleGroup(expandedOf.step) } } : {};
+        const origins = expandedOf ? [expandedOf.id] : undefined; // expanded items grow out of the group card
         if (n.kind === "input") {
           const a = n.artifact;
           const configures = configs.has(n.id);
@@ -168,6 +170,7 @@ export function DagView({ dag, nameOf, selected, onSelect, onArtifact, onOpenSou
           const p = planData(n as PlanNode, dag.experiment.id, nameOf, onOpenSource);
           return [{
             id: n.id,
+            origins,
             type: "pipelineNode",
             width: 250,
             height: 68,
@@ -191,6 +194,7 @@ export function DagView({ dag, nameOf, selected, onSelect, onArtifact, onOpenSou
             : undefined;
         return [{
           id: n.id,
+          origins,
           type: "pipelineNode",
           width: 250,
           height: 68,

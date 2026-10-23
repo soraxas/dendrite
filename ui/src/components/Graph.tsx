@@ -17,6 +17,7 @@ import {
 } from "@xyflow/react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useElkLayout, type LayoutEdge, type Point } from "../layout";
+import { MOVE_MS, useTweenedPoints } from "../tween";
 
 export interface GraphNode<T extends Record<string, unknown> = Record<string, unknown>> {
   id: string;
@@ -25,6 +26,8 @@ export interface GraphNode<T extends Record<string, unknown> = Record<string, un
   height: number;
   data: T;
   minimapColor?: string;
+  /** Ids this node grows out of (or folds into) when it appears, e.g. a fan-out group and its items. */
+  origins?: string[];
 }
 
 export interface GraphEdge extends LayoutEdge {
@@ -49,14 +52,18 @@ function roundedPath(pts: Point[], r = 8): string {
   return `${d} L${last.x},${last.y}`;
 }
 
+const NO_POINTS: Point[] = [];
+
 function ElkEdge({ id, data, markerEnd }: EdgeProps<Edge<ElkEdgeData>>) {
+  const points = useTweenedPoints(data?.points ?? NO_POINTS);
+  const labelAt = useTweenedPoints(useMemo(() => (data?.labelBox ? [{ x: data.labelBox.x, y: data.labelBox.y }] : NO_POINTS), [data?.labelBox]));
   if (!data) return null;
   const stroke = data.hl ? "var(--accent)" : "var(--edge)";
   return (
     <>
       <BaseEdge
         id={id}
-        path={roundedPath(data.points)}
+        path={roundedPath(points)}
         markerEnd={markerEnd}
         style={{ stroke, strokeWidth: data.hl ? 2.2 : 1.5, strokeDasharray: data.dashed ? "5 5" : undefined }}
       />
@@ -64,7 +71,7 @@ function ElkEdge({ id, data, markerEnd }: EdgeProps<Edge<ElkEdgeData>>) {
         <EdgeLabelRenderer>
           <div
             className={`elk-edge-label ${data.hl ? "hl" : ""} ${data.dashed ? "control" : ""}`}
-            style={{ transform: `translate(${data.labelBox.x}px, ${data.labelBox.y}px)` }}
+            style={{ transform: `translate(${labelAt[0]?.x ?? data.labelBox.x}px, ${labelAt[0]?.y ?? data.labelBox.y}px)` }}
           >
             {data.label}
           </div>
@@ -112,7 +119,26 @@ function Canvas({ nodes, edges, nodeTypes, selectedId, focusId, onSelect, legend
   );
   const layout = useElkLayout(nodes, edges, shapeKey, size);
   const fitted = useRef(false);
-  const { fitView, getZoom, setCenter } = useReactFlow();
+  const { fitView, getZoom, setCenter, getViewport } = useReactFlow();
+  // Appearing nodes first render where they come from (their `origins` in the previous layout),
+  // then move to their place once that has painted; the CSS transition animates the move.
+  const previous = useRef<Map<string, Point>>(new Map());
+  const [settled, setSettled] = useState<string | null>(null);
+  useEffect(() => {
+    if (!layout) return;
+    let inner = 0;
+    const outer = requestAnimationFrame(() => (inner = requestAnimationFrame(() => setSettled(layout.key))));
+    return () => (cancelAnimationFrame(outer), cancelAnimationFrame(inner));
+  }, [layout]);
+  useEffect(() => {
+    if (layout && settled === layout.key) previous.current = layout.nodes;
+  }, [layout, settled]);
+  const startAt = (n: GraphNode): Point | undefined => {
+    if (!layout || settled === layout.key || previous.current.has(n.id)) return undefined;
+    const from = (n.origins ?? []).map((o) => previous.current.get(o)).filter((p): p is Point => !!p);
+    if (!from.length) return undefined;
+    return { x: from.reduce((s, p) => s + p.x, 0) / from.length, y: from.reduce((s, p) => s + p.y, 0) / from.length };
+  };
 
   const incident = useMemo(() => {
     const s = new Set<string>();
@@ -126,14 +152,19 @@ function Canvas({ nodes, edges, nodeTypes, selectedId, focusId, onSelect, legend
       .map((n) => ({
         id: n.id,
         type: n.type,
-        position: layout.nodes.get(n.id)!,
+        position: startAt(n) ?? layout.nodes.get(n.id)!,
         width: n.width,
         height: n.height,
+        // Without `measured`, React Flow treats every updated node as new and drops its handle
+        // positions until it re-measures, so every edge unmounts for a frame on each update.
+        measured: { width: n.width, height: n.height },
         data: { ...n.data, dir: layout.dir, selected: n.id === selectedId },
+        className: startAt(n) ? "from-origin" : undefined,
         draggable: false,
         selectable: false,
       }));
-  }, [layout, nodes, selectedId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layout, nodes, selectedId, settled]);
 
   const rfEdges: Edge<ElkEdgeData>[] = useMemo(() => {
     if (!layout) return [];
@@ -143,8 +174,7 @@ function Canvas({ nodes, edges, nodeTypes, selectedId, focusId, onSelect, legend
         const r = layout.edges.get(e.id)!;
         const hl = incident.has(e.id);
         return {
-          // Keyed by layout too: a new shape remounts edges, which fade in once nodes have moved.
-          id: `${e.id}@${layout.key}`,
+          id: e.id, // stable, so a moved edge morphs to its new route (ElkEdge) instead of being replaced
           source: e.from,
           target: e.to,
           type: "elk",
@@ -160,8 +190,22 @@ function Canvas({ nodes, edges, nodeTypes, selectedId, focusId, onSelect, legend
     if (!layout) return;
     const first = !fitted.current;
     fitted.current = true;
+    if (!first) {
+      // Keep the view still while nodes move. Refit only if the new layout no longer fits, and
+      // only once they have settled, so the two motions never fight.
+      const { x, y, zoom } = getViewport();
+      const view = { left: -x / zoom, top: -y / zoom, right: (size.width - x) / zoom, bottom: (size.height - y) / zoom };
+      let fits = true;
+      for (const n of nodes) {
+        const p = layout.nodes.get(n.id);
+        if (p && (p.x < view.left || p.y < view.top || p.x + n.width > view.right || p.y + n.height > view.bottom)) fits = false;
+      }
+      if (fits) return;
+      const t = setTimeout(() => fitView({ padding: 0.12, maxZoom: 1.2, minZoom: MIN_LEGIBLE_ZOOM, duration: 300 }), MOVE_MS);
+      return () => clearTimeout(t);
+    }
     requestAnimationFrame(async () => {
-      await fitView({ padding: 0.12, maxZoom: 1.2, minZoom: 0.2, duration: first ? 0 : 350 });
+      await fitView({ padding: 0.12, maxZoom: 1.2, minZoom: 0.2 });
       const focus = focusId ? layout.nodes.get(focusId) : undefined;
       const spec = focusId ? nodes.find((n) => n.id === focusId) : undefined;
       if (getZoom() < MIN_LEGIBLE_ZOOM && focus && spec) {
