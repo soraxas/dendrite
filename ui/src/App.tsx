@@ -11,6 +11,7 @@ import { StoragePage } from "./components/Storage";
 import { Toolbar } from "./components/Toolbar";
 import { collapsedSteps, fanoutGroups, groupId, nextSelection } from "./fanout";
 import { EMPTY_VIEW, grouping, stageId, stagePath } from "./stages";
+import { useFolds } from "./folds";
 import { StageAssign, StageDetail } from "./components/StageDetail";
 import { GroupDetail } from "./components/DetailPanel";
 import { useDag, useDiff, useExperiments, useInfo, useIsLive, useLineage, useLiveUpdates, usePlan, useView } from "./queries";
@@ -103,29 +104,9 @@ export function App() {
   const setSel = useCallback((sel?: string) => navigate({ ...route, sel }, { replace: true }), [navigate, route]);
   // Clicking the selected item again deselects it (closing its data chips).
   const pick = useCallback((sel: string) => setSel(nextSelection(route.sel, sel)), [setSel, route.sel]);
-  // Fan-out groups the user flipped from their default, per experiment.
-  const [toggled, setToggled] = useState<Record<string, string[]>>({});
-  const toggleGroup = useCallback((step: string) => {
-    if (!route.exp) return;
-    setToggled((t) => {
-      const cur = new Set(t[route.exp!] ?? []);
-      if (cur.has(step)) cur.delete(step);
-      else cur.add(step);
-      return { ...t, [route.exp!]: [...cur] };
-    });
-  }, [route.exp]);
-  // Stages: the overview (one card per stage) or every step, plus per-stage toggles per experiment.
-  const [showSteps, setShowSteps] = useState(false);
-  const [stageToggled, setStageToggled] = useState<Record<string, string[]>>({});
-  const toggleStage = useCallback((sid: string) => {
-    if (!route.exp) return;
-    setStageToggled((t) => {
-      const cur = new Set(t[route.exp!] ?? []);
-      if (cur.has(sid)) cur.delete(sid);
-      else cur.add(sid);
-      return { ...t, [route.exp!]: [...cur] };
-    });
-  }, [route.exp]);
+  // How the graph is folded (stages, fan-outs, overview), remembered per pipeline across reloads.
+  const { folds, toggleStage, toggleFan: toggleGroup, setShowSteps } = useFolds(dag?.experiment.pipeline);
+  const showSteps = folds.showSteps;
   const nav: Nav = useMemo(() => ({
     openExp: (id) => navigate({ view: "dag", exp: id }),
     openStep: (expId, node) => navigate({ view: "dag", exp: expId, sel: `node:${node}` }),
@@ -140,12 +121,12 @@ export function App() {
   const running = tree.filter((e) => e.status === "running");
 
   const groups = useMemo(() => fanoutGroups(dag?.nodes ?? []), [dag?.nodes]);
-  const collapsedGroups = useMemo(() => collapsedSteps(groups, new Set(toggled[route.exp ?? ""] ?? [])), [groups, toggled, route.exp]);
+  const collapsedGroups = useMemo(() => collapsedSteps(groups, new Set(folds.fan)), [groups, folds.fan]);
   const viewQ = useView(dag?.experiment.pipeline);
   const view = viewQ.data ?? EMPTY_VIEW;
   const cards = useMemo(
-    () => grouping(dag?.nodes ?? [], view, { collapsedFan: collapsedGroups, showSteps, stageToggled: new Set(stageToggled[route.exp ?? ""] ?? []) }),
-    [dag?.nodes, view, collapsedGroups, showSteps, stageToggled, route.exp],
+    () => grouping(dag?.nodes ?? [], view, { collapsedFan: collapsedGroups, showSteps, stageToggled: new Set(folds.stages) }),
+    [dag?.nodes, view, collapsedGroups, showSteps, folds.stages],
   );
   // Selecting a step inside a folded stage first unfolds the stages around it.
   const reveal = useCallback((node: string) => {
@@ -260,7 +241,7 @@ export function App() {
           grouping={cards}
           onToggleStage={toggleStage}
           showSteps={showSteps}
-          onShowSteps={(show) => (setShowSteps(show), setStageToggled((t) => ({ ...t, [route.exp ?? ""]: [] })))}
+          onShowSteps={setShowSteps}
           onArtifact={nav.selectArtifact}
           onOpenSource={nav.openStep}
           activeArtifact={kind === "artifact" ? id : undefined}
