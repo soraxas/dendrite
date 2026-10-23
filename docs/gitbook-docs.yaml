@@ -1,0 +1,36 @@
+$schema: https://api.gitbook.com/gitbook-docs.yaml
+version: 1
+site:
+  title: dendrite
+  structure:
+    - type: section
+      key: section-guide
+      title: Guide
+      path: guide
+      default: true
+      children:
+        - type: space
+          key: space-overview
+          title: Overview
+          path: overview
+          default: true
+          content:
+            directory: /
+    - type: section
+      key: section-specifications
+      title: Specifications
+      path: specifications
+      children:
+        - type: space
+          key: space-capabilities
+          title: Capabilities
+          path: capabilities
+          default: true
+          content:
+            directory: /openspec/specs
+        - type: space
+          key: space-changes
+          title: Changes
+          path: changes
+          content:
+            directory: /openspec/changes
