@@ -10,8 +10,10 @@ import { Sidebar } from "./components/Sidebar";
 import { StoragePage } from "./components/Storage";
 import { Toolbar } from "./components/Toolbar";
 import { collapsedSteps, fanoutGroups, groupId, nextSelection } from "./fanout";
+import { EMPTY_VIEW, grouping, stageId, stagePath } from "./stages";
+import { StageAssign, StageDetail } from "./components/StageDetail";
 import { GroupDetail } from "./components/DetailPanel";
-import { useDag, useDiff, useExperiments, useInfo, useIsLive, useLineage, useLiveUpdates, usePlan } from "./queries";
+import { useDag, useDiff, useExperiments, useInfo, useIsLive, useLineage, useLiveUpdates, usePlan, useView } from "./queries";
 import { parse, splitSel, useRoute, type Route } from "./router";
 import { confirmLeave } from "./unsaved";
 
@@ -112,6 +114,18 @@ export function App() {
       return { ...t, [route.exp!]: [...cur] };
     });
   }, [route.exp]);
+  // Stages: the overview (one card per stage) or every step, plus per-stage toggles per experiment.
+  const [showSteps, setShowSteps] = useState(false);
+  const [stageToggled, setStageToggled] = useState<Record<string, string[]>>({});
+  const toggleStage = useCallback((sid: string) => {
+    if (!route.exp) return;
+    setStageToggled((t) => {
+      const cur = new Set(t[route.exp!] ?? []);
+      if (cur.has(sid)) cur.delete(sid);
+      else cur.add(sid);
+      return { ...t, [route.exp!]: [...cur] };
+    });
+  }, [route.exp]);
   const nav: Nav = useMemo(() => ({
     openExp: (id) => navigate({ view: "dag", exp: id }),
     openStep: (expId, node) => navigate({ view: "dag", exp: expId, sel: `node:${node}` }),
@@ -127,6 +141,24 @@ export function App() {
 
   const groups = useMemo(() => fanoutGroups(dag?.nodes ?? []), [dag?.nodes]);
   const collapsedGroups = useMemo(() => collapsedSteps(groups, new Set(toggled[route.exp ?? ""] ?? [])), [groups, toggled, route.exp]);
+  const viewQ = useView(dag?.experiment.pipeline);
+  const view = viewQ.data ?? EMPTY_VIEW;
+  const cards = useMemo(
+    () => grouping(dag?.nodes ?? [], view, { collapsedFan: collapsedGroups, showSteps, stageToggled: new Set(stageToggled[route.exp ?? ""] ?? []) }),
+    [dag?.nodes, view, collapsedGroups, showSteps, stageToggled, route.exp],
+  );
+  // Selecting a step inside a folded stage first unfolds the stages around it.
+  const reveal = useCallback((node: string) => {
+    const n = dag?.nodes.find((x) => x.id === node);
+    if (n) {
+      const path = stagePath(n, view).map((s) => s.name);
+      for (let i = 1; i <= path.length; i++) {
+        const sid = stageId(path.slice(0, i));
+        if (cards.collapsedStages.has(sid)) toggleStage(sid);
+      }
+    }
+    setSel(`node:${node}`);
+  }, [dag?.nodes, view, cards.collapsedStages, toggleStage, setSel]);
 
   // ---- main area
   let toolbar = null;
@@ -200,9 +232,9 @@ export function App() {
       </>
     );
     graphSel = kind === "node" ? id : kind === "input" ? `input:${id}` : kind === "group" ? groupId(id!) : kind === "artifact" && id ? ownerOf(dag, id) : undefined;
-    // A selected item inside a collapsed group highlights the group.
-    const inGroup = graphSel && groups.find((g) => collapsedGroups.has(g.step) && g.members.some((m) => m.id === graphSel));
-    if (inGroup) graphSel = inGroup.id;
+    if (kind === "stage" && id) graphSel = `stage:${id}`;
+    // A selected item inside a folded stage or group highlights that card.
+    if (graphSel && cards.members.has(graphSel)) graphSel = cards.members.get(graphSel);
     if (route.view === "params") body = <ParamsPage dag={dag} onArtifact={nav.selectArtifact} />;
     else if (route.view === "code") body = <CodeView key={dag.experiment.pipeline} pipeline={dag.experiment.pipeline} dag={dag} canEdit={canEdit} />;
     else if (route.view === "metrics") body = <MetricsPage dag={dag} />;
@@ -213,9 +245,13 @@ export function App() {
           dag={dag}
           nameOf={nameOf}
           selected={graphSel}
-          onSelect={(gid) => pick(gid.startsWith("input:") ? gid : gid.startsWith("group:") ? gid : `node:${gid}`)}
+          onSelect={(gid) => pick(gid.startsWith("input:") || gid.startsWith("group:") || gid.startsWith("stage:") ? gid : `node:${gid}`)}
           collapsed={collapsedGroups}
           onToggleGroup={toggleGroup}
+          grouping={cards}
+          onToggleStage={toggleStage}
+          showSteps={showSteps}
+          onShowSteps={(show) => (setShowSteps(show), setStageToggled((t) => ({ ...t, [route.exp ?? ""]: [] })))}
           onArtifact={nav.selectArtifact}
           onOpenSource={nav.openStep}
           activeArtifact={kind === "artifact" ? id : undefined}
@@ -241,6 +277,20 @@ export function App() {
         <p>Evicted or cleaned-up results recompute the next time a run needs them. Lineage records always stay.</p>
       </section>
     );
+  } else if (kind === "stage" && dag && id) {
+    const st = cards.stages.find((s) => s.id === `stage:${id}`);
+    detail = st ? (
+      <StageDetail
+        key={st.id + JSON.stringify(view.styles[st.path[st.path.length - 1]] ?? {})}
+        stage={st}
+        view={view}
+        pipeline={dag.experiment.pipeline}
+        canEdit={canEdit}
+        collapsed={cards.collapsedStages.has(st.id)}
+        onToggle={() => toggleStage(st.id)}
+        onOpen={reveal}
+      />
+    ) : null;
   } else if (kind === "group" && dag && id) {
     const g = groups.find((x) => x.step === id);
     detail = g ? (
@@ -259,7 +309,18 @@ export function App() {
     detail = !n ? null : plan ? (
       <DraftStepEditor key={n.id} n={n as PlanNode} plan={plan} canEdit={canEdit} nameOf={nameOf} openStep={nav.openStep} />
     ) : (
-      <NodeDetail n={n} dag={dag} nav={nav} />
+      <>
+        <NodeDetail n={n} dag={dag} nav={nav} />
+        {!(n.stage ?? []).length && (
+          <StageAssign
+            step={n.step ?? n.name}
+            view={view}
+            pipeline={dag.experiment.pipeline}
+            stages={[...new Set(cards.stages.map((st) => st.path[0]))]}
+            canEdit={canEdit}
+          />
+        )}
+      </>
     );
   } else if (kind === "input" && dag) {
     const n = dag.nodes.find((x) => x.id === `input:${id}`);

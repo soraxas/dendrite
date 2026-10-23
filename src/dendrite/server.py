@@ -110,6 +110,22 @@ class CleanRequest(BaseModel):
     force: bool = False
 
 
+STAGE_COLORS = ("teal", "blue", "purple", "orange", "green", "pink", "red", "gray")
+
+
+class StageStyle(BaseModel):
+    label: str | None = None
+    description: str | None = None
+    color: str | None = None
+
+
+class PipelineView(BaseModel):
+    """A pipeline's UI view, overlaying its code: never changes code or signatures."""
+
+    assign: dict[str, str] = {}  # step name -> stage, for steps the code leaves ungrouped
+    styles: dict[str, StageStyle] = {}  # stage -> label/description/colour
+
+
 class KeepRequest(BaseModel):
     keep: bool = True
 
@@ -310,6 +326,22 @@ def create_app(lab: Lab | None = None, ui_dir: Path = UI_DIR, allow_edit: bool =
         out["step_diagnostics"] = [d.as_dict() for s in steps.values() for d in getattr(s, "diagnostics", [])]
         out["display"] = _display_path(out["file"])
         return out
+
+    @app.get("/api/pipelines/{name}/view")
+    def get_view(name: str) -> dict[str, Any]:
+        return lab.db.pipeline_view(name)
+
+    @app.put("/api/pipelines/{name}/view")
+    def put_view(name: str, view: PipelineView) -> dict[str, Any]:
+        require_edit()
+        bad = [s.color for s in view.styles.values() if s.color and s.color not in STAGE_COLORS]
+        if bad:
+            raise HTTPException(400, f"unknown stage colour {bad[0]!r}; use one of {', '.join(STAGE_COLORS)}")
+        if any(not k.strip() or not v.strip() for k, v in view.assign.items()):
+            raise HTTPException(400, "stage and step names must not be empty")
+        doc = view.model_dump(exclude_none=True)
+        lab.db.set_pipeline_view(name, doc)
+        return doc
 
     @app.get("/api/pipelines/{name}/shape")
     def shape(name: str) -> dict[str, Any]:

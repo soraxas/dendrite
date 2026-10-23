@@ -264,6 +264,22 @@ class _ShapeBuilder:
         if e not in self.edges:
             self.edges.append(e)
 
+    def stage_name(self, e: ast.AST) -> str | None:
+        """The literal name of a `stage("…")` / `dendrite.stage("…")` call, else None."""
+        if not (isinstance(e, ast.Call) and e.args and isinstance(e.args[0], ast.Constant) and isinstance(e.args[0].value, str)):
+            return None
+        f = e.func
+        if isinstance(f, ast.Attribute) and f.attr == "stage":
+            return e.args[0].value
+        if isinstance(f, ast.Name):
+            obj = self.resolve(f.id)
+            if getattr(obj, "__name__", None) == "stage" and getattr(obj, "__module__", "").startswith("dendrite"):
+                return e.args[0].value
+        return None
+
+    def stages(self) -> list[str]:
+        return [f[1] for f in self.ctx if f[0] == "stage"]
+
     def conditions(self) -> list[str]:
         return [f[3] for f in self.ctx if f[0] == "if"]
 
@@ -316,11 +332,21 @@ class _ShapeBuilder:
             self.ctx.pop()
             return ret + self.run_body(s.orelse, env)
         elif isinstance(s, (ast.With, ast.AsyncWith)):
+            pushed = 0
             for item in s.items:
+                name = self.stage_name(item.context_expr)
+                if name is not None:  # `with dendrite.stage("COLMAP"):` groups the steps inside
+                    self.ctx.append(("stage", name))
+                    pushed += 1
+                    continue
                 v = self.expr(item.context_expr, env)
                 if item.optional_vars is not None:
                     self.assign(item.optional_vars, v, env, s)
-            return self.run_body(s.body, env)
+            try:
+                return self.run_body(s.body, env)
+            finally:
+                for _ in range(pushed):
+                    self.ctx.pop()
         elif isinstance(s, ast.Try) or type(s).__name__ == "TryStar":
             ret = self.run_body(s.body, env)  # type: ignore[attr-defined]
             for h in s.handlers:  # type: ignore[attr-defined]
@@ -414,8 +440,15 @@ class _ShapeBuilder:
         helper = self.resolve(f.id) if isinstance(f, ast.Name) else None
         args = [self.expr(a.value if isinstance(a, ast.Starred) else a, env) for a in e.args]
         kwargs = {k.arg: self.expr(k.value, env) for k in e.keywords}
-        if inspect.isfunction(helper) and helper.__module__ == self.module and self.depth < 1:
-            expanded = self.expand(helper, e, args, kwargs)
+        staged = getattr(helper, "__dendrite_stage__", None)
+        if inspect.isfunction(helper) and helper.__module__ == self.module and (self.depth < 1 or (staged and self.depth < 3)):
+            if staged:  # a `@dendrite.stage` function: its steps belong to that stage
+                self.ctx.append(("stage", staged["name"]))
+            try:
+                expanded = self.expand(inspect.unwrap(helper) if staged else helper, e, args, kwargs)
+            finally:
+                if staged:
+                    self.ctx.pop()
             if expanded is not None:
                 return expanded
         flowing = _Val.union(*args, *kwargs.values())
@@ -505,7 +538,7 @@ class _ShapeBuilder:
         if node is None:
             node = self.nodes[name] = {
                 "id": name, "kind": "node", "name": name, "step": step.name, "line": e.lineno,
-                "conditional": self.conditions(), "repeated": self.in_loop(), "submit": submit,
+                "conditional": self.conditions(), "repeated": self.in_loop(), "submit": submit, "stage": self.stages(),
                 "outputs": list(step.outputs), "params": [p for p in params if p not in bound],
             }
             if self.depth:

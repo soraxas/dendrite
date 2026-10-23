@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ArtifactRef, Dag, DagNode, PlanNode } from "../api";
-import { collapseEdges, configInputs, controlEdges, fanoutGroups, memberMap, progressLine, summarize, summarizePlan } from "../fanout";
+import { collapseEdges, configInputs, controlEdges, progressLine, summarize, summarizePlan } from "../fanout";
+import { EMPTY_VIEW, grouping as computeGrouping, stagePath, type Grouping } from "../stages";
 import { PLAN, REASON, STATUS, UPSTREAM_NOTE } from "../copy";
 import { fmtDur, fmtSize, fmtVal } from "../format";
 import { Graph, mergeEdges, type GraphNode } from "./Graph";
@@ -100,19 +101,68 @@ interface Props {
   /** Fan-out steps shown as one card (see `fanout.ts`), and how to flip one. */
   collapsed?: Set<string>;
   onToggleGroup?: (step: string) => void;
+  /** Stage and fan-out cards (see `stages.ts`); computed from `collapsed` alone when absent. */
+  grouping?: Grouping;
+  onToggleStage?: (id: string) => void;
+  /** The Overview / All steps switch, shown when the pipeline has stages. */
+  showSteps?: boolean;
+  onShowSteps?: (show: boolean) => void;
 }
 
-export function DagView({ dag, nameOf, selected, onSelect, onArtifact, onOpenSource, activeArtifact, planned = false, collapsed = new Set(), onToggleGroup = () => {} }: Props) {
+export function DagView({
+  dag, nameOf, selected, onSelect, onArtifact, onOpenSource, activeArtifact, planned = false,
+  collapsed = new Set(), onToggleGroup = () => {}, grouping, onToggleStage = () => {}, showSteps = false, onShowSteps,
+}: Props) {
   const busy = !planned && dag.nodes.some((n) => n.status === "running");
   const now = useNow(busy);
-  const groups = useMemo(() => fanoutGroups(dag.nodes), [dag.nodes]);
   const collapsedKey = [...collapsed].sort().join("|");
-  const members = useMemo(() => memberMap(groups, collapsed), [groups, collapsedKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  const own = useMemo(
+    () => computeGrouping(dag.nodes, EMPTY_VIEW, { collapsedFan: collapsed, showSteps: true, stageToggled: new Set() }),
+    [dag.nodes, collapsedKey], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+  const g0 = grouping ?? own;
+  const groups = g0.fan;
+  const members = g0.members;
+  const stages = g0.stages;
   const configs = useMemo(() => configInputs(dag.nodes, dag.reads ?? []), [dag.nodes, dag.reads]);
+  // A card inside an expanded stage carries that stage's coloured tag (click it to fold back).
+  const tagFor = (n: DagNode) => {
+    const path = stagePath(n, g0.view).map((x) => x.name);
+    const inner = path.length ? stages.find((x) => x.path.join("/") === path.join("/")) : undefined;
+    return inner ? { stageTag: { name: inner.name, color: inner.color, collapse: () => onToggleStage(inner.id) } } : {};
+  };
   const nodes: GraphNode[] = useMemo(
     () =>
       dag.nodes.flatMap((n): GraphNode[] => {
         const groupKey = members.get(n.id);
+        if (groupKey?.startsWith("stage:")) {
+          const st = stages.find((x) => x.id === groupKey)!;
+          if (st.members[0].id !== n.id) return []; // the stage is drawn once, at its first step
+          const s = planned ? summarizePlan(st.members as PlanNode[]) : summarize(st.members);
+          const count = st.members.length;
+          return [{
+            id: st.id,
+            origins: st.members.map((m) => m.id),
+            type: "pipelineNode",
+            width: 300,
+            height: 84,
+            minimapColor: `var(--stage-${st.color})`,
+            data: {
+              name: st.name,
+              status: s.status,
+              line2: st.description ?? `${count} step${count === 1 ? "" : "s"}`,
+              line3: `${st.description ? `${count} step${count === 1 ? "" : "s"} · ` : ""}${s.line2}`,
+              progress: !planned && s.done < s.total ? s.fraction : undefined,
+              stageCard: { color: st.color, collapsed: true, toggle: () => onToggleStage(st.id) },
+              hover: {
+                title: `${st.name} — a stage of ${count} step${count === 1 ? "" : "s"}`,
+                body: `${st.fromView ? "Grouped in the UI (not in code)." : "A dendrite.stage in the pipeline code."} Expand it to see its steps; the arrows show data flowing between stages.`,
+                facts: [["steps", [...new Set(st.members.map((m) => m.step ?? m.name))].join(", ")]],
+                hint: "Click for details · ▸ to expand",
+              },
+            },
+          }];
+        }
         if (groupKey) {
           const g = groups.find((x) => x.id === groupKey)!;
           if (g.members[0].id !== n.id) return []; // the group is drawn once, at its first item
@@ -131,6 +181,7 @@ export function DagView({ dag, nameOf, selected, onSelect, onArtifact, onOpenSou
               line3: s.line3,
               progress: !planned && s.done < s.total ? s.fraction : undefined,
               group: { collapsed: true, count: g.members.length, toggle: () => onToggleGroup(g.step) },
+              ...tagFor(g.members[0]),
               hover: {
                 title: `${g.step} — once per item`,
                 body: `The pipeline calls ${g.step} once for each of ${g.members.length} items. They're shown as one card; expand it to see each item.`,
@@ -141,8 +192,11 @@ export function DagView({ dag, nameOf, selected, onSelect, onArtifact, onOpenSou
           }];
         }
         const expandedOf = n.kind === "node" ? groups.find((g) => g.members.some((m) => m.id === n.id)) : undefined;
+        const path = n.kind === "node" ? stagePath(n, g0.view).map((x) => x.name) : [];
+        const inner = path.length ? stages.find((x) => x.path.join("/") === path.join("/")) : undefined;
+        const stageTag = tagFor(n);
         const member = expandedOf ? { member: { of: `${expandedOf.step} ×${expandedOf.members.length}`, collapse: () => onToggleGroup(expandedOf.step) } } : {};
-        const origins = expandedOf ? [expandedOf.id] : undefined; // expanded items grow out of the group card
+        const origins = expandedOf ? [expandedOf.id] : inner ? path.map((_, i) => `stage:${path.slice(0, i + 1).join("/")}`) : undefined; // grow out of the card they folded into
         if (n.kind === "input") {
           const a = n.artifact;
           const configures = configs.has(n.id);
@@ -175,7 +229,7 @@ export function DagView({ dag, nameOf, selected, onSelect, onArtifact, onOpenSou
             width: 250,
             height: 68,
             minimapColor: `var(--${p.status})`,
-            data: { name: n.name, ...p, ...member, ports: { inputs: toPorts(n.inputs), outputs: toPorts(n.outputs), active: activeArtifact, onPick: onArtifact } },
+            data: { name: n.name, ...p, ...member, ...stageTag, ports: { inputs: toPorts(n.inputs), outputs: toPorts(n.outputs), active: activeArtifact, onPick: onArtifact } },
           }];
         }
         const line = statusLine(n, dag.experiment.id, nameOf, now);
@@ -207,12 +261,13 @@ export function DagView({ dag, nameOf, selected, onSelect, onArtifact, onOpenSou
             source,
             progress: live?.fraction,
             ...member,
+            ...stageTag,
             hover: hoverFor(n, line, origin ? nameOf(origin) : null),
             ports: { inputs: toPorts(n.inputs), outputs: toPorts(n.outputs), active: activeArtifact, onPick: onArtifact },
           },
         }];
       }),
-    [dag, nameOf, onArtifact, onOpenSource, activeArtifact, planned, groups, members, configs, onToggleGroup, now],
+    [dag, nameOf, onArtifact, onOpenSource, activeArtifact, planned, groups, members, stages, configs, onToggleGroup, onToggleStage, now, g0],
   );
   const edges = useMemo(
     () => [
@@ -248,6 +303,12 @@ export function DagView({ dag, nameOf, selected, onSelect, onArtifact, onOpenSou
         legend={planned ? <PlanLegend present={present} hasInputs={hasInputs} /> : <DagLegend present={present} hasInputs={hasInputs} />}
       />
       {starting && <div className="canvas-banner">Starting the run — steps appear here as they begin…</div>}
+      {stages.length > 0 && onShowSteps && (
+        <div className="stage-switch" role="group" aria-label="Detail">
+          <button className={!showSteps ? "active" : ""} onClick={() => onShowSteps(false)} title="One card per stage">Overview</button>
+          <button className={showSteps ? "active" : ""} onClick={() => onShowSteps(true)} title="Every step">All steps</button>
+        </div>
+      )}
     </>
   );
 }

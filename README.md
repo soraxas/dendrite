@@ -130,6 +130,16 @@ Only the params a node consumes go into its signature. Changing `train_splats.it
 - **What the pipeline reads.** `dendrite.load(ref)` (or `lab.load`) in a pipeline body is recorded:
   - An input read this way is shown as configuring the run.
   - A step result read this way, such as a plan that decides the fan-out, gets dashed "decides" edges to the steps called after it.
+- **Stages.** `dendrite.stage(name, description, color=...)` groups steps into the phases of a pipeline. Use it as a `with` block in the pipeline body, or as a decorator on a function that calls steps, which makes a stage reusable and nestable. The UI's default view is one card per stage, with combined status and progress; expand a stage to see its steps.
+  - **Fallback:** `@artifact_task(stage=...)` applies to calls made outside any stage.
+  - **From the UI:** you can relabel or recolour stages, and put ungrouped steps into stages. That is saved per pipeline, never in code, and "Copy as code" turns it into `with dendrite.stage(...)` lines.
+  - **Display only:** stages never change a cache key.
+
+  ```python
+  @dendrite.stage("Privacy", "Sanitised media", color="teal")
+  def privacy(video, plan):
+      return [encode.named(s).submit(blur.named(s).submit(extract.named(s).submit(video, **w)), video) for s, w in plan.items()]
+  ```
 - `lab.create(..., parent=exp)` records a new experiment as a fork of `exp` (fork tree, diffs, plan reasons) while taking exactly the config you pass, unlike `exp.fork()`, which starts from the parent's config.
 
 ### Checks before anything runs

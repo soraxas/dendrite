@@ -354,3 +354,28 @@ button.top-link.active { color: var(--accent); border-color: var(--accent); }
 .react-flow__node:has(.gnode.stack) { filter: drop-shadow(5px 5px 0 var(--line-strong)) drop-shadow(5px 5px 0 color-mix(in srgb, var(--line-strong) 55%, transparent)); }
 
 .react-flow__node.from-origin > .gnode { animation: none; } /* grows out of its origin instead of fading */
+
+/* stages: one card per phase of the pipeline */
+:root {
+  --stage-teal: #0f9f8f; --stage-blue: #3b6fd8; --stage-purple: #7c4dcc; --stage-orange: #d9822b;
+  --stage-green: #2f9e44; --stage-pink: #c2417c; --stage-red: #d63c3c; --stage-gray: #7b8088;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --stage-teal: #2dd4bf; --stage-blue: #6b9cff; --stage-purple: #a98bfa; --stage-orange: #f5a35c;
+    --stage-green: #51cf66; --stage-pink: #f07aaf; --stage-red: #ff7b7b; --stage-gray: #a3a8ae;
+  }
+}
+.gnode.stage-card { border-width: 2px; border-radius: 12px; padding: 10px 14px 10px 18px; }
+.gnode.stage-card .t1 { font-size: 15px; }
+.gnode.stage-card .t2 { font-size: 12.5px; }
+.gnode .stage-tag { position: absolute; right: 30px; top: 6px; padding: 0 6px; font-size: 10.5px; line-height: 16px; border-radius: 999px; background: var(--panel); border: 1px solid; max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stage-switch { position: absolute; top: 12px; left: 12px; z-index: 6; display: inline-flex; gap: 0; border: 1px solid var(--line-strong); border-radius: 8px; overflow: hidden; background: var(--panel); }
+.stage-switch button { border: 0; border-radius: 0; padding: 3px 12px; font-size: 12.5px; }
+.stage-switch button.active { color: var(--accent); background: var(--accent-bg); }
+.stage-swatches { display: flex; gap: 6px; flex-wrap: wrap; }
+.stage-swatches button { width: 22px; height: 22px; border-radius: 50%; padding: 0; border: 2px solid transparent; }
+.stage-swatches button.on { border-color: var(--ink); }
+.snippet { white-space: pre; font: 12px var(--mono); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; overflow: auto; }
+.freeze input[type=text], .freeze select { font: inherit; font-size: 12.5px; color: inherit; background: var(--bg); border: 1px solid var(--line-strong); border-radius: 6px; padding: 3px 7px; min-width: 0; }
+.param-row input[type=text]:disabled { opacity: .7; }

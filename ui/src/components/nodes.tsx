@@ -105,6 +105,10 @@ function Shell({ data, className, style, children, label }: { data: Base; classN
 }
 
 const tone = (name: string): CSSProperties => ({ background: `var(--${name}-bg)`, borderColor: `var(--${name})` });
+const stageTone = (color: string): CSSProperties => ({
+  background: `color-mix(in srgb, var(--stage-${color}) 12%, var(--panel))`,
+  borderColor: `var(--stage-${color})`,
+});
 
 export type PipelineData = Base & {
   name: string;
@@ -121,6 +125,10 @@ export type PipelineData = Base & {
   group?: { collapsed: boolean; count: number; toggle: () => void };
   /** A member of an expanded group: collapse it back from the member card. */
   member?: { of: string; collapse: () => void };
+  /** A stage card (`dendrite.stage`): its colour and expand control. */
+  stageCard?: { color: string; collapsed: boolean; toggle: () => void };
+  /** A step inside an expanded stage: the stage's tag, which folds it back. */
+  stageTag?: { name: string; color: string; collapse: () => void };
 };
 export function PipelineNode({ data }: NodeProps & { data: PipelineData }) {
   const animated = data.status === "running" || data.status === "waiting";
@@ -128,11 +136,24 @@ export function PipelineNode({ data }: NodeProps & { data: PipelineData }) {
   return (
     <Shell
       data={data}
-      className={`${data.status} ${animated ? "animated" : ""} ${data.variant ?? ""} ${data.group ? "stack" : ""}`}
-      style={tone(data.status)}
+      className={`${data.status} ${animated ? "animated" : ""} ${data.variant ?? ""} ${data.group ? "stack" : ""} ${data.stageCard ? "stage-card" : ""}`}
+      style={data.stageCard ? stageTone(data.stageCard.color) : tone(data.status)}
       label={`${data.name}${data.group ? ` ×${data.group.count}` : ""}: ${data.line2}`}
     >
       <div className="accent" style={{ background: `var(--${data.status})` }} />
+      {data.stageTag && (
+        <button
+          className="stage-tag nodrag"
+          style={{ color: `var(--stage-${data.stageTag.color})`, borderColor: `var(--stage-${data.stageTag.color})` }}
+          title={`In stage ${data.stageTag.name} — click to fold it back into one card`}
+          onClick={(e) => {
+            e.stopPropagation();
+            data.stageTag!.collapse();
+          }}
+        >
+          {data.stageTag.name}
+        </button>
+      )}
       <div className="t1">
         {data.name}
         {data.group && <span className="count-badge" title={`Called once for each of ${data.group.count} items`}>×{data.group.count}</span>}
@@ -160,6 +181,18 @@ export function PipelineNode({ data }: NodeProps & { data: PipelineData }) {
         <div className="pbar" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(data.progress * 100)}>
           <span style={{ width: `${Math.min(100, data.progress * 100)}%`, background: `var(--${data.status})` }} />
         </div>
+      )}
+      {data.stageCard && (
+        <button
+          className="group-toggle nodrag"
+          title="Show the steps in this stage"
+          onClick={(e) => {
+            e.stopPropagation();
+            data.stageCard!.toggle();
+          }}
+        >
+          ▸
+        </button>
       )}
       {(data.group || data.member) && (
         <button

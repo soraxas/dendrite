@@ -214,6 +214,7 @@ class ArtifactTask:
         hash_source: bool = True,
         lease_ttl: float = 300.0,
         ignore: Sequence[str] = (),
+        stage: str | None = None,
         _op: str | None = None,
         _copy: bool = False,
         **task_options: Any,
@@ -223,6 +224,7 @@ class ArtifactTask:
         # The step's identity in the signature. Renamed copies (``with_options(name=…)``,
         # ``named(key)``) keep it, so identical work under another node name is reused.
         self.op = _op or self.name
+        self.stage = stage  # for calls outside any `dendrite.stage`; display only
         self._named: dict[str, ArtifactTask] = {}
         self.ignore = tuple(ignore)
         self.outputs = tuple(outputs) if outputs else _outputs_from_annotation(fn)
@@ -299,6 +301,7 @@ class ArtifactTask:
             hash_source=self.hash_source,
             lease_ttl=self.lease_ttl,
             ignore=self.ignore,
+            stage=self.stage,
             **self._task_options,
         )
         opts.update(overrides)
@@ -320,10 +323,20 @@ class ArtifactTask:
         state.future_nodes[id(future)] = (self.name, self.outputs)
         return future
 
+    def stage_path(self) -> list[dict[str, Any]]:
+        """Where this call sits: the enclosing `dendrite.stage`s, else the step's default stage."""
+        path = runtime.current_stage()
+        if not path and self.stage:
+            path = [{"name": self.stage, "description": None, "color": None}]
+        return path
+
     def _enqueue(self, args: tuple, kwargs: dict) -> dict[str, Any]:
         state = runtime.active()
         bound = self.signature.bind_partial(*args, **kwargs)
         state.claim(self.name)
+        path = self.stage_path()
+        if path:
+            state.lab.db.set_node_stage(state.experiment.id, self.name, path)
         known: dict[str, ArtifactRef] = {}
         queued: dict[str, str] = {}
         for k, v in bound.arguments.items():
@@ -354,7 +367,7 @@ class ArtifactTask:
         bound = self.signature.bind_partial(*args, **kwargs)
         call = {k: _unwrap_plan(v) for k, v in bound.arguments.items()}
         state.claim(self.name)
-        entry: dict[str, Any] = {"node": self.name, "seq": len(state.planned), "signature": None, "reason": None,
+        entry: dict[str, Any] = {"node": self.name, "stage": self.stage_path(), "seq": len(state.planned), "signature": None, "reason": None,
                                  "reuse_from": None, "estimate": None, "param_schema": []}
         state.planned.append(entry)
 
@@ -701,6 +714,7 @@ def artifact_task(
     hash_source: bool = True,
     lease_ttl: float = 300.0,
     ignore: Sequence[str] = (),
+    stage: str | None = None,
     **task_options: Any,
 ):
     """Declare a lineage-tracked, globally cached pipeline node.
@@ -725,6 +739,7 @@ def artifact_task(
             hash_source=hash_source,
             lease_ttl=lease_ttl,
             ignore=ignore,
+            stage=stage,
             **task_options,
         )
 

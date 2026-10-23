@@ -746,6 +746,7 @@ class Experiment:
                 "kind": "node",
                 "name": p["node"],
                 **_fanout(p["node"]),
+                "stage": p.get("stage") or [],
                 "seq": p["seq"],
                 "status": "planned",
                 "plan": p.get("plan", "run"),
@@ -852,6 +853,7 @@ class Experiment:
             nodes.append({"id": nid, "kind": "input", "name": name, "status": "input", "artifact": _ref_dict(refs.get(h))})
         per_exec = db.metrics_for(nr["execution_id"] for nr in nrs)
         live = db.progress_for(nr["execution_id"] for nr in nrs if nr["status"] == "running")
+        stages = db.node_stages(self.id)
         for nr in nrs:
             for out, h in (nr["outputs"] or {}).items():
                 producers.setdefault(h, (nr["node"], out))
@@ -873,6 +875,7 @@ class Experiment:
                     "kind": "node",
                     "name": nr["node"],
                     **_fanout(nr["node"]),
+                    "stage": stages.get(nr["node"], []),
                     "seq": nr["seq"],
                     "status": nr["status"],
                     "progress": live.get(nr["execution_id"]) if nr["status"] == "running" else None,

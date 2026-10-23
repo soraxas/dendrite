@@ -149,6 +149,12 @@ The flow of a run spans several modules in `src/dendrite/`:
    - **Push.** `GET /api/events` is Server-Sent Events. It compares `Metadata.change_tokens()` every `EVENT_INTERVAL`, because runs happen in other processes. `useLiveUpdates` in `ui/src/queries.ts` invalidates only the named experiments, and polling drops to a 15 s safety net while connected.
    - **Grouping.** It is UI-only (`ui/src/fanout.ts`). Nodes named `step[key]` group by `step`, and groups of `COLLAPSE_AT` or more start collapsed.
 
+13. **Stages.**
+   - **Context.** `runtime.stage` is a context manager and decorator over the `_stage` contextvar. `ArtifactTask.stage_path()` (enclosing stages, else `stage=`) is read at `_enqueue`, stored in `node_stages`, and in plan entries. `dag()`/`plan()` nodes carry `stage`.
+   - **Static shape.** `analysis.py` pushes `("stage", name)` frames for `with stage("…")` and for `@stage` helpers (expanded up to depth 3), so shape nodes carry `stage` names.
+   - **View.** `pipeline_views` stores the UI overlay (`assign` step→stage, `styles` stage→label/description/color) behind `GET`/`PUT /api/pipelines/{name}/view`.
+   - **UI.** `ui/src/stages.ts` combines code stages, the view and fan-out into one member map (outermost collapsed stage wins, then a collapsed fan-out group). Editing lives in `components/StageDetail.tsx`.
+
 ## Invariants to preserve
 
 - Signatures must never include experiment ids or flow-run ids. That is what makes cross-experiment reuse work.
@@ -158,7 +164,7 @@ The flow of a run spans several modules in `src/dendrite/`:
 - A cache hit must `store.verify()` its outputs, including every member of a directory manifest. A missing blob means recompute.
 - Experiment config (params, inputs, pins) is frozen at its first run. Before that, only `draft` experiments are editable. Re-running only replaces node_runs.
 - **Reclaiming space never risks a wrong result.** It may only delete blobs, never metadata rows or anything a cache hit could trust without `verify()`. Anything deleted must recompute when needed. `tests/test_storage.py` covers this.
-- Progress and body reads are display-only: they never enter a signature.
+- Progress, body reads and stages are display-only: they never enter a signature.
 - **Plans are side-effect free.** A plan never writes node_runs, executions, blobs, leases or pipeline reads, never touches Prefect, and never calls step functions. `tests/test_plan.py::test_plan_writes_nothing` checks this.
 - **Step contract** (README, "The step contract"):
   - The pipeline body only wires steps together.
@@ -189,6 +195,7 @@ Spec-driven changes live in `openspec/`:
 - `openspec/changes/draft-experiments/` is drafts, plans and the step contract (phase 1 of the editing UI).
 - `openspec/changes/storage-management/` is the storage inventory, delete, evict, GC and clean-up change.
 - `openspec/changes/live-graph/` is live progress, pushed updates, fan-out groups and pipeline-read edges.
+- `openspec/changes/pipeline-stages/` is stages in code and in the UI, and the stage overview.
 - `openspec/changes/react-flow-ui/` is the React Flow UI change. Archive it with `openspec archive react-flow-ui` once it has been reviewed.
 - Use `/opsx:propose`, `/opsx:apply` and `/opsx:archive` for new work.
 - Validate with `openspec validate <change>`.

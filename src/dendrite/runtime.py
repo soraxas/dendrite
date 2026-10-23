@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import importlib
 import os
 import sys
@@ -165,6 +166,49 @@ def progress(done: float, total: float | None = None, unit: str | None = None) -
         return
     ctx.last_progress = now
     ctx.db.set_progress(ctx.execution_id, float(done), None if total is None else float(total), unit)
+
+
+_stage: ContextVar[tuple[dict[str, Any], ...]] = ContextVar("dendrite_stage", default=())
+
+
+class stage:
+    """A named phase of a pipeline (``Privacy``, ``COLMAP``…), for the graph's overview.
+
+    Use it as a decorator on a function that calls steps, or as a ``with`` block in a pipeline
+    body; every step called within belongs to the stage. Stages nest, and are display-only:
+    they never change a step's signature.
+
+        @dendrite.stage("Privacy", "Sanitised media", color="teal")
+        def privacy(video):
+            return encode(blur(extract(video)), video)
+    """
+
+    def __init__(self, name: str, description: str | None = None, *, color: str | None = None):
+        self.info = {"name": name, "description": description, "color": color}
+        self._tokens: list[Any] = []
+
+    def __enter__(self) -> "stage":
+        self._tokens.append(_stage.set(_stage.get() + (self.info,)))
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        _stage.reset(self._tokens.pop())
+
+    def __call__(self, fn: Any) -> Any:
+        info = self.info
+
+        @functools.wraps(fn)
+        def staged(*args: Any, **kwargs: Any) -> Any:
+            with stage(info["name"], info["description"], color=info["color"]):
+                return fn(*args, **kwargs)
+
+        staged.__dendrite_stage__ = info  # read by the static shape (analysis.py)
+        return staged
+
+
+def current_stage() -> list[dict[str, Any]]:
+    """The stage path (outermost first) of a step called now."""
+    return list(_stage.get())
 
 
 def note_read(ref: Any) -> None:

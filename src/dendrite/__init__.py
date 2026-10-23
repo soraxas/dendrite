@@ -7,7 +7,7 @@ import os
 os.environ.setdefault("DO_NOT_TRACK", "1")
 
 from .experiment import Experiment, Lab, NotADraft, Pipeline, pipeline
-from .runtime import load, log_metric, progress, workdir
+from .runtime import load, log_metric, progress, stage, workdir
 from .store import ArtifactRef, ArtifactStore, FsspecStore, LocalStore
 from .task import ArtifactTask, artifact_task
 
@@ -26,5 +26,6 @@ __all__ = [
     "log_metric",
     "pipeline",
     "progress",
+    "stage",
     "workdir",
 ]

@@ -91,6 +91,10 @@ export const usePlan = (id?: string) =>
 export const useStorage = (enabled = true) =>
   useQuery({ queryKey: ["storage"], queryFn: () => api.storage(), enabled, staleTime: 60000 });
 
+/** A pipeline's UI view (stage assignments and styles). */
+export const useView = (pipeline?: string) =>
+  useQuery({ queryKey: ["view", pipeline], queryFn: () => api.view(pipeline!), enabled: !!pipeline, staleTime: 30000 });
+
 export const useShape = (pipeline?: string) =>
   useQuery({
     queryKey: ["shape", pipeline],

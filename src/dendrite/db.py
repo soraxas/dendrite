@@ -168,6 +168,24 @@ execution_progress = sa.Table(
     sa.Column("updated_at", sa.Float, nullable=False),
 )
 
+# The stage path (`dendrite.stage`) each node was called in, per experiment: display only.
+node_stages = sa.Table(
+    "node_stages",
+    meta,
+    sa.Column("experiment_id", sa.String(32), sa.ForeignKey("experiments.id"), primary_key=True),
+    sa.Column("node", sa.String(200), primary_key=True),
+    sa.Column("path", sa.JSON, nullable=False),  # [{name, description, color}], outermost first
+)
+
+# A pipeline's UI view: steps assigned to stages and stage labels/colours, overlaying the code.
+pipeline_views = sa.Table(
+    "pipeline_views",
+    meta,
+    sa.Column("pipeline", sa.String(200), primary_key=True),
+    sa.Column("view", sa.JSON, nullable=False),
+    sa.Column("updated_at", sa.Float, nullable=False),
+)
+
 experiment_flags = sa.Table(
     "experiment_flags",
     meta,
@@ -326,6 +344,7 @@ class Metadata:
                 raise ValueError(f"experiment {outside[0]} is forked from one being deleted")
             conn.execute(node_runs.delete().where(node_runs.c.experiment_id.in_(ids)))
             conn.execute(pipeline_reads.delete().where(pipeline_reads.c.experiment_id.in_(ids)))
+            conn.execute(node_stages.delete().where(node_stages.c.experiment_id.in_(ids)))
             conn.execute(experiment_flags.delete().where(experiment_flags.c.experiment_id.in_(ids)))
             for exp_id in ids:  # ``ids`` lists children before parents (parent_id is a foreign key)
                 conn.execute(experiments.delete().where(experiments.c.id == exp_id))
@@ -367,6 +386,30 @@ class Metadata:
         with self.tx() as conn:
             conn.execute(node_runs.delete().where(node_runs.c.experiment_id == exp_id))
             conn.execute(pipeline_reads.delete().where(pipeline_reads.c.experiment_id == exp_id))
+            conn.execute(node_stages.delete().where(node_stages.c.experiment_id == exp_id))
+
+    # -- stages ----------------------------------------------------------------------
+    def set_node_stage(self, exp_id: str, node: str, path: list[dict]) -> None:
+        with self.tx() as conn:
+            res = conn.execute(node_stages.update().where(node_stages.c.experiment_id == exp_id, node_stages.c.node == node).values(path=path))
+            if res.rowcount == 0:
+                conn.execute(node_stages.insert().values(experiment_id=exp_id, node=node, path=path))
+
+    def node_stages(self, exp_id: str) -> dict[str, list[dict]]:
+        with self.ro() as conn:
+            rows = conn.execute(sa.select(node_stages.c.node, node_stages.c.path).where(node_stages.c.experiment_id == exp_id)).all()
+        return {n: p for n, p in rows}
+
+    def pipeline_view(self, pipeline: str) -> dict:
+        with self.ro() as conn:
+            row = conn.execute(sa.select(pipeline_views.c.view).where(pipeline_views.c.pipeline == pipeline)).first()
+        return row[0] if row else {"assign": {}, "styles": {}}
+
+    def set_pipeline_view(self, pipeline: str, view: dict) -> None:
+        with self.tx() as conn:
+            res = conn.execute(pipeline_views.update().where(pipeline_views.c.pipeline == pipeline).values(view=view, updated_at=time.time()))
+            if res.rowcount == 0:
+                conn.execute(pipeline_views.insert().values(pipeline=pipeline, view=view, updated_at=time.time()))
 
     # -- pipeline reads and progress -------------------------------------------------
     def record_read(self, exp_id: str, seq: int, artifact_hash: str, after: int) -> None:

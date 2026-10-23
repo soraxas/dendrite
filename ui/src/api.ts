@@ -89,6 +89,20 @@ export interface DagNode {
   key?: string | null;
   /** Live progress of a running step (`dendrite.progress`). */
   progress?: Progress | null;
+  /** Enclosing `dendrite.stage`s, outermost first (names only in a parsed shape). */
+  stage?: (StageInfo | string)[];
+}
+
+export interface StageInfo {
+  name: string;
+  description?: string | null;
+  color?: string | null;
+}
+
+/** A pipeline's UI view: steps assigned to stages, and stage labels/colours. Never changes code. */
+export interface PipelineView {
+  assign: Record<string, string>;
+  styles: Record<string, { label?: string; description?: string; color?: string }>;
 }
 
 export interface Progress {
@@ -422,6 +436,8 @@ export const api = {
     send<ReclaimReport>("POST", `/api/executions/${encodeURIComponent(execId)}/evict`, { apply, force }),
   gc: (req: GcRequest) => send<ReclaimReport>("POST", "/api/gc", req),
   clean: (force = false) => send<{ removed: number; bytes: number }>("POST", "/api/storage/clean", { force }),
+  view: (pipeline: string) => get<PipelineView>(`/api/pipelines/${encodeURIComponent(pipeline)}/view`),
+  saveView: (pipeline: string, view: PipelineView) => send<PipelineView>("PUT", `/api/pipelines/${encodeURIComponent(pipeline)}/view`, view),
   downloadUrl: (h: string, path?: string) =>
     `/api/artifacts/${encodeURIComponent(h)}/download${path === undefined ? "" : `?path=${encodeURIComponent(path)}`}`,
 };

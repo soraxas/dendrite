@@ -165,3 +165,26 @@ def echo(value) -> list:
 def toy_wait(src):
     trained = train.submit(featurize(extract(src)))
     return echo.submit(trained)  # queued until the slow train finishes
+
+
+from dendrite import stage  # noqa: E402
+
+
+@stage("Prepare", "Rows and features", color="teal")
+def prepare(src):
+    return featurize(extract(src))
+
+
+@artifact_task(stage="Fallback")
+def tag(features: list) -> int:
+    return len(features)
+
+
+@pipeline(name="toy_stages")
+def toy_stages(src):
+    feats = prepare(src)
+    with stage("Model"):
+        with stage("Train"):
+            model, report = train(feats)
+    tag(feats)
+    return model
