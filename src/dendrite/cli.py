@@ -110,6 +110,41 @@ def describe_roles(roles: list[dict]) -> str:
     return " · ".join(parts)
 
 
+def cmd_check(lab: Lab, args) -> None:
+    """Static findings for imported steps and pipelines, and for experiments not yet run."""
+    import warnings
+
+    from .analysis import StepDefinitionWarning
+    from .experiment import _PIPELINES
+    from .task import _STEPS
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", StepDefinitionWarning)  # reported below, once
+        for mod in args.imports or []:
+            importlib.import_module(mod)
+    ignore = set(args.ignore or [])
+    found: list[tuple[str, str]] = []
+    for step in _STEPS.values():
+        found += [(d.severity, d.render()) for d in step.diagnostics if d.code not in ignore]
+    for pipe in _PIPELINES.values():
+        shape = pipe.shape()
+        for d in shape["diagnostics"]:
+            if d["code"] not in ignore:
+                line = (d["line"] or 1) + shape["first_line"] - 1
+                found.append((d["severity"], f"{shape['file'] or pipe.name}:{line}: {d['severity']} {d['code']}: {d['message']}"))
+    for exp in lab.experiments():
+        if exp.status in ("draft", "created") and exp.pipeline_name in _PIPELINES:
+            for d in exp.check():
+                if d["code"] not in ignore:
+                    found.append((d["severity"], f"experiment {exp.name or exp.id} ({exp.id}): {d['severity']} {d['code']}: {d['message']}"))
+    for _, text in found:
+        print(text)
+    errors = sum(sev == "error" for sev, _ in found)
+    print(f"{errors} error(s), {len(found) - errors} warning(s) in {len(_STEPS)} steps and {len(_PIPELINES)} pipelines")
+    if errors:
+        sys.exit(1)
+
+
 def cmd_run(lab: Lab, args) -> None:
     for mod in args.imports or []:
         importlib.import_module(mod)
@@ -164,6 +199,9 @@ def main(argv: list[str] | None = None) -> None:
     s = sub.add_parser("lineage", help="provenance of an artifact (hash or unique prefix)")
     s.add_argument("artifact")
     s.add_argument("--mermaid", action="store_true")
+    s = sub.add_parser("check", help="static checks of steps, pipelines and not-yet-run experiments")
+    s.add_argument("--import", dest="imports", action="append", help="module to import (registers pipelines)")
+    s.add_argument("--ignore", action="append", metavar="CODE", help="diagnostic code to skip (repeatable)")
     s = sub.add_parser("run", help="run a draft (or never-run) experiment in this process")
     s.add_argument("experiment")
     s.add_argument("--import", dest="imports", action="append", help="module to import (registers pipelines)")

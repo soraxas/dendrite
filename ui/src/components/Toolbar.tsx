@@ -93,6 +93,7 @@ export function Toolbar({ dag, tree, route, go, nameOf, canEdit, plan }: {
       {!draft && <ForkButton dag={dag} canEdit={canEdit} open={(id) => go({ view: "dag", exp: id })} />}
       <div className="tabs" role="tablist">
         {tab("dag", "Pipeline")}
+        {tab("code", "Code")}
         {tab("params", "Parameters")}
         {tab("metrics", "Metrics")}
       </div>

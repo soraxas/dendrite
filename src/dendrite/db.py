@@ -478,6 +478,13 @@ class Metadata:
                 conn.execute(code_snapshots.insert().values(created_at=time.time(), **snap))
             conn.execute(execution_sources.insert().values(execution_id=exec_id, source_hash=snap["hash"]))
 
+    def save_snapshot(self, snap: dict[str, Any]) -> None:
+        """Store a source snapshot (once per text) without linking it to an execution."""
+        with self.tx() as conn:
+            exists = conn.execute(sa.select(code_snapshots.c.hash).where(code_snapshots.c.hash == snap["hash"])).first()
+            if not exists:
+                conn.execute(code_snapshots.insert().values(created_at=time.time(), **snap))
+
     def snapshot(self, source_hash: str) -> dict | None:
         with self.ro() as conn:
             row = conn.execute(sa.select(code_snapshots).where(code_snapshots.c.hash == source_hash)).mappings().first()

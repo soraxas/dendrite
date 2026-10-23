@@ -125,6 +125,45 @@ export interface DraftEdit {
   floats?: string[];
 }
 
+export interface Diagnostic {
+  code: string;
+  severity: "error" | "warning";
+  message: string;
+  line: number | null;
+  col: number | null;
+  step: string | null;
+  file?: string | null;
+  file_line?: number | null;
+}
+
+export interface ShapeNode {
+  id: string;
+  kind: "input" | "node" | "dynamic";
+  name: string;
+  line: number;
+  step?: string;
+  conditional?: string[];
+  repeated?: boolean;
+  submit?: boolean;
+  alternatives?: number;
+  outputs?: string[];
+  params?: string[];
+  source?: string;
+}
+
+export interface Shape {
+  name: string;
+  nodes: ShapeNode[];
+  edges: { from: string; to: string; label: string; input: string }[];
+  diagnostics: Diagnostic[];
+  step_diagnostics: Diagnostic[];
+  dynamic: boolean;
+  file: string | null;
+  display: string | null;
+  first_line: number;
+  source_hash?: string | null;
+}
+
 export interface DagEdge {
   from: string;
   to: string;
@@ -273,6 +312,9 @@ export const api = {
       body: JSON.stringify({ source, file_sha }),
     }),
   plan: (id: string) => get<Plan>(`${exp(id)}/plan`),
+  shape: (pipeline: string) => get<Shape>(`/api/pipelines/${encodeURIComponent(pipeline)}/shape`),
+  shapeOf: (pipeline: string, source: string) => send<Shape>("POST", `/api/pipelines/${encodeURIComponent(pipeline)}/shape`, { source }),
+  check: (id: string) => get<Diagnostic[]>(`${exp(id)}/check`),
   fork: (id: string, name?: string) => send<ExperimentSummary>("POST", `${exp(id)}/fork`, { name: name ?? null }),
   editDraft: (id: string, edit: DraftEdit) => send<ExperimentSummary>("PATCH", exp(id), edit),
   discard: (id: string) => send<{ deleted: string }>("DELETE", exp(id)),

@@ -90,6 +90,39 @@ Only the params a node consumes go into its signature. Changing `train_splats.it
 - `@artifact_task(cache=False)` marks non-deterministic nodes. They always execute, and lineage is still recorded.
 - `hash_source=False` together with `version="…"` keeps cosmetic code edits from invalidating the cache.
 
+### Checks before anything runs
+
+dendrite parses step and pipeline source (with Python's `ast`, never executing it) to catch mistakes early:
+
+- **When a step is decorated.** `StepDefinitionWarning`s with file and line point at:
+  - literal returns that don't match `outputs`
+  - steps that never return
+  - invalid output names
+  - defaults that can't be JSON-encoded
+  - likely hidden inputs: literal-path reads, environment variables, clock reads, unseeded `random`
+
+  Silence a code per step with `@artifact_task(ignore=("hidden-env",))`.
+- **Pipeline bodies.** Checks cover unpacking that doesn't match a step's outputs, unknown or missing arguments, a step called twice, and steps called in loops.
+- **Experiments.** Params and pins that name steps or arguments the pipeline doesn't have are flagged.
+
+```bash
+dendrite check --import my_project.pipelines     # prints file:line findings; exits 1 on errors (CI)
+```
+
+Fewer bare strings:
+
+```python
+class Colmap(NamedTuple):
+    cameras: Path
+    sparse: Path
+
+@artifact_task                      # outputs inferred: ("cameras", "sparse")
+def colmap(frames: Path) -> Colmap:
+    ...
+
+exp.fork(colmap.override(matcher="exhaustive"))   # names checked now: a typo raises with a suggestion
+```
+
 ### The step contract
 
 dendrite splits work the way Temporal does, with a softer rule.
@@ -149,6 +182,19 @@ Lab(store_url="s3://lineage/prod", storage_options={"endpoint_url": "http://mini
 - an experiment diff: params, per-node reuse, and metric deltas
 - code: every run records a snapshot of its step's source, with file and line. You can view it in an editor. While the file still contains exactly that code, you can also edit and save it back. Saving asks for confirmation, refuses if the file changed underneath you, and is only enabled when `dendrite ui` runs on localhost (or with `--allow-edit`).
 
+### Code view: edit the pipeline and watch its shape
+
+The **Code** tab shows the pipeline function beside the flow it describes:
+- **Live shape.** As you type, the source is parsed (never run) and the graph redraws:
+  - steps under an `if` are dashed and labelled with the condition
+  - steps in a loop get ⟳
+  - calls that aren't steps show as grey boxes, since parsing can't see inside them
+- **Problems.** They appear in the gutter and in a list under the editor.
+- **Colours.** For a draft, nodes are coloured by its plan; for a finished experiment, by its last run.
+- **Saving.** It writes back to the file with the same safeguards as step code: confirmation, a conflict check, and editing enabled. Drafts then re-plan with the new code.
+
+The shape is what the *source* says. The plan is what one experiment actually does.
+
 ### Drafts: change an experiment before it runs
 
 "Fork…" on any experiment creates a **draft**, the one kind of experiment you can still change.
@@ -184,7 +230,7 @@ A plan has two limits:
 The built UI ships inside the wheel, so installing and running dendrite never needs Node.js. If the bundle hasn't been built (for example in a fresh clone), `dendrite ui` falls back to the older single-file page and says so. `/api/info` reports which UI is active.
 
 ```bash
-dendrite list | show EXP | diff A B | dag EXP | tree | lineage HASH [--mermaid] | run EXP | ui
+dendrite list | show EXP | diff A B | dag EXP | tree | lineage HASH [--mermaid] | run EXP | check | ui
 ```
 
 Each run also publishes a Prefect markdown artifact (`dendrite-<exp id>`) with the node table and a Mermaid DAG, so the lineage is visible in the Prefect UI too.

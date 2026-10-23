@@ -2,18 +2,31 @@
 import { useEffect, useRef } from "react";
 import type { Ace } from "ace-builds";
 
+export interface Annotation {
+  row: number; // 0-based, relative to `value`
+  column: number;
+  text: string;
+  type: "error" | "warning" | "info";
+}
+
 interface Props {
   value: string;
   readOnly: boolean;
   firstLine: number;
   onChange: (v: string) => void;
+  annotations?: Annotation[];
+  /** Move the cursor to this 0-based row; `seq` changes on every request so the same row can repeat. */
+  goTo?: { row: number; seq: number };
+  focus?: boolean;
 }
 
-export default function AceEditor({ value, readOnly, firstLine, onChange }: Props) {
+export default function AceEditor({ value, readOnly, firstLine, onChange, annotations, goTo, focus = true }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const editor = useRef<Ace.Editor | null>(null);
   const change = useRef(onChange);
   change.current = onChange;
+  const notes = useRef(annotations);
+  notes.current = annotations;
 
   useEffect(() => {
     let disposed = false;
@@ -44,7 +57,8 @@ export default function AceEditor({ value, readOnly, firstLine, onChange }: Prop
       ed.setReadOnly(readOnly);
       ed.session.on("change", () => change.current(ed.getValue()));
       editor.current = ed;
-      ed.focus();
+      ed.session.setAnnotations(notes.current ?? []);
+      if (focus) ed.focus();
     })();
     return () => {
       disposed = true;
@@ -60,6 +74,14 @@ export default function AceEditor({ value, readOnly, firstLine, onChange }: Prop
     if (ed && ed.getValue() !== value) ed.setValue(value, -1);
   }, [value]);
   useEffect(() => editor.current?.setReadOnly(readOnly), [readOnly]);
+  useEffect(() => editor.current?.session.setAnnotations(annotations ?? []), [annotations]);
+  useEffect(() => {
+    const ed = editor.current;
+    if (ed && goTo) {
+      ed.gotoLine(goTo.row + 1, 0, true);
+      ed.focus();
+    }
+  }, [goTo]);
 
   return <div ref={host} className="ace-host" aria-label="Source code" />;
 }

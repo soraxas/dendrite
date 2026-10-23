@@ -2,7 +2,7 @@
 // with the graph selection in a `sel` query param so it survives polling, reloads and links.
 import { useCallback, useSyncExternalStore } from "react";
 
-export type View = "home" | "dag" | "params" | "metrics" | "diff" | "lineage";
+export type View = "home" | "dag" | "code" | "params" | "metrics" | "diff" | "lineage";
 
 export interface Route {
   view: View;
@@ -19,7 +19,7 @@ export function parse(hash: string): Route {
   if (parts[0] === "exp" && parts[1]) {
     const sub = parts[2] as View | undefined;
     if (sub === "diff") return { view: "diff", exp: parts[1], other: parts[3], sel };
-    if (sub === "params" || sub === "metrics") return { view: sub, exp: parts[1], sel };
+    if (sub === "params" || sub === "metrics" || sub === "code") return { view: sub, exp: parts[1], sel };
     return { view: "dag", exp: parts[1], sel };
   }
   if (parts[0] === "artifact" && parts[1]) {
@@ -34,7 +34,7 @@ export function href(r: Route): string {
   if (r.view === "lineage" && r.artifact) path = `#/artifact/${enc(r.artifact)}${r.exp ? `/from/${enc(r.exp)}` : ""}`;
   else if (r.exp) {
     path = `#/exp/${enc(r.exp)}`;
-    if (r.view === "params" || r.view === "metrics") path += `/${r.view}`;
+    if (r.view === "params" || r.view === "metrics" || r.view === "code") path += `/${r.view}`;
     if (r.view === "diff" && r.other) path += `/diff/${enc(r.other)}`;
   }
   return r.sel ? `${path}?sel=${enc(r.sel)}` : path;

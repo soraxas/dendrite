@@ -45,3 +45,11 @@ export const usePlan = (id?: string) =>
     refetchInterval: 8000, // picks up code edits on disk (the server reloads changed modules)
     retry: (n, e) => !(e instanceof ApiError && e.status === 409) && n < 2,
   });
+
+export const useShape = (pipeline?: string) =>
+  useQuery({
+    queryKey: ["shape", pipeline],
+    queryFn: () => api.shape(pipeline!),
+    enabled: !!pipeline,
+    retry: (n, e) => !(e instanceof ApiError && e.status === 404) && n < 2,
+  });

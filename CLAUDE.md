@@ -30,6 +30,7 @@ DENDRITE_TEST_PG_URL=postgresql+psycopg://user:pw@host:port/db uv run pytest tes
 uv run python examples/recon.py            # demo: baseline + config fork + pinned fork (DEMO_SLEEP=2 to slow nodes)
 uv run dendrite ui --port 8454 --import examples.recon   # API + SPA; --import enables draft previews
 uv run dendrite run <exp> --import examples.recon        # run a draft made in the UI
+uv run dendrite check --import examples.recon            # static checks; exit 1 on errors
                                            # also: list | show | diff | dag | tree | lineage
 cd ui && npm run dev                       # hot-reloading UI, /api proxied to :8454 (Node 20+; UI work only)
 cd ui && npm run build                     # tsc type-check + vite build into src/dendrite/ui/dist (git-ignored)
@@ -100,7 +101,23 @@ The flow of a run spans several modules in `src/dendrite/`:
    - It is one permanent `sys.addaudithook`, idle unless the `_active` contextvar is set.
    - `task._compute` sets that contextvar around the step function only. It reports read-only opens of files under `Settings.project_root` (the cwd when the Lab is created), excluding the workdir, `DENDRITE_HOME`, store paths, interpreter prefixes and code files.
    - In `error` mode a violation fails the execution even if the step swallowed the exception.
-9. **`sources.py`.** Source snapshots of step functions.
+9. **`analysis.py`.** Static checks over `ast`. The analysed code is never executed and never feeds a signature.
+   - **`check_step(task)`** runs from `ArtifactTask.__init__`.
+     - Findings are emitted with `warnings.warn_explicit` as `StepDefinitionWarning`, located at the offending file:line, and stored on `task.diagnostics`.
+     - `ignore=` filters codes.
+     - `task._STEPS` registers every step, for `dendrite check`.
+   - **`pipeline_shape(source, resolve)`** is a def-use walk of the pipeline body.
+     - `resolve` maps a name to a module global (`fn.__globals__`), looked up lazily, because steps may be defined below the pipeline.
+     - `if`/`else` frames mark nodes `conditional`. A step in exclusive arms merges into one node whose conditions are the shared prefix.
+     - Loops and comprehensions mark nodes `repeated`.
+     - Non-step calls that receive pipeline values become `dynamic` nodes, except builtins and logging.
+     - Same-module helpers are expanded one level.
+   - **`Pipeline.shape(source=None)`** works on loaded code or unsaved text. Lines are relative to the text; `first_line` locates it in the file.
+   - **`Experiment.check()`** compares params and pins against the shape. `unknown-step` drops to a warning when the shape has dynamic regions.
+   - **Server.**
+     - `/api/pipelines/{name}/shape` (GET for loaded code, POST for unsaved text) calls `runtime.refresh_modules()` first. GET also saves the pipeline's source as a snapshot, so the Code view reuses `GET`/`PUT /api/sources/{hash}` for viewing and saving.
+     - Unsaved Code-view edits register in `ui/src/unsaved.ts`, and `App.tsx`'s `navigate` asks before switching view or experiment.
+10. **`sources.py`.** Source snapshots of step functions.
    - They live in `code_snapshots` / `execution_sources`, outside the signature, so they never change cache keys.
    - They are recorded when an execution starts.
    - `disk_status` reports `same` only when the snapshot text occurs exactly once in the recorded file.

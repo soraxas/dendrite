@@ -45,6 +45,27 @@ class Pipeline:
     def __repr__(self) -> str:
         return f"<pipeline {self.name}>"
 
+    def source_snapshot(self) -> dict[str, Any] | None:
+        from .task import source_snapshot
+
+        return source_snapshot(self.fn)
+
+    def shape(self, source: str | None = None) -> dict[str, Any]:
+        """Static dataflow graph of the body (or of ``source``, e.g. unsaved edits), never run.
+
+        Names resolve against the loaded module, so steps are recognised even in edited text.
+        Lines are relative to the analysed source; ``first_line``/``file`` locate it on disk.
+        """
+        from . import analysis
+
+        snap = self.source_snapshot()
+        text = source if source is not None else (snap or {}).get("source", "")
+        g = self.fn.__globals__
+        out = analysis.pipeline_shape(text, lambda n: g.get(n), module=self.fn.__module__)
+        out["file"] = (snap or {}).get("file")
+        out["first_line"] = (snap or {}).get("line") or 1
+        return out
+
     def _body(self, run_id: str, inputs: dict[str, Any]) -> Any:
         from prefect.futures import wait
         from prefect.runtime import flow_run
@@ -300,6 +321,12 @@ class Lab:
         return out
 
 
+def analysis_suggest(name: str, options: list[str]) -> str:
+    from .analysis import _suggest
+
+    return _suggest(name, options)
+
+
 def _resolve_pipeline(p: "Pipeline | str") -> "Pipeline":
     if isinstance(p, Pipeline):
         return p
@@ -469,6 +496,27 @@ class Experiment:
             self.lab.db.delete_draft(self.id)
         except ValueError as e:
             raise NotADraft(str(e)) from None
+
+    # -- checking ------------------------------------------------------------------
+    def check(self) -> list[dict[str, Any]]:
+        """Config problems found before running: params/pins naming steps or args that don't exist."""
+        shape = self.pipeline.shape()
+        steps = shape.pop("_steps")
+        severity = "warning" if shape["dynamic"] else "error"  # a dynamic region may hide the step
+        found = []
+        for kind, config in (("params", self.params), ("pins", self.pins)):
+            for node, values in config.items():
+                if node not in steps:
+                    hint = analysis_suggest(node, list(steps))
+                    found.append({"code": "unknown-step", "severity": severity, "step": node,
+                                  "message": f"{kind} name step {node!r}, which the pipeline doesn't call{hint}"})
+                elif kind == "params":
+                    sig = steps[node].signature.parameters
+                    for arg in values:
+                        if arg not in sig:
+                            found.append({"code": "unknown-param", "severity": "error", "step": node,
+                                          "message": f"{node} has no parameter {arg!r}{analysis_suggest(arg, list(sig))}"})
+        return found
 
     # -- planning ------------------------------------------------------------------
     def plan(self) -> dict[str, Any]:

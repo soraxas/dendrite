@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from . import runtime
 from .experiment import _PIPELINES, Experiment, Lab, NotADraft, _ref_dict
 from .sources import SourceConflict, disk_status, write_source
 from .store import ArtifactRef
@@ -66,6 +67,10 @@ def _preview(lab: Lab, ref: ArtifactRef) -> dict[str, Any]:
 class SourceEdit(BaseModel):
     source: str
     file_sha: str
+
+
+class ShapeRequest(BaseModel):
+    source: str
 
 
 class ForkRequest(BaseModel):
@@ -157,6 +162,45 @@ def create_app(lab: Lab | None = None, ui_dir: Path = UI_DIR, allow_edit: bool =
         except NotADraft as e:
             raise HTTPException(409, str(e)) from None
         return {"deleted": exp_id}
+
+    def pipeline(name: str):
+        runtime.refresh_modules()  # a saved edit (here or on disk) reloads before it is shown
+        pipe = _PIPELINES.get(name)
+        if pipe is None:
+            raise HTTPException(
+                404,
+                {"code": "pipeline_not_imported", "message": f"pipeline {name!r} is not loaded; restart with `dendrite ui --import <module that defines it>`"},
+            )
+        return pipe
+
+    def shape_response(pipe, source: str | None = None) -> dict[str, Any]:
+        out = pipe.shape(source)
+        steps = out.pop("_steps")
+        # Step-definition findings for the steps this pipeline calls, located in their files.
+        out["step_diagnostics"] = [d.as_dict() for s in steps.values() for d in getattr(s, "diagnostics", [])]
+        out["display"] = _display_path(out["file"])
+        return out
+
+    @app.get("/api/pipelines/{name}/shape")
+    def shape(name: str) -> dict[str, Any]:
+        pipe = pipeline(name)
+        out = shape_response(pipe)
+        snap = pipe.source_snapshot()
+        if snap:
+            lab.db.save_snapshot(snap)  # so /api/sources/{hash} can show and (if allowed) save it
+        out["source_hash"] = snap["hash"] if snap else None
+        return out
+
+    @app.post("/api/pipelines/{name}/shape")
+    def shape_of_text(name: str, req: ShapeRequest) -> dict[str, Any]:
+        """Shape and diagnostics for edited source; parsed only, never executed or saved."""
+        return shape_response(pipeline(name), req.source)
+
+    @app.get("/api/experiments/{exp_id}/check")
+    def check(exp_id: str) -> list[dict[str, Any]]:
+        exp = _experiment(lab, exp_id)
+        pipeline(exp.pipeline_name)
+        return exp.check()
 
     @app.get("/api/experiments/{exp_id}/plan")
     def plan(exp_id: str) -> dict[str, Any]:

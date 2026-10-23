@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Dag, Lineage, PlanNode } from "./api";
 import { ArtifactDetailPanel, ExecutionDetailPanel, ExperimentDetail, NodeDetail, type Nav } from "./components/DetailPanel";
+import { CodeView } from "./components/CodeView";
 import { DagView } from "./components/DagView";
 import { DraftBar, DraftStepEditor } from "./components/Draft";
 import { LineageView } from "./components/LineageView";
@@ -8,7 +9,8 @@ import { DiffPage, MetricsPage, ParamsPage } from "./components/Pages";
 import { Sidebar } from "./components/Sidebar";
 import { Toolbar } from "./components/Toolbar";
 import { useDag, useDiff, useExperiments, useInfo, useLineage, usePlan } from "./queries";
-import { splitSel, useRoute, type Route } from "./router";
+import { parse, splitSel, useRoute, type Route } from "./router";
+import { confirmLeave } from "./unsaved";
 
 /** Best human label for an artifact hash within the current DAG: the output (or input) name. */
 function dagLabel(dag: Dag | undefined, hash: string): string | undefined {
@@ -45,7 +47,16 @@ function readCollapsed(): boolean {
 }
 
 export function App() {
-  const [route, navigate] = useRoute();
+  const [route, navigateTo] = useRoute();
+  // Switching view or experiment asks first when the Code view holds unsaved edits.
+  const navigate = useCallback(
+    (r: Route, opts?: { replace?: boolean }) => {
+      const current = parse(location.hash);
+      if ((r.view !== current.view || r.exp !== current.exp) && !confirmLeave()) return;
+      navigateTo(r, opts);
+    },
+    [navigateTo],
+  );
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const toggleSidebar = useCallback(() => {
     setCollapsed((c) => {
@@ -148,6 +159,7 @@ export function App() {
     );
     graphSel = kind === "node" ? id : kind === "input" ? `input:${id}` : kind === "artifact" && id ? ownerOf(dag, id) : undefined;
     if (route.view === "params") body = <ParamsPage dag={dag} onArtifact={nav.selectArtifact} />;
+    else if (route.view === "code") body = <CodeView key={dag.experiment.pipeline} pipeline={dag.experiment.pipeline} dag={dag} canEdit={canEdit} />;
     else if (route.view === "metrics") body = <MetricsPage dag={dag} />;
     else if (route.view === "diff") body = <DiffPage diff={diffQ.data} nameOf={nameOf} openExp={nav.openExp} />;
     else

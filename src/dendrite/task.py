@@ -22,7 +22,9 @@ import textwrap
 import threading
 import time
 import traceback
+import typing
 import uuid
+import warnings
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence
@@ -30,7 +32,7 @@ from typing import Any, Callable, Iterable, Sequence
 from prefect import get_run_logger, task
 from prefect.cache_policies import NO_CACHE
 
-from . import guard, runtime
+from . import analysis, guard, runtime
 from .hashing import canonical_json, sha256_bytes, sha256_json
 from .store import PENDING, ArtifactRef
 
@@ -195,11 +197,13 @@ class ArtifactTask:
         packages: Sequence[str] = (),
         hash_source: bool = True,
         lease_ttl: float = 300.0,
+        ignore: Sequence[str] = (),
         **task_options: Any,
     ):
         self.fn = fn
         self.name = name or fn.__name__
-        self.outputs = tuple(outputs) if outputs else ("output",)
+        self.ignore = tuple(ignore)
+        self.outputs = tuple(outputs) if outputs else _outputs_from_annotation(fn)
         if len(set(self.outputs)) != len(self.outputs):
             raise ValueError(f"duplicate output names in {self.outputs}")
         self.version = str(version)
@@ -216,6 +220,13 @@ class ArtifactTask:
         self._task_options = task_options
         functools.update_wrapper(self, fn)
         runtime.track_module(fn.__module__)
+        _STEPS[(fn.__module__, self.name)] = self
+        self.diagnostics = analysis.check_step(self)
+        for d in self.diagnostics:
+            warnings.warn_explicit(
+                f"{self.name}: {d.message} [{d.code}]", analysis.StepDefinitionWarning,
+                d.file or "<unknown>", d.file_line or 0, module=fn.__module__,
+            )
 
         node = self
 
@@ -231,6 +242,14 @@ class ArtifactTask:
     def __repr__(self) -> str:
         return f"<artifact_task {self.name} outputs={list(self.outputs)} v{self.version}>"
 
+    def override(self, **params: Any) -> dict[str, Any]:
+        """``{"<step>.<param>": value}`` for ``fork``/``update``/``create``, with names checked now."""
+        known = list(self.signature.parameters)
+        for k in params:
+            if k not in self.signature.parameters:
+                raise TypeError(f"{self.name} has no parameter {k!r}{analysis._suggest(k, known)}")
+        return {f"{self.name}.{k}": v for k, v in params.items()}
+
     def with_options(self, **overrides: Any) -> "ArtifactTask":
         opts = dict(
             outputs=self.outputs,
@@ -240,6 +259,7 @@ class ArtifactTask:
             packages=self.packages,
             hash_source=self.hash_source,
             lease_ttl=self.lease_ttl,
+            ignore=self.ignore,
             **self._task_options,
         )
         opts.update(overrides)
@@ -402,6 +422,8 @@ class ArtifactTask:
         return tuple(refs[o] for o in self.outputs)
 
     def _normalise(self, result: Any) -> dict[str, Any]:
+        if isinstance(result, tuple) and getattr(result, "_fields", None) == self.outputs:
+            return dict(zip(self.outputs, result))  # a NamedTuple return type declared the outputs
         if len(self.outputs) == 1 and not (isinstance(result, dict) and set(result) == set(self.outputs)):
             return {self.outputs[0]: result}
         if isinstance(result, dict):
@@ -574,6 +596,30 @@ class ArtifactTask:
         return refs, ctx.metrics
 
 
+_STEPS: dict[tuple[str, str], "ArtifactTask"] = {}  # (module, name) -> latest definition
+
+
+def _outputs_from_annotation(fn: Callable) -> tuple[str, ...]:
+    """Output names from a ``NamedTuple``/``TypedDict`` return annotation, else ``("output",)``."""
+    if "return" not in getattr(fn, "__annotations__", {}):
+        return ("output",)
+    try:
+        ret = typing.get_type_hints(fn).get("return")
+    except Exception as e:  # e.g. a forward reference defined later in the module
+        warnings.warn(
+            f"{fn.__name__}: couldn't resolve its return annotation ({e}); declaring a single output "
+            "named 'output' [unresolved-return-type]",
+            analysis.StepDefinitionWarning,
+            stacklevel=4,
+        )
+        return ("output",)
+    if isinstance(ret, type) and issubclass(ret, tuple) and getattr(ret, "_fields", None):
+        return tuple(ret._fields)
+    if typing.is_typeddict(ret):
+        return tuple(ret.__annotations__)
+    return ("output",)
+
+
 def _duration(row: dict | None) -> float | None:
     if row and row.get("finished_at") and row.get("started_at"):
         return row["finished_at"] - row["started_at"]
@@ -611,6 +657,7 @@ def artifact_task(
     packages: Sequence[str] = (),
     hash_source: bool = True,
     lease_ttl: float = 300.0,
+    ignore: Sequence[str] = (),
     **task_options: Any,
 ):
     """Declare a lineage-tracked, globally cached pipeline node.
@@ -619,7 +666,9 @@ def artifact_task(
     local ``Path`` – or the original object for value artifacts – before the function
     runs). All other arguments are parameters and can be overridden per experiment via
     ``params={"<node>": {"<arg>": value}}``. Return a ``Path`` (file or directory) or any
-    picklable value per declared output. Extra keyword arguments go to ``prefect.task``.
+    picklable value per declared output. Without ``outputs=``, a ``NamedTuple`` or ``TypedDict``
+    return annotation names them. ``ignore`` silences static-check codes (see analysis.py) for
+    this step. Extra keyword arguments go to ``prefect.task``.
     """
 
     def wrap(f: Callable) -> ArtifactTask:
@@ -632,6 +681,7 @@ def artifact_task(
             packages=packages,
             hash_source=hash_source,
             lease_ttl=lease_ttl,
+            ignore=ignore,
             **task_options,
         )
 
