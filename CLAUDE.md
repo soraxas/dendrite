@@ -28,7 +28,9 @@ uv run pytest tests/test_lineage.py::test_artifact_fork_pins_node   # single tes
 uv run pytest -k pin                       # by keyword
 DENDRITE_TEST_PG_URL=postgresql+psycopg://user:pw@host:port/db uv run pytest tests/test_postgres.py
 uv run python examples/recon.py            # demo: baseline + config fork + pinned fork (DEMO_SLEEP=2 to slow nodes)
-uv run dendrite ui --port 8454             # API + SPA; also: list | show | diff | dag | tree | lineage
+uv run dendrite ui --port 8454 --import examples.recon   # API + SPA; --import enables draft previews
+uv run dendrite run <exp> --import examples.recon        # run a draft made in the UI
+                                           # also: list | show | diff | dag | tree | lineage
 cd ui && npm run dev                       # hot-reloading UI, /api proxied to :8454 (Node 20+; UI work only)
 cd ui && npm run build                     # tsc type-check + vite build into src/dendrite/ui/dist (git-ignored)
 scripts/build-ui.sh && uv build            # release: the build guard fails a wheel/sdist without the bundle
@@ -42,6 +44,7 @@ Configuration env vars:
 - `DENDRITE_DB_URL` (SQLite by default, or `postgresql+psycopg://…`)
 - `DENDRITE_STORE_URL` (a directory, or an fsspec URL such as `s3://bucket/prefix`)
 - `DENDRITE_ENV`, which is mixed into every signature (for example an image digest)
+- `DENDRITE_CHECK_READS`: `warn` (default), `error` or `off`, for the undeclared-read guard
 
 ## Architecture
 
@@ -80,7 +83,23 @@ The flow of a run spans several modules in `src/dendrite/`:
    - **Labels:** lineage artifact labels (`label`, `producer_node`, `role`) and structured usage `roles` are computed in Python (`Lab.lineage`, `Metadata.experiments_using_artifact`), not in the UI.
    - **Headless screenshots:** headless Chrome's `--virtual-time-budget` stalls the ELK worker. Use `uv run python scripts/screenshot.py OUT.png URL [wait_s]` instead, which captures in real time over CDP and prints console errors.
 6. **`viz.py` / `cli.py`.** Mermaid renderers and the argparse CLI.
-7. **`sources.py`.** Source snapshots of step functions.
+7. **Drafts and plans.**
+   - **Drafts.** `status='draft'` is the only editable experiment state.
+     - `Experiment.update()` / `discard()` and the draft→running transition in `run()` are compare-and-set updates (`Metadata.update_experiment_if`).
+     - There is no schema change: `draft` is just a status value.
+   - **Plans.** `Experiment.plan()` runs `pipe.fn` directly, without the Prefect flow or `_body`, under a `RunState(plan=True)`.
+     - `ArtifactTask.__call__`/`submit` branch to `_plan` *before* `_enqueue`, so nothing is written.
+     - `_plan` uses the same `_split`/`spec`/`sha256_json` as `_execute`, then stops at `_valid_hit`.
+     - A miss returns placeholder refs (`kind="pending"`, `hash="plan:<node>.<out>"`). Downstream steps become `run`/`upstream`.
+     - `store.load` on a placeholder raises `PlanIncomplete`, which the plan reports as `blocked_by`.
+   - **Freshness.** `runtime.refresh_modules()` reloads tracked pipeline/step modules whose mtime changed. Without it, a long-lived server would plan with stale code fingerprints.
+   - **API.** The draft and plan endpoints live in `server.py`. Planning needs the pipeline module imported (`--import`); otherwise `/plan` answers 409 `pipeline_not_imported`.
+   - **Float params.** JSON can't distinguish `1` from `1.0`, so `PATCH` takes a `floats` list. The UI's `components/Draft.tsx` sends float-typed keys in it.
+8. **`guard.py`.** The undeclared-read tripwire.
+   - It is one permanent `sys.addaudithook`, idle unless the `_active` contextvar is set.
+   - `task._compute` sets that contextvar around the step function only. It reports read-only opens of files under `Settings.project_root` (the cwd when the Lab is created), excluding the workdir, `DENDRITE_HOME`, store paths, interpreter prefixes and code files.
+   - In `error` mode a violation fails the execution even if the step swallowed the exception.
+9. **`sources.py`.** Source snapshots of step functions.
    - They live in `code_snapshots` / `execution_sources`, outside the signature, so they never change cache keys.
    - They are recorded when an execution starts.
    - `disk_status` reports `same` only when the snapshot text occurs exactly once in the recorded file.
@@ -93,13 +112,20 @@ The flow of a run spans several modules in `src/dendrite/`:
 - Only params a node actually consumes are hashed.
 - Only `ArtifactRef`s cross Prefect task boundaries. Never pass large data through Prefect.
 - A cache hit must `store.verify()` its outputs, including every member of a directory manifest. A missing blob means recompute.
-- Experiment config (params, inputs, pins) is frozen at creation. Re-running only replaces node_runs.
+- Experiment config (params, inputs, pins) is frozen at its first run. Before that, only `draft` experiments are editable. Re-running only replaces node_runs.
+- **Plans are side-effect free.** A plan never writes node_runs, executions, blobs or leases, never touches Prefect, and never calls step functions. `tests/test_plan.py::test_plan_writes_nothing` checks this.
+- **Step contract** (README, "The step contract"):
+  - The pipeline body only wires steps together.
+  - Step outputs depend only on what the signature hashes.
+  - Params are JSON values, hashed exactly, so `1` and `1.0` give different signatures.
 
 ## Known limitations
 
 - **In-process only.** Tasks find their experiment through the in-process `runtime._RUNS` registry. Prefect deployments, remote workers, and process, Dask or Ray task runners don't work yet.
 - **Narrow code fingerprint.** The fingerprint covers only the node function's own source (`inspect.getsource`). Callers bump `version=` when helper functions change.
 - **Pickles.** `value` artifacts are pickles, and `load()` and the UI preview unpickle them.
+- **The read guard is best-effort.** It sees only Python-level `open`/`os.open`. It misses C `fopen`, subprocesses, threads started by the step, and anything outside the project directory.
+- **Plans can be incomplete.** They can't predict branching on the *contents* of a result that hasn't been computed. Downstream `run`/`upstream` is an upper bound: an unchanged upstream output still lets downstream reuse.
 
 ## Tests
 
@@ -113,6 +139,7 @@ Spec-driven changes live in `openspec/`:
 
 - `openspec/config.yaml` holds project context.
 - `openspec/specs/` holds the baseline specs from the archived `add-artifact-lineage` change.
+- `openspec/changes/draft-experiments/` is drafts, plans and the step contract (phase 1 of the editing UI).
 - `openspec/changes/react-flow-ui/` is the React Flow UI change. Archive it with `openspec archive react-flow-ui` once it has been reviewed.
 - Use `/opsx:propose`, `/opsx:apply` and `/opsx:archive` for new work.
 - Validate with `openspec validate <change>`.

@@ -110,6 +110,21 @@ def describe_roles(roles: list[dict]) -> str:
     return " · ".join(parts)
 
 
+def cmd_run(lab: Lab, args) -> None:
+    for mod in args.imports or []:
+        importlib.import_module(mod)
+    exp = lab.get(args.experiment)
+    if exp.status not in ("draft", "created"):
+        sys.exit(f"error: {exp.id} is {exp.status}; fork it to run a variation")
+    print(f"running {exp.name or exp.id} ({exp.id})")
+    try:
+        exp.run()
+    finally:
+        for nr in exp.node_runs():
+            print(f"  {nr['node']:<24} {nr['status']}")
+    print(exp.refresh().status)
+
+
 def cmd_ui(lab: Lab, args) -> None:
     import uvicorn
 
@@ -149,6 +164,9 @@ def main(argv: list[str] | None = None) -> None:
     s = sub.add_parser("lineage", help="provenance of an artifact (hash or unique prefix)")
     s.add_argument("artifact")
     s.add_argument("--mermaid", action="store_true")
+    s = sub.add_parser("run", help="run a draft (or never-run) experiment in this process")
+    s.add_argument("experiment")
+    s.add_argument("--import", dest="imports", action="append", help="module to import (registers pipelines)")
     s = sub.add_parser("ui", help="serve the lineage web UI")
     s.add_argument("--host", default="127.0.0.1")
     s.add_argument("--port", type=int, default=8454)

@@ -149,10 +149,42 @@ Lab(store_url="s3://lineage/prod", storage_options={"endpoint_url": "http://mini
 - an experiment diff: params, per-node reuse, and metric deltas
 - code: every run records a snapshot of its step's source, with file and line. You can view it in an editor. While the file still contains exactly that code, you can also edit and save it back. Saving asks for confirmation, refuses if the file changed underneath you, and is only enabled when `dendrite ui` runs on localhost (or with `--allow-edit`).
 
+### Drafts: change an experiment before it runs
+
+"Fork…" on any experiment creates a **draft**, the one kind of experiment you can still change.
+
+- **Editing.** In draft mode you change parameters on a step, or freeze a step to the parent's result. Edits save as you go.
+- **Preview.** Every step shows what running the draft would do before anything runs:
+  - **Reused**, and from which experiment
+  - **Will run**, with the reason (its parameters, code or inputs changed, or an earlier step will run) and a time estimate from earlier runs
+  - **Frozen**
+- **Summary.** The toolbar adds it up, e.g. "Will run 2 of 4 steps · about 14 min".
+- **Running.** Run the draft with the command shown in the bar. Running is what freezes its settings.
+
+```bash
+dendrite ui --import my_project.pipelines     # the server must load your pipeline code to preview drafts
+dendrite run e-1234abcd --import my_project.pipelines
+```
+
+The same is available from Python:
+
+```python
+d = base.fork({"train_splats.lr": 2e-3}, draft=True)
+d.update({"train_splats.iterations": 90_000}, reset=["train_splats.lr"])
+d.plan()["totals"]   # {'steps': 4, 'run': 2, 'reuse': 2, 'frozen': 0, 'estimate': 1820.0, ...}
+d.run()              # freezes the draft and runs it
+```
+
+`plan()` runs your pipeline function with steps that stop after the cache check. Predictions therefore use exactly the cache keys a real run would. A plan never executes a step or writes anything.
+
+A plan has two limits:
+- **It's an upper bound.** A step downstream of one that will run is shown as "will run". If the earlier step turns out to produce the same output, it is reused after all.
+- **It can stop early.** If the pipeline function branches on the *contents* of a result that doesn't exist yet, the preview stops there and says so.
+
 The built UI ships inside the wheel, so installing and running dendrite never needs Node.js. If the bundle hasn't been built (for example in a fresh clone), `dendrite ui` falls back to the older single-file page and says so. `/api/info` reports which UI is active.
 
 ```bash
-dendrite list | show EXP | diff A B | dag EXP | tree | lineage HASH [--mermaid] | ui
+dendrite list | show EXP | diff A B | dag EXP | tree | lineage HASH [--mermaid] | run EXP | ui
 ```
 
 Each run also publishes a Prefect markdown artifact (`dendrite-<exp id>`) with the node table and a Mermaid DAG, so the lineage is visible in the Prefect UI too.

@@ -75,3 +75,31 @@ def toy_parallel(src):
 @pipeline(name="toy_sample")
 def toy_sample(src):
     return sample(featurize(extract(src)))
+
+
+@pipeline(name="toy_branch")
+def toy_branch(src):
+    from dendrite import runtime
+
+    feats = featurize(extract(src))
+    if runtime.active().lab.load(feats):  # branches on a result's contents
+        train(feats)
+
+
+@artifact_task(outputs=["text"])
+def read_extra(src: Path, extra: str = "", swallow: bool = False) -> str:
+    """Reads ``extra`` without declaring it (the guard should notice) and its declared input."""
+    text = src.read_text()
+    if extra:
+        try:
+            text += Path(extra).read_text()
+        except Exception:
+            if not swallow:
+                raise
+    (workdir() / "scratch.txt").write_text("x")
+    return text + (workdir() / "scratch.txt").read_text()
+
+
+@pipeline(name="toy_reads")
+def toy_reads(src):
+    return read_extra(src)

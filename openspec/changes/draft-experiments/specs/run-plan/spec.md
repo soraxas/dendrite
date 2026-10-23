@@ -21,7 +21,7 @@ Planning SHALL NOT write node_runs, executions, execution edges, metrics, leases
 ### Requirement: Outcomes, reasons and estimates
 Each planned step SHALL report:
 - `plan`: one of `reuse`, `run` or `frozen`
-- for `run`, a `reason`: one of `code`, `params`, `inputs`, `env`, `upstream`, `new` or `missing_blob`
+- for `run`, a `reason`: one of `code`, `params`, `inputs`, `env`, `upstream`, `new`, `missing_blob` or `uncached` (the step is declared `cache=False`)
 - an `estimate`, the duration of the most relevant previous successful execution of the same op, or null
 - a `param_schema` listing the step's editable params with their effective and inherited values
 

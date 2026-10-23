@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import importlib
+import os
+import sys
 import threading
 import uuid
 from contextvars import ContextVar
@@ -20,6 +23,12 @@ class RunState:
     called: set[str] = field(default_factory=set)
     futures: list[Any] = field(default_factory=list)
     lock: threading.Lock = field(default_factory=threading.Lock)
+    # Plan mode: steps stop after the cache check and append their predicted outcome here.
+    plan: bool = False
+    planned: list[dict[str, Any]] = field(default_factory=list)
+    refs: dict[str, Any] = field(default_factory=dict)  # hash -> ArtifactRef seen while planning
+    parent_runs: dict[str, dict[str, Any]] = field(default_factory=dict)  # node -> parent's node_run
+    parent_params: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     @property
     def lab(self) -> "Lab":
@@ -49,8 +58,55 @@ _active_run: ContextVar[str | None] = ContextVar("dendrite_active_run", default=
 _exec: ContextVar[ExecContext | None] = ContextVar("dendrite_exec", default=None)
 
 
-def register(experiment: "Experiment") -> RunState:
-    state = RunState(run_id=uuid.uuid4().hex, experiment=experiment)
+# Modules that define pipelines/steps, with the source mtime they were imported at. A long-lived
+# process (the UI server) reloads them before planning so code fingerprints match a new run.
+_MODULES: dict[str, float] = {}
+_PIPELINE_MODULES: set[str] = set()
+_RELOAD_LOCK = threading.Lock()  # the UI server plans on worker threads
+
+
+def _mtime(name: str) -> float | None:
+    file = getattr(sys.modules.get(name), "__file__", None)
+    try:
+        return os.stat(file).st_mtime if file else None
+    except OSError:
+        return None
+
+
+def track_module(name: str, pipeline: bool = False) -> None:
+    if name == "__main__":
+        return  # can't be reloaded; scripts keep the code they started with
+    if name not in _MODULES:
+        t = _mtime(name)
+        if t is not None:
+            _MODULES[name] = t
+    if pipeline:
+        _PIPELINE_MODULES.add(name)
+
+
+def refresh_modules() -> str | None:
+    """Reload tracked modules whose source changed (then every pipeline module, since they
+    hold references to step objects). Returns an error message if a reload failed."""
+    with _RELOAD_LOCK:
+        return _refresh()
+
+
+def _refresh() -> str | None:
+    changed = [m for m, t in _MODULES.items() if m in sys.modules and _mtime(m) not in (None, t)]
+    if not changed:
+        return None
+    order = [m for m in changed if m not in _PIPELINE_MODULES] + sorted(_PIPELINE_MODULES & set(sys.modules))
+    for name in dict.fromkeys(order):
+        try:
+            importlib.reload(sys.modules[name])
+        except Exception as e:  # keep whatever was loaded; retried on the next plan
+            return f"reloading {name} failed: {type(e).__name__}: {e}"
+        _MODULES[name] = _mtime(name) or _MODULES[name]
+    return None
+
+
+def register(experiment: "Experiment", plan: bool = False) -> RunState:
+    state = RunState(run_id=uuid.uuid4().hex, experiment=experiment, plan=plan)
     _RUNS[state.run_id] = state
     return state
 

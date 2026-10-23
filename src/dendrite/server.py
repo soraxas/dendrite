@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from .experiment import Experiment, Lab, _ref_dict
+from .experiment import _PIPELINES, Experiment, Lab, NotADraft, _ref_dict
 from .sources import SourceConflict, disk_status, write_source
 from .store import ArtifactRef
 from .viz import lineage_mermaid, mermaid, tree_mermaid
@@ -68,6 +68,26 @@ class SourceEdit(BaseModel):
     file_sha: str
 
 
+class ForkRequest(BaseModel):
+    name: str | None = None
+
+
+class DraftEdit(BaseModel):
+    """Values are typed JSON and hashed exactly, so 30000 and 30000.0 are different params."""
+
+    params: dict[str, Any] | None = None  # "node.arg" -> value
+    reset: list[str] = []  # "node.arg" keys to return to the parent's value
+    pins: dict[str, str | None] | None = None  # node -> "parent" (freeze to parent's result) | None
+    inputs: dict[str, str] | None = None  # input name -> artifact hash or prefix
+    name: str | None = None
+    # JSON (and JavaScript) can't tell 1 from 1.0; keys listed here are float params, so whole
+    # numbers sent for them are stored as floats and keep the signature a run would compute.
+    floats: list[str] = []
+
+
+EDIT_DISABLED = "editing is disabled; start `dendrite ui` on localhost or with --allow-edit"
+
+
 def _display_path(file: str | None) -> str | None:
     """Path relative to the server's working directory when it lives under it."""
     if not file:
@@ -87,7 +107,73 @@ def create_app(lab: Lab | None = None, ui_dir: Path = UI_DIR, allow_edit: bool =
 
     @app.get("/api/info")
     def info() -> dict[str, Any]:
-        return {"db": lab.db.engine.url.render_as_string(hide_password=True), "store": lab.store.url, "ui": mode, "edit": allow_edit}
+        return {
+            "db": lab.db.engine.url.render_as_string(hide_password=True),
+            "store": lab.store.url,
+            "ui": mode,
+            "edit": allow_edit,
+            "plan": bool(_PIPELINES),
+            "pipelines": sorted(_PIPELINES),
+        }
+
+    def require_edit() -> None:
+        if not allow_edit:
+            raise HTTPException(403, EDIT_DISABLED)
+
+    @app.post("/api/experiments/{exp_id}/fork")
+    def fork(exp_id: str, req: ForkRequest) -> dict[str, Any]:
+        require_edit()
+        return _experiment(lab, exp_id).fork(draft=True, name=req.name or None).summary()
+
+    @app.patch("/api/experiments/{exp_id}")
+    def edit_draft(exp_id: str, req: DraftEdit) -> dict[str, Any]:
+        require_edit()
+        exp = _experiment(lab, exp_id)
+        pin: dict[str, Any] = {}
+        for node, how in (req.pins or {}).items():
+            if how is None:
+                pin[node] = None
+            elif how == "parent" and exp.parent is not None:
+                pin[node] = exp.parent
+            else:
+                raise HTTPException(400, f"pin for {node!r} must be 'parent' (with a parent experiment) or null")
+        params = dict(req.params or {})
+        for key in req.floats:
+            if isinstance(params.get(key), int) and not isinstance(params[key], bool):
+                params[key] = float(params[key])
+        try:
+            inputs = {k: _artifact(lab, v) for k, v in (req.inputs or {}).items()}
+            return exp.update(params, pin=pin, inputs=inputs, name=req.name, reset=req.reset).summary()
+        except NotADraft as e:
+            raise HTTPException(409, str(e)) from None
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from None
+
+    @app.delete("/api/experiments/{exp_id}")
+    def discard(exp_id: str) -> dict[str, Any]:
+        require_edit()
+        try:
+            _experiment(lab, exp_id).discard()
+        except NotADraft as e:
+            raise HTTPException(409, str(e)) from None
+        return {"deleted": exp_id}
+
+    @app.get("/api/experiments/{exp_id}/plan")
+    def plan(exp_id: str) -> dict[str, Any]:
+        exp = _experiment(lab, exp_id)
+        if exp.pipeline_name not in _PIPELINES:
+            raise HTTPException(
+                409,
+                {
+                    "code": "pipeline_not_imported",
+                    "message": f"pipeline {exp.pipeline_name!r} is not loaded; restart with "
+                    f"`dendrite ui --import <module that defines it>` to plan and edit",
+                },
+            )
+        out = exp.plan()
+        module = _PIPELINES[exp.pipeline_name].fn.__module__
+        out["module"] = None if module == "__main__" else module
+        return out
 
     @app.get("/api/experiments")
     def experiments() -> list[dict[str, Any]]:
@@ -168,8 +254,7 @@ def create_app(lab: Lab | None = None, ui_dir: Path = UI_DIR, allow_edit: bool =
 
     @app.put("/api/sources/{source_hash}")
     def save_source(source_hash: str, edit: SourceEdit) -> dict[str, Any]:
-        if not allow_edit:
-            raise HTTPException(403, "editing is disabled; start `dendrite ui` on localhost or with --allow-edit")
+        require_edit()
         snap = lab.db.snapshot(source_hash)
         if snap is None:
             raise HTTPException(404, f"no source snapshot {source_hash!r}")

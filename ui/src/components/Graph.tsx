@@ -95,7 +95,7 @@ interface Props {
   onSelect: (id: string) => void;
   legend: ReactNode;
   /** Lineage gets its own canvas look so it's obvious the graph no longer shows one experiment. */
-  variant?: "pipeline" | "lineage";
+  variant?: "pipeline" | "lineage" | "draft";
 }
 
 const MIN_LEGIBLE_ZOOM = 0.65;
@@ -195,6 +195,8 @@ function Canvas({ nodes, edges, nodeTypes, selectedId, focusId, onSelect, legend
       >
         {variant === "lineage" ? (
           <Background variant={BackgroundVariant.Cross} gap={28} size={6} color="var(--lineage-grid)" bgColor="var(--lineage-bg)" />
+        ) : variant === "draft" ? (
+          <Background variant={BackgroundVariant.Lines} gap={28} size={1} color="var(--draft-grid)" bgColor="var(--draft-bg)" />
         ) : (
           <Background variant={BackgroundVariant.Dots} gap={22} size={1.2} color="var(--line-strong)" />
         )}

@@ -70,7 +70,7 @@ The UI server is long-lived, and with `--import` it holds the user's pipeline mo
 
 Each node adds:
 - `plan`: `reuse | run | frozen`
-- `reason`: `code | params | inputs | env | upstream | new | missing_blob`
+- `reason`: `code | params | inputs | env | upstream | new | missing_blob | uncached`
 - `estimate`
 - `reuse_from`: `{execution_id, experiment_id, duration}`
 - `param_schema`
@@ -94,7 +94,7 @@ The schema needs the module to be imported, and so does planning. So the schema 
 `ArtifactTask.code` is computed once at import, so a long-lived server would plan with old fingerprints after a code edit. That would show "Reused" for a step the next run will recompute.
 - Before each plan, `plan_lab` checks the mtimes of the source files of the imported pipeline modules.
 - If any changed, it calls `importlib.reload` on the changed modules, step modules first, then the pipeline module. This re-registers `_PIPELINES` and the tasks.
-- The source editor's `PUT /api/sources/{hash}` uses the same check.
+- Every plan request runs the check first, so a save from the source editor is picked up on the next plan.
 
 *Alternative:* recompute `code_fingerprint(fn)` on every plan. Rejected because it misses edits that add or remove steps in the pipeline body.
 
@@ -102,7 +102,7 @@ The schema needs the module to be imported, and so does planning. So the schema 
 `canonical_json` distinguishes `30000`, `30000.0` and `"30000"`, so they give three different signatures. Because of that:
 - The API accepts and returns typed JSON values.
 - The UI form turns input into the `json_type` from the schema: integers stay integers, and floats only appear when the user types a decimal.
-- Edits arrive as dotted overrides through the existing `_apply_overrides`, and `{"node.arg": null}` with `reset: true` removes an override.
+- Edits arrive as dotted overrides through the existing `_apply_overrides`. A separate `reset: ["node.arg"]` list returns a key to the parent's value, or drops the override when the parent has none.
 - The required test: re-save every param unchanged, and the plan must still be all-reuse.
 
 ### D7. Endpoints, gated like source editing
@@ -111,7 +111,7 @@ Every endpoint that changes something answers 403 unless `create_app(allow_edit=
 | Endpoint | Behaviour |
 |---|---|
 | `POST /api/experiments/{id}/fork` | Body `{name?}`. Creates a draft whose parent is `{id}`, with the same config. |
-| `PATCH /api/experiments/{id}` | Body `{params?, pins?, inputs?, name?}`. Edits a draft; 409 if it isn't one. `pins` maps a node either to `"parent"` (freeze it to the parent's outputs) or to `null` (unfreeze). |
+| `PATCH /api/experiments/{id}` | Body `{params?, reset?, floats?, pins?, inputs?, name?}`. `reset` lists `node.arg` keys to return to the parent's value; `floats` lists keys whose whole-number values must be stored as floats (JSON can't tell `1` from `1.0`). Edits a draft; 409 if it isn't one. `pins` maps a node either to `"parent"` (freeze it to the parent's outputs) or to `null` (unfreeze). |
 | `DELETE /api/experiments/{id}` | Discards a draft; 409 if it isn't a draft or has children. |
 | `GET /api/experiments/{id}/plan` | Read-only, allowed for any experiment. Answers 409 with `code: "pipeline_not_imported"` and a hint when the module isn't loaded. |
 | `GET /api/info` | Adds `plan: bool`, which is true when at least one pipeline is importable. |
@@ -141,7 +141,7 @@ A process-wide `sys.addaudithook` is installed once, the first time a step execu
 - it isn't under the step's workdir
 - it isn't under a checkout path of a declared input
 - it isn't under `DENDRITE_HOME`, a virtualenv or site-packages
-- it isn't the `__file__` of an imported module
+- it isn't a code file (`.py`, `.pyc`, `.pyi`, `.so`, `.pyd`, `.pth`, `.dylib`), which covers imports and `inspect` reading source
 
 Each `(step, path)` pair is reported once. The `DENDRITE_CHECK_READS` setting picks the response:
 

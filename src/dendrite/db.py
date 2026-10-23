@@ -242,6 +242,29 @@ class Metadata:
         with self.tx() as conn:
             conn.execute(experiments.update().where(experiments.c.id == exp_id).values(**values))
 
+    def update_experiment_if(self, exp_id: str, when: str | Iterable[str], **values: Any) -> bool:
+        """Compare-and-set: update only while the experiment's status is ``when``. True if it did."""
+        allowed = [when] if isinstance(when, str) else list(when)
+        with self.tx() as conn:
+            res = conn.execute(
+                experiments.update()
+                .where(experiments.c.id == exp_id, experiments.c.status.in_(allowed))
+                .values(**values)
+            )
+        return res.rowcount == 1
+
+    def delete_draft(self, exp_id: str) -> None:
+        """Delete a draft that has no children; raises ``ValueError`` otherwise."""
+        with self.tx() as conn:
+            kids = conn.execute(
+                sa.select(sa.func.count()).select_from(experiments).where(experiments.c.parent_id == exp_id)
+            ).scalar_one()
+            if kids:
+                raise ValueError(f"experiment {exp_id} has {kids} fork(s); discard those first")
+            res = conn.execute(experiments.delete().where(experiments.c.id == exp_id, experiments.c.status == "draft"))
+            if res.rowcount != 1:
+                raise ValueError(f"experiment {exp_id} is not a draft")
+
     def experiment(self, key: str) -> dict | None:
         with self.ro() as conn:
             row = conn.execute(sa.select(experiments).where(experiments.c.id == key)).mappings().first()
@@ -351,6 +374,21 @@ class Metadata:
         return out
 
     # -- executions ----------------------------------------------------------------
+    def latest_success_for_node(self, node: str) -> dict | None:
+        """Most recent successful execution of ``node`` under any signature (for estimates)."""
+        with self.ro() as conn:
+            row = (
+                conn.execute(
+                    sa.select(executions)
+                    .where(executions.c.node == node, executions.c.status == "success")
+                    .order_by(executions.c.finished_at.desc())
+                    .limit(1)
+                )
+                .mappings()
+                .first()
+            )
+        return dict(row) if row else None
+
     def find_success(self, signature: str) -> list[tuple[dict, dict[str, ArtifactRef]]]:
         """Successful executions for ``signature``, newest first, with their output refs."""
         with self.ro() as conn:

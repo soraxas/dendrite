@@ -3,7 +3,7 @@
 ### Requirement: Draft and plan endpoints
 The HTTP API SHALL provide these endpoints:
 - `POST /api/experiments/{id}/fork` creates a draft.
-- `PATCH /api/experiments/{id}` edits a draft's params, pins, inputs or name. It answers 409 if the experiment isn't a draft.
+- `PATCH /api/experiments/{id}` edits a draft's params, pins, inputs or name. `reset` returns `node.arg` keys to the parent's value, and `floats` names keys whose whole-number values are stored as floats. It answers 409 if the experiment isn't a draft.
 - `DELETE /api/experiments/{id}` discards a draft. It answers 409 if the experiment isn't a draft or has children.
 - `GET /api/experiments/{id}/plan` returns the plan in the DAG's node and edge shape. It answers 409 with `code: "pipeline_not_imported"` when the pipeline module isn't loaded.
 

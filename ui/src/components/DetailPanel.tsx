@@ -1,7 +1,7 @@
 // Detail panel: always describes exactly the selected graph item (selection lives in the URL).
 import { useState, type ReactNode } from "react";
-import { api, type ArtifactRef, type Dag, type DagNode, type Usage } from "../api";
-import { EXPERIMENT_STATUS, STATUS, statusLabel } from "../copy";
+import { api, type ArtifactRef, type Dag, type DagNode, type PlanNode, type Usage } from "../api";
+import { EXPERIMENT_STATUS, PLAN, STATUS, statusLabel } from "../copy";
 import { describeRoles, flatten, fmtDur, fmtSize, fmtTime, fmtVal, short } from "../format";
 import { useArtifact, useDiff, useExecution, useSource } from "../queries";
 import { CodeModal } from "./CodeModal";
@@ -84,7 +84,8 @@ export function ExperimentDetail({ dag, tree, nav }: { dag: Dag; tree: { id: str
   const e = dag.experiment;
   const steps = dag.nodes.filter((n) => n.kind === "node");
   const counts: Record<string, number> = {};
-  for (const n of steps) counts[n.status] = (counts[n.status] ?? 0) + 1;
+  const outcome = (n: PlanNode) => (n.plan ? (n.plan === "run" ? "will run" : PLAN[n.plan].label.toLowerCase()) : statusLabel(n.status).toLowerCase());
+  for (const n of steps) counts[outcome(n)] = (counts[outcome(n)] ?? 0) + 1;
   const children = tree.filter((x) => x.parent_id === e.id);
   const own = flatten(e.params);
   return (
@@ -93,7 +94,7 @@ export function ExperimentDetail({ dag, tree, nav }: { dag: Dag; tree: { id: str
       <section>
         <dl className="kv">
           <dt>status</dt><dd>{EXPERIMENT_STATUS[e.status] ?? e.status}</dd>
-          <dt>steps</dt><dd>{Object.entries(counts).map(([k, v]) => `${v} ${statusLabel(k).toLowerCase()}`).join(", ") || "—"}</dd>
+          <dt>steps</dt><dd>{Object.entries(counts).map(([k, v]) => `${v} ${k}`).join(", ") || "—"}</dd>
           {e.started_at != null && (<><dt>took</dt><dd>{fmtDur((e.finished_at ?? Date.now() / 1000) - e.started_at)}</dd></>)}
           {e.parent_id && (<><dt>fork of</dt><dd><a onClick={() => nav.openExp(e.parent_id!)}>{nav.nameOf(e.parent_id)}</a></dd></>)}
           {children.length > 0 && (

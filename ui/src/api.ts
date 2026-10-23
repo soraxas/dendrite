@@ -1,6 +1,6 @@
 // Typed client for the dendrite JSON API (src/dendrite/server.py).
 export type RunStatus = "queued" | "running" | "waiting" | "computed" | "cached" | "pinned" | "failed";
-export type ExperimentStatus = "created" | "running" | "completed" | "failed";
+export type ExperimentStatus = "draft" | "created" | "running" | "completed" | "failed";
 export const RUN_STATUSES: RunStatus[] = ["computed", "cached", "pinned", "running", "waiting", "queued", "failed"];
 export const ACTIVE = new Set<string>(["running", "waiting", "queued"]);
 
@@ -16,6 +16,8 @@ export interface Info {
   store: string;
   ui: "react" | "legacy";
   edit: boolean;
+  plan: boolean;
+  pipelines: string[];
 }
 
 export interface SourceInfo {
@@ -80,6 +82,47 @@ export interface DagNode {
   started_at?: number | null;
   finished_at?: number | null;
   error?: string | null;
+}
+
+export type PlanOutcome = "reuse" | "run" | "frozen";
+export type PlanReason = "code" | "params" | "inputs" | "env" | "upstream" | "new" | "missing_blob" | "uncached";
+
+export interface ParamField {
+  name: string;
+  value: unknown;
+  default: unknown;
+  inherited: unknown;
+  overridden: boolean;
+  changed: boolean;
+  annotation: string | null;
+  json_type: "boolean" | "integer" | "number" | "string" | "array" | "object" | "any";
+}
+
+export interface PlanNode extends DagNode {
+  plan?: PlanOutcome;
+  reason?: PlanReason | null;
+  estimate?: number | null;
+  reuse_from?: { execution_id: string; experiment_id: string | null; duration: number | null } | null;
+  param_schema?: ParamField[];
+}
+
+export interface Plan extends Dag {
+  nodes: PlanNode[];
+  complete: boolean;
+  blocked_by: string | null;
+  error: string | null;
+  env: Record<string, unknown>;
+  module: string | null;
+  totals: { steps: number; run: number; reuse: number; frozen: number; estimate: number; unestimated: number };
+}
+
+export interface DraftEdit {
+  params?: Record<string, unknown>;
+  reset?: string[];
+  pins?: Record<string, "parent" | null>;
+  name?: string;
+  /** Keys whose values are floats (JSON can't tell 1 from 1.0). */
+  floats?: string[];
 }
 
 export interface DagEdge {
@@ -185,7 +228,7 @@ export interface Diff {
 }
 
 export class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  constructor(public status: number, message: string, public code?: string) {
     super(message);
   }
 }
@@ -194,11 +237,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const r = await fetch(path, init);
   if (!r.ok) {
     const body = await r.text();
-    let detail = body;
+    let detail: unknown = body;
     try {
       detail = JSON.parse(body).detail ?? body;
     } catch {
       /* not JSON */
+    }
+    if (detail && typeof detail === "object" && "message" in detail) {
+      const d = detail as { message: string; code?: string };
+      throw new ApiError(r.status, d.message, d.code);
     }
     throw new ApiError(r.status, String(detail).slice(0, 300));
   }
@@ -206,6 +253,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 const get = <T,>(path: string) => request<T>(path);
+const send = <T,>(method: string, path: string, body?: unknown) =>
+  request<T>(path, { method, headers: { "Content-Type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
+const exp = (id: string) => `/api/experiments/${encodeURIComponent(id)}`;
 
 export const api = {
   info: () => get<Info>("/api/info"),
@@ -222,5 +272,9 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ source, file_sha }),
     }),
+  plan: (id: string) => get<Plan>(`${exp(id)}/plan`),
+  fork: (id: string, name?: string) => send<ExperimentSummary>("POST", `${exp(id)}/fork`, { name: name ?? null }),
+  editDraft: (id: string, edit: DraftEdit) => send<ExperimentSummary>("PATCH", exp(id), edit),
+  discard: (id: string) => send<{ deleted: string }>("DELETE", exp(id)),
   downloadUrl: (h: string) => `/api/artifacts/${encodeURIComponent(h)}/download`,
 };

@@ -34,7 +34,7 @@ The update SHALL be a compare-and-set on `status = 'draft'`, and SHALL raise `No
 - **THEN** it no longer appears in `lab.experiments()` or the fork tree
 
 ### Requirement: Running freezes a draft
-`Experiment.run()` SHALL move a `draft` or `created` experiment to `running` with a compare-and-set. After that, the config can no longer be edited.
+`Experiment.run()` SHALL move a `draft` or `created` experiment to `running` with a compare-and-set on its current status, so a racing edit or a second runner fails. After that, the config can no longer be edited.
 
 #### Scenario: Edit races run
 - **WHEN** `run()` has moved a draft to `running` and `update` is called afterwards

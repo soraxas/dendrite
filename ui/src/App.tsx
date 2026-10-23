@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { Dag, Lineage } from "./api";
+import type { Dag, Lineage, PlanNode } from "./api";
 import { ArtifactDetailPanel, ExecutionDetailPanel, ExperimentDetail, NodeDetail, type Nav } from "./components/DetailPanel";
 import { DagView } from "./components/DagView";
+import { DraftBar, DraftStepEditor } from "./components/Draft";
 import { LineageView } from "./components/LineageView";
 import { DiffPage, MetricsPage, ParamsPage } from "./components/Pages";
 import { Sidebar } from "./components/Sidebar";
 import { Toolbar } from "./components/Toolbar";
-import { useDag, useDiff, useExperiments, useInfo, useLineage } from "./queries";
+import { useDag, useDiff, useExperiments, useInfo, useLineage, usePlan } from "./queries";
 import { splitSel, useRoute, type Route } from "./router";
 
 /** Best human label for an artifact hash within the current DAG: the output (or input) name. */
@@ -59,10 +60,15 @@ export function App() {
   const { data: tree = [] } = useExperiments();
   const { data: info } = useInfo();
   const inLineage = route.view === "lineage";
-  const dagQ = useDag(inLineage ? undefined : route.exp);
+  // A draft has no runs yet; its graph is the plan of what running it would do.
+  const isDraft = !inLineage && tree.find((e) => e.id === route.exp)?.status === "draft";
+  const planQ = usePlan(isDraft ? route.exp : undefined);
+  const plan = isDraft && planQ.data?.experiment.id === route.exp ? planQ.data : undefined;
+  const dagQ = useDag(inLineage || (isDraft && !planQ.error) ? undefined : route.exp);
   const lineageQ = useLineage(inLineage ? route.artifact : undefined);
   const diffQ = useDiff(route.view === "diff" ? route.exp : undefined, route.other);
-  const dag = dagQ.data;
+  const dag: Dag | undefined = plan ?? (isDraft && !planQ.error ? undefined : dagQ.data);
+  const canEdit = !!info?.edit;
   const lineage = lineageQ.data;
 
   useEffect(() => {
@@ -125,7 +131,21 @@ export function App() {
       );
     }
   } else if (dag) {
-    toolbar = <Toolbar key={dag.experiment.id} dag={dag} tree={tree} route={route} go={go} nameOf={nameOf} />;
+    toolbar = (
+      <>
+        <Toolbar key={dag.experiment.id} dag={dag} tree={tree} route={route} go={go} nameOf={nameOf} canEdit={canEdit} plan={plan} />
+        {isDraft && (
+          <DraftBar
+            key={`bar:${dag.experiment.id}`}
+            exp={dag.experiment}
+            plan={plan}
+            planError={planQ.error}
+            canEdit={canEdit}
+            onDiscarded={() => (dag.experiment.parent_id ? nav.openExp(dag.experiment.parent_id) : navigate({ view: "home" }))}
+          />
+        )}
+      </>
+    );
     graphSel = kind === "node" ? id : kind === "input" ? `input:${id}` : kind === "artifact" && id ? ownerOf(dag, id) : undefined;
     if (route.view === "params") body = <ParamsPage dag={dag} onArtifact={nav.selectArtifact} />;
     else if (route.view === "metrics") body = <MetricsPage dag={dag} />;
@@ -140,6 +160,7 @@ export function App() {
           onArtifact={nav.selectArtifact}
           onOpenSource={nav.openStep}
           activeArtifact={kind === "artifact" ? id : undefined}
+          planned={!!plan}
         />
       );
   } else if (dagQ.error) body = <div className="empty err">{String(dagQ.error)}</div>;
@@ -148,7 +169,11 @@ export function App() {
   let detail = null;
   if (kind === "node" && dag) {
     const n = dag.nodes.find((x) => x.kind === "node" && x.id === id);
-    detail = n ? <NodeDetail n={n} dag={dag} nav={nav} /> : null;
+    detail = !n ? null : plan ? (
+      <DraftStepEditor key={n.id} n={n as PlanNode} plan={plan} canEdit={canEdit} nameOf={nameOf} openStep={nav.openStep} />
+    ) : (
+      <NodeDetail n={n} dag={dag} nav={nav} />
+    );
   } else if (kind === "input" && dag) {
     const n = dag.nodes.find((x) => x.id === `input:${id}`);
     detail = n?.artifact ? <ArtifactDetailPanel hash={n.artifact.hash} label={n.name} nav={nav} canTrace /> : null;

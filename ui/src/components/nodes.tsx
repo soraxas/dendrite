@@ -113,12 +113,14 @@ export type PipelineData = Base & {
   line3: string;
   /** For reused/frozen steps: the experiment whose result was taken, as a link. */
   source?: { verb: string; label: string; rest: string; open: () => void };
+  /** Extra classes, e.g. "upstream" for a planned step that only runs because an earlier one does. */
+  variant?: string;
 };
 export function PipelineNode({ data }: NodeProps & { data: PipelineData }) {
   const animated = data.status === "running" || data.status === "waiting";
   const src = data.source;
   return (
-    <Shell data={data} className={`${data.status} ${animated ? "animated" : ""}`} style={tone(data.status)} label={`${data.name}: ${data.line2}`}>
+    <Shell data={data} className={`${data.status} ${animated ? "animated" : ""} ${data.variant ?? ""}`} style={tone(data.status)} label={`${data.name}: ${data.line2}`}>
       <div className="accent" style={{ background: `var(--${data.status})` }} />
       <div className="t1">{data.name}</div>
       {src ? (

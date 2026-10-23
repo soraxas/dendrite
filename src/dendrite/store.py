@@ -21,6 +21,16 @@ from typing import Any
 from .hashing import canonical_json, sha256_bytes, sha256_file
 
 KINDS = ("file", "dir", "value")
+PENDING = "pending"  # kind of a plan-mode placeholder: an output that has not been computed
+
+
+class PlanIncomplete(RuntimeError):
+    """A plan tried to read the contents of an output that would only exist after running."""
+
+    def __init__(self, ref: "ArtifactRef"):
+        self.ref = ref
+        self.node = ref.hash.removeprefix("plan:").split(".", 1)[0]
+        super().__init__(f"the plan depends on the output of {self.node!r}, which has not been computed")
 
 
 @dataclass(frozen=True)
@@ -118,6 +128,8 @@ class ArtifactStore(ABC):
 
     def load(self, ref: ArtifactRef) -> Any:
         """Materialise an artifact for use inside a node: a local Path, or the value."""
+        if ref.kind == PENDING:
+            raise PlanIncomplete(ref)
         if ref.kind == "value":
             return pickle.loads(self.read_bytes(ref.hash))
         dest = self.cache_dir / "checkouts" / ref.hash

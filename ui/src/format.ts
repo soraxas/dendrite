@@ -19,7 +19,7 @@ export const fmtTime = (t?: number | null) => (t ? new Date(t * 1000).toLocaleSt
 
 export function fmtVal(v: unknown): string {
   if (v === undefined || v === null) return "—";
-  if (typeof v === "number") return Number.isInteger(v) ? String(v) : v.toPrecision(5);
+  if (typeof v === "number") return Number.isInteger(v) ? String(v) : String(Number(v.toPrecision(5))); // 0.001, not 0.0010000
   return typeof v === "string" ? JSON.stringify(v) : JSON.stringify(v);
 }
 

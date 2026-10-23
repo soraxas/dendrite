@@ -1,5 +1,5 @@
-import { useQuery } from "@tanstack/react-query";
-import { ACTIVE, api, type Dag } from "./api";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { ACTIVE, api, ApiError, type Dag } from "./api";
 
 export const isBusy = (d?: Dag) => !!d && (d.experiment.status === "running" || d.nodes.some((n) => ACTIVE.has(n.status)));
 
@@ -34,3 +34,14 @@ export const useDiff = (a?: string, b?: string) =>
 
 export const useSource = (hash?: string | null) =>
   useQuery({ queryKey: ["source", hash], queryFn: () => api.source(hash!), enabled: !!hash, staleTime: 0 });
+
+/** Dry-run plan of a draft. Kept on screen while a re-plan after an edit is in flight. */
+export const usePlan = (id?: string) =>
+  useQuery({
+    queryKey: ["plan", id],
+    queryFn: () => api.plan(id!),
+    enabled: !!id,
+    placeholderData: keepPreviousData,
+    refetchInterval: 8000, // picks up code edits on disk (the server reloads changed modules)
+    retry: (n, e) => !(e instanceof ApiError && e.status === 409) && n < 2,
+  });

@@ -6,7 +6,7 @@ import os
 # must be set before the submodules below import it. setdefault keeps an explicit override.
 os.environ.setdefault("DO_NOT_TRACK", "1")
 
-from .experiment import Experiment, Lab, Pipeline, pipeline
+from .experiment import Experiment, Lab, NotADraft, Pipeline, pipeline
 from .runtime import log_metric, workdir
 from .store import ArtifactRef, ArtifactStore, FsspecStore, LocalStore
 from .task import ArtifactTask, artifact_task
@@ -19,6 +19,7 @@ __all__ = [
     "FsspecStore",
     "Lab",
     "LocalStore",
+    "NotADraft",
     "Pipeline",
     "artifact_task",
     "log_metric",

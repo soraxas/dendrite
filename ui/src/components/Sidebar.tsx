@@ -9,6 +9,7 @@ export function outcome(e: TreeEntry): string {
   const total = Object.values(c).reduce((a, b) => a + (b ?? 0), 0);
   const reused = (c.cached ?? 0) + (c.pinned ?? 0);
   const done = reused + (c.computed ?? 0);
+  if (e.status === "draft") return "Draft · not run yet";
   if (e.status === "created") return "Not run yet";
   if (e.status === "failed") return `Failed after ${done} of ${total} steps`;
   if (e.status === "running") return `Running · ${done} of ${total} done`;
@@ -19,6 +20,7 @@ export function outcome(e: TreeEntry): string {
 /** When it last ran (or was created, if never run), for the right edge of the row. */
 function lastRun(e: TreeEntry): { text: string; title: string } {
   if (e.status === "running") return { text: "now", title: `started ${fmtTime(e.started_at)}` };
+  if (e.status === "draft") return { text: fmtAgo(e.created_at), title: `draft created ${fmtTime(e.created_at)}` };
   const t = e.finished_at ?? e.started_at;
   if (t) return { text: fmtAgo(t), title: `last ran ${fmtTime(t)}` };
   return { text: fmtAgo(e.created_at), title: `created ${fmtTime(e.created_at)}, never run` };

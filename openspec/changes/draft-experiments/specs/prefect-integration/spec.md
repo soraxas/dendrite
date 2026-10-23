@@ -22,7 +22,7 @@ While a step function executes, the system SHALL detect Python-level opens for r
 - the checkout path of a declared input
 - `DENDRITE_HOME`
 - a virtualenv or site-packages
-- an imported module's file
+- a code file (`.py`, `.pyc`, `.pyi`, `.so`, `.pyd`, `.pth`, `.dylib`)
 
 `DENDRITE_CHECK_READS` SHALL choose the response:
 - `warn` (the default): emit one `UndeclaredReadWarning` per step and path

@@ -30,9 +30,9 @@ from typing import Any, Callable, Iterable, Sequence
 from prefect import get_run_logger, task
 from prefect.cache_policies import NO_CACHE
 
-from . import runtime
-from .hashing import sha256_bytes, sha256_json
-from .store import ArtifactRef
+from . import guard, runtime
+from .hashing import canonical_json, sha256_bytes, sha256_json
+from .store import PENDING, ArtifactRef
 
 POLL_INTERVAL = 0.2
 
@@ -102,6 +102,57 @@ def _map_refs(value: Any, fn: Callable[[ArtifactRef], Any]) -> Any:
     return value
 
 
+class PlanFuture:
+    """Plan-mode stand-in for the PrefectFuture that ``.submit()`` returns."""
+
+    def __init__(self, value: Any):
+        self._value = value
+
+    def result(self, *args: Any, **kwargs: Any) -> Any:
+        return self._value
+
+    def wait(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+
+def _unwrap_plan(value: Any) -> Any:
+    # Prefect resolves futures passed to tasks; plan mode has to do it itself.
+    if isinstance(value, PlanFuture):
+        return value.result()
+    if isinstance(value, (list, tuple)):
+        return type(value)(_unwrap_plan(v) for v in value)
+    if isinstance(value, dict):
+        return {k: _unwrap_plan(v) for k, v in value.items()}
+    return value
+
+
+def placeholder(node: str, output: str) -> ArtifactRef:
+    return ArtifactRef(f"plan:{node}.{output}", PENDING, 0)
+
+
+_JSON_TYPES = {bool: "boolean", int: "integer", float: "number", str: "string", list: "array", tuple: "array", dict: "object"}
+
+
+def _json_type(annotation: Any, value: Any) -> str:
+    """Editor type for a param: from a plain annotation if there is one, else from its value."""
+    names = {"bool": "boolean", "int": "integer", "float": "number", "str": "string", "list": "array", "dict": "object"}
+    if isinstance(annotation, str) and annotation in names:  # `from __future__ import annotations`
+        return names[annotation]
+    if annotation in _JSON_TYPES:
+        return _JSON_TYPES[annotation]
+    if value is None:
+        return "any"
+    return _JSON_TYPES.get(type(value), "any")
+
+
+def _annotation_text(annotation: Any) -> str | None:
+    if annotation is inspect.Parameter.empty:
+        return None
+    if isinstance(annotation, str):
+        return annotation
+    return getattr(annotation, "__name__", None) or repr(annotation)
+
+
 def _flatten_refs(name: str, value: Any, out: dict[str, ArtifactRef]) -> None:
     if isinstance(value, ArtifactRef):
         out[name] = value
@@ -164,6 +215,7 @@ class ArtifactTask:
         self.source = source_snapshot(fn)
         self._task_options = task_options
         functools.update_wrapper(self, fn)
+        runtime.track_module(fn.__module__)
 
         node = self
 
@@ -195,10 +247,15 @@ class ArtifactTask:
 
     # -- calling from a pipeline ---------------------------------------------------
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        state = runtime.active()
+        if state.plan:
+            return self._plan(state, args, kwargs)
         return self._prefect_task(**self._enqueue(args, kwargs))
 
     def submit(self, *args: Any, **kwargs: Any):
         state = runtime.active()
+        if state.plan:
+            return PlanFuture(self._plan(state, args, kwargs))
         future = self._prefect_task.submit(**self._enqueue(args, kwargs))
         state.futures.append(future)
         return future
@@ -221,6 +278,88 @@ class ArtifactTask:
             error=None,
         )
         return {"run_id": state.run_id, "call": dict(bound.arguments)}
+
+    # -- planning ------------------------------------------------------------------
+    def _plan(self, state: runtime.RunState, args: tuple, kwargs: dict) -> Any:
+        """Predict this step's outcome without executing it or writing anything.
+
+        Mirrors :meth:`_execute` up to the cache check, using the same ``_split``/``spec``
+        so the predicted signature is the one a run would compute. A step that would run
+        returns placeholders, which makes everything downstream "run (upstream)".
+        """
+        lab, exp = state.lab, state.experiment
+        db = lab.db
+        bound = self.signature.bind_partial(*args, **kwargs)
+        call = {k: _unwrap_plan(v) for k, v in bound.arguments.items()}
+        state.claim(self.name)
+        entry: dict[str, Any] = {"node": self.name, "seq": len(state.planned), "signature": None, "reason": None,
+                                 "reuse_from": None, "estimate": None, "param_schema": []}
+        state.planned.append(entry)
+
+        pinned = exp.pins.get(self.name)
+        if pinned is not None:
+            producer = db.producer_of(next(iter(pinned.values())))
+            ex = db.execution(producer) if producer else None
+            known: dict[str, ArtifactRef] = {}
+            for k, v in call.items():  # keep its incoming edges, as a real pinned run does
+                _flatten_refs(k, v, known)
+            entry.update(plan="frozen", inputs={k: r.hash for k, r in known.items()}, params={},
+                         outputs=dict(pinned), reuse_from=_origin(ex))
+            state.refs.update({r.hash: r for r in known.values()})
+            return self._shape({o: db.artifact(pinned[o]) for o in self.outputs})
+
+        structure, flat, params = self._split(call, exp.params.get(self.name, {}))
+        entry.update(inputs={k: r.hash for k, r in flat.items()}, params=params,
+                     param_schema=self._param_schema(call, params, state))
+        parent_run = state.parent_runs.get(self.name)
+        parent_ex = db.execution(parent_run["execution_id"]) if parent_run and parent_run.get("execution_id") else None
+        if any(r.kind == PENDING for r in flat.values()):
+            refs = {o: placeholder(self.name, o) for o in self.outputs}
+            entry.update(plan="run", reason="upstream", estimate=_duration(parent_ex) or _duration(db.latest_success_for_node(self.name)))
+        else:
+            spec = self.spec(structure, params)
+            signature = sha256_json(spec)
+            entry["signature"] = signature
+            hit = self._valid_hit(lab, signature) if self.cache else None
+            if hit:
+                row, refs = hit
+                entry.update(plan="reuse", reuse_from=_origin(row), estimate=_duration(row))
+            else:
+                refs = {o: placeholder(self.name, o) for o in self.outputs}
+                prior = db.find_success(signature) if self.cache else []
+                if not self.cache:
+                    reason = "uncached"
+                elif prior:
+                    reason = "missing_blob"
+                else:
+                    reason = _reason(spec, parent_ex["spec"] if parent_ex else None)
+                same = prior[0][0] if prior else None
+                entry.update(plan="run", reason=reason,
+                             estimate=_duration(same) or _duration(parent_ex) or _duration(db.latest_success_for_node(self.name)))
+        entry["outputs"] = {o: r.hash for o, r in refs.items()}
+        state.refs.update({r.hash: r for r in list(flat.values()) + list(refs.values())})
+        return self._shape(refs)
+
+    def _param_schema(self, call: dict[str, Any], params: dict[str, Any], state: runtime.RunState) -> list[dict]:
+        overrides = state.experiment.params.get(self.name, {})
+        inherited_over = state.parent_params.get(self.name, {})
+        out = []
+        for pname, value in params.items():
+            p = self.signature.parameters[pname]
+            default = None if p.default is inspect.Parameter.empty else p.default
+            base = call.get(pname, default)  # what the value is without any experiment override
+            inherited = inherited_over.get(pname, base)
+            out.append({
+                "name": pname,
+                "value": value,
+                "default": default,
+                "inherited": inherited,
+                "overridden": pname in overrides,
+                "changed": canonical_json(value) != canonical_json(inherited),
+                "annotation": _annotation_text(p.annotation),
+                "json_type": _json_type(p.annotation, default if default is not None else value),
+            })
+        return out
 
     # -- execution -----------------------------------------------------------------
     def _split(self, call: dict[str, Any], node_params: dict[str, Any]):
@@ -410,8 +549,17 @@ class ArtifactTask:
         wd.mkdir(parents=True, exist_ok=True)
         ctx = runtime.ExecContext(workdir=wd, execution_id=exec_id)
         token = runtime._exec.set(ctx)
+        settings = lab.settings
+        allowed = [wd, lab.home, lab.store.cache_dir, getattr(lab.store, "root", lab.home)]
+        reads = guard.start(self.name, settings.check_reads, settings.project_root, allowed)
         try:
-            outputs = self._normalise(self.fn(**kwargs))
+            try:
+                result = self.fn(**kwargs)
+            finally:
+                watched = guard.stop(reads)
+            if watched and watched.violation:  # even if the step swallowed the exception
+                raise guard.UndeclaredRead(watched.violation)
+            outputs = self._normalise(result)
             refs: dict[str, ArtifactRef] = {}
             for name, value in outputs.items():
                 if isinstance(value, ArtifactRef):
@@ -424,6 +572,33 @@ class ArtifactTask:
             runtime._exec.reset(token)
             shutil.rmtree(wd, ignore_errors=True)
         return refs, ctx.metrics
+
+
+def _duration(row: dict | None) -> float | None:
+    if row and row.get("finished_at") and row.get("started_at"):
+        return row["finished_at"] - row["started_at"]
+    return None
+
+
+def _origin(row: dict | None) -> dict | None:
+    if not row:
+        return None
+    return {"execution_id": row["id"], "experiment_id": row.get("experiment_id"), "duration": _duration(row)}
+
+
+def _reason(spec: dict[str, Any], before: dict[str, Any] | None) -> str:
+    """Why a step needs to run, judged against the parent experiment's execution of it."""
+    if not before:
+        return "new"
+
+    def differs(*keys: str) -> bool:  # compared as hashed, so 20 and 20.0 differ
+        return canonical_json([spec.get(k) for k in keys]) != canonical_json([before.get(k) for k in keys])
+
+    for reason, keys in (("code", ("op", "code", "version", "outputs")), ("params", ("params",)),
+                         ("inputs", ("inputs",)), ("env", ("env",))):
+        if differs(*keys):
+            return reason
+    return "new"
 
 
 def artifact_task(

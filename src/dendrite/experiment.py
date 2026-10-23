@@ -8,17 +8,21 @@ import time
 import uuid
 import warnings
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 
 from prefect import flow
 
 from . import runtime
 from .config import Settings
 from .db import Metadata
-from .store import ArtifactRef, open_store
+from .store import PENDING, ArtifactRef, PlanIncomplete, open_store
 
 _PIPELINES: dict[str, "Pipeline"] = {}
 _MISSING = object()
+
+
+class NotADraft(RuntimeError):
+    """Raised when editing or discarding an experiment whose config is already frozen."""
 
 
 class Pipeline:
@@ -36,6 +40,7 @@ class Pipeline:
         body.__module__ = fn.__module__
         self.flow = flow(body, name=self.name, validate_parameters=False, **flow_options)
         _PIPELINES[self.name] = self
+        runtime.track_module(fn.__module__, pipeline=True)
 
     def __repr__(self) -> str:
         return f"<pipeline {self.name}>"
@@ -241,9 +246,11 @@ class Lab:
         params: Mapping[str, Any] | None = None,
         inputs: Mapping[str, Any] | None = None,
         name: str | None = None,
+        draft: bool = False,
         _parent: str | None = None,
         _pins: dict[str, dict[str, str]] | None = None,
     ) -> "Experiment":
+        """New experiment. ``draft=True`` keeps its config editable until it first runs."""
         pipe = _resolve_pipeline(pipeline)
         nested = _apply_overrides({}, params or {})
         input_hashes = {k: self.ingest(v).hash for k, v in (inputs or {}).items()}
@@ -256,7 +263,7 @@ class Lab:
             params=nested,
             inputs=input_hashes,
             pins=_pins or {},
-            status="created",
+            status="draft" if draft else "created",
             created_at=time.time(),
         )
         return self.get(exp_id)
@@ -352,9 +359,17 @@ class Experiment:
     def run(self) -> "Experiment":
         db = self.lab.db
         pipe = self.pipeline
+        start = dict(status="running", started_at=time.time(), finished_at=None, error=None)
+        if self.status in ("draft", "created"):
+            # Freezing point: an edit racing this either landed before it or fails afterwards, and
+            # two processes starting the same never-run experiment can't both win.
+            if not db.update_experiment_if(self.id, self.status, **start):
+                raise NotADraft(f"experiment {self.id} was started or changed elsewhere")
+            self.refresh()
+        else:
+            db.update_experiment(self.id, **start)
         refs = {n: self.lab.artifact(h) for n, h in self.inputs.items()}
         db.clear_node_runs(self.id)
-        db.update_experiment(self.id, status="running", started_at=time.time(), finished_at=None, error=None)
         state = runtime.register(self)
         try:
             pipe.flow.with_options(flow_run_name=self.name or self.id)(run_id=state.run_id, inputs=refs)
@@ -378,14 +393,28 @@ class Experiment:
         inputs: Mapping[str, Any] | None = None,
         name: str | None = None,
         pipeline: "Pipeline | str | None" = None,
+        draft: bool = False,
     ) -> "Experiment":
-        """New experiment from this one's config.
+        """New experiment from this one's config (``draft=True``: editable until it runs).
 
         ``params`` overrides by ``"node.arg"`` or ``{"node": {...}}``. ``pin`` freezes node
         outputs: ``{"colmap": other_experiment}``, ``{"colmap.cameras": ref_or_hash}`` or
         ``{"colmap": {"cameras": ref_or_hash}}``; ``{"colmap": None}`` removes an inherited
         pin. Pinned nodes are skipped at run time.
         """
+        new_params, pins, new_inputs = self._derive(params, pin, inputs)
+        return self.lab.create(
+            pipeline or self.pipeline_name,
+            params=new_params,
+            inputs={k: self.lab.artifact(h) for k, h in new_inputs.items()},
+            name=name,
+            draft=draft,
+            _parent=self.id,
+            _pins=pins,
+        )
+
+    def _derive(self, params, pin, inputs) -> tuple[dict, dict, dict]:
+        """This config with fork-style overrides applied: (params, pins, input hashes)."""
         new_params = _apply_overrides(self.params, params or {})
         pins = copy.deepcopy(self.pins)
         for key, val in (pin or {}).items():
@@ -397,14 +426,145 @@ class Experiment:
         new_inputs = dict(self.inputs)
         for k, v in (inputs or {}).items():
             new_inputs[k] = self.lab.ingest(v).hash
-        return self.lab.create(
-            pipeline or self.pipeline_name,
-            params=new_params,
-            inputs={k: self.lab.artifact(h) for k, h in new_inputs.items()},
-            name=name,
-            _parent=self.id,
-            _pins=pins,
-        )
+        return new_params, pins, new_inputs
+
+    # -- drafts --------------------------------------------------------------------
+    def update(
+        self,
+        params: Mapping[str, Any] | None = None,
+        *,
+        pin: Mapping[str, Any] | None = None,
+        inputs: Mapping[str, Any] | None = None,
+        name: str | None = None,
+        reset: Iterable[str] = (),
+    ) -> "Experiment":
+        """Edit a draft in place, with the same override rules as :meth:`fork`.
+
+        ``reset`` takes ``"node.arg"`` keys and returns them to the parent's value (or drops
+        the override when the parent has none).
+        """
+        if self.refresh().status != "draft":
+            raise NotADraft(f"experiment {self.id} is {self.status}; fork it to make changes")
+        new_params, pins, new_inputs = self._derive(params, pin, inputs)
+        parent = self.parent
+        for key in reset:
+            node, _, arg = key.partition(".")
+            inherited = (parent.params if parent else {}).get(node, {})
+            if arg in inherited:
+                new_params.setdefault(node, {})[arg] = copy.deepcopy(inherited[arg])
+            elif node in new_params:
+                new_params[node].pop(arg, None)
+                if not new_params[node]:
+                    del new_params[node]
+        values: dict[str, Any] = dict(params=new_params, pins=pins, inputs=new_inputs)
+        if name is not None:
+            values["name"] = name or None
+        if not self.lab.db.update_experiment_if(self.id, "draft", **values):
+            raise NotADraft(f"experiment {self.id} stopped being a draft")
+        return self.refresh()
+
+    def discard(self) -> None:
+        """Delete a draft (refused for frozen experiments and drafts that have forks)."""
+        try:
+            self.lab.db.delete_draft(self.id)
+        except ValueError as e:
+            raise NotADraft(str(e)) from None
+
+    # -- planning ------------------------------------------------------------------
+    def plan(self) -> dict[str, Any]:
+        """Predict what running this experiment now would do, without running or writing anything.
+
+        Executes the pipeline body with steps that stop after the cache check. Each step is
+        ``reuse`` (a verified result exists), ``run`` (with a ``reason`` and an ``estimate``)
+        or ``frozen`` (pinned). Steps fed by a ``run`` step are ``run``/``upstream``: an upper
+        bound, since an unchanged upstream output would still let them reuse.
+        """
+        from .task import env_fingerprint
+
+        error = runtime.refresh_modules()
+        pipe = self.pipeline
+        db = self.lab.db
+        state = runtime.register(self, plan=True)
+        ancestor = self.parent
+        if ancestor:
+            state.parent_params = ancestor.params
+        while ancestor is not None:  # nearest ancestor that actually ran each step
+            for nr in ancestor.node_runs():
+                state.parent_runs.setdefault(nr["node"], nr)
+            ancestor = ancestor.parent
+        inputs = {n: self.lab.artifact(h) for n, h in self.inputs.items()}
+        complete, blocked_by = True, None
+        token = runtime._active_run.set(state.run_id)
+        try:
+            pipe.fn(**inputs)
+        except PlanIncomplete as e:
+            complete, blocked_by = False, e.node
+        except Exception as e:
+            complete, error = False, f"{type(e).__name__}: {e}"
+        finally:
+            runtime._active_run.reset(token)
+            runtime.unregister(state.run_id)
+
+        hashes = set(self.inputs.values())
+        for p in state.planned:
+            hashes.update((p.get("inputs") or {}).values())
+            hashes.update((p.get("outputs") or {}).values())
+        refs = db.artifacts_by_hash(h for h in hashes if not h.startswith("plan:"))
+        refs.update({h: r for h, r in state.refs.items() if r.kind == PENDING})
+        producers: dict[str, tuple[str, str]] = {}
+        nodes: list[dict[str, Any]] = []
+        for name, h in self.inputs.items():
+            producers[h] = (f"input:{name}", name)
+            nodes.append({"id": f"input:{name}", "kind": "input", "name": name, "status": "input", "artifact": _ref_dict(refs.get(h))})
+        for p in state.planned:
+            for out, h in (p.get("outputs") or {}).items():
+                producers.setdefault(h, (p["node"], out))
+        edges = []
+        for p in state.planned:
+            origin = p.get("reuse_from") or {}
+            nodes.append({
+                "id": p["node"],
+                "kind": "node",
+                "name": p["node"],
+                "seq": p["seq"],
+                "status": "planned",
+                "plan": p.get("plan", "run"),
+                "reason": p.get("reason"),
+                "estimate": p.get("estimate"),
+                "reuse_from": p.get("reuse_from"),
+                "execution_experiment": origin.get("experiment_id"),
+                "execution_id": origin.get("execution_id"),
+                "signature": p.get("signature"),
+                "params": p.get("params") or {},
+                "param_schema": p.get("param_schema") or [],
+                "inputs": {k: _ref_dict(refs.get(h)) for k, h in (p.get("inputs") or {}).items()},
+                "outputs": {k: _ref_dict(refs.get(h)) for k, h in (p.get("outputs") or {}).items()},
+                "duration": None,
+            })
+            for in_name, h in (p.get("inputs") or {}).items():
+                if h in producers:
+                    src, out = producers[h]
+                    edges.append({"from": src, "to": p["node"], "artifact": h, "label": out, "input": in_name})
+        steps = [n for n in nodes if n["kind"] == "node"]
+        to_run = [n for n in steps if n["plan"] == "run"]
+        totals = {
+            "steps": len(steps),
+            "run": len(to_run),
+            "reuse": sum(n["plan"] == "reuse" for n in steps),
+            "frozen": sum(n["plan"] == "frozen" for n in steps),
+            "estimate": sum(n["estimate"] or 0 for n in to_run),
+            "unestimated": sum(n["estimate"] is None for n in to_run),
+        }
+        return {
+            "experiment": self.summary(),
+            "complete": complete,
+            "blocked_by": blocked_by,
+            "error": error,
+            "env": env_fingerprint(()),
+            "totals": totals,
+            "nodes": nodes,
+            "edges": edges,
+        }
 
     def _resolve_pin(self, node: str, out: str, val: Any) -> dict[str, str]:
         def h(v: Any) -> str:
