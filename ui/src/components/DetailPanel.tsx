@@ -1,6 +1,7 @@
 // Detail panel: always describes exactly the selected graph item (selection lives in the URL).
 import { useState, type ReactNode } from "react";
 import { api, type ArtifactRef, type Dag, type DagNode, type PlanNode, type Usage } from "../api";
+import { summarize, summarizePlan, type FanoutGroup } from "../fanout";
 import { EXPERIMENT_STATUS, PLAN, STATUS, statusLabel } from "../copy";
 import { describeRoles, flatten, fmtDur, fmtSize, fmtTime, fmtVal, short } from "../format";
 import { useArtifact, useDiff, useExecution, useSource, useStorage } from "../queries";
@@ -384,6 +385,46 @@ export function ExecutionDetailPanel({ id, nav }: { id: string; nav: Nav }) {
       <section>
         <h3>Signature spec</h3>
         <pre>{JSON.stringify(x.spec, null, 2)}</pre>
+      </section>
+    </>
+  );
+}
+
+/** A fan-out group (`cut_clip ×3`): its items, each one click from its own details. */
+export function GroupDetail({ group, collapsed, onToggle, onOpen }: {
+  group: FanoutGroup;
+  collapsed: boolean;
+  onToggle: () => void;
+  onOpen: (node: string) => void;
+}) {
+  const planned = group.members.some((m) => (m as PlanNode).plan);
+  const s = planned ? summarizePlan(group.members as PlanNode[]) : summarize(group.members);
+  return (
+    <>
+      <Selected kind="step, once per item" label={`${group.step} ×${group.members.length}`} />
+      <section>
+        <dl className="kv">
+          <dt>items</dt><dd>{s.line2}</dd>
+          {s.line3 && (<><dt>time</dt><dd>{s.line3}</dd></>)}
+        </dl>
+        <button style={{ marginTop: 10 }} onClick={onToggle}>{collapsed ? `Show all ${group.members.length} on the graph` : "Collapse into one card"}</button>
+      </section>
+      <section>
+        <h3>Items</h3>
+        <table>
+          <tbody>
+            {group.members.map((m) => {
+              const p = (m as PlanNode).plan;
+              return (
+                <tr key={m.id}>
+                  <td><a onClick={() => onOpen(m.id)}>{m.key}</a></td>
+                  <td>{p ? PLAN[p].label : statusLabel(m.status)}</td>
+                  <td className="num">{fmtDur(m.duration)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
       </section>
     </>
   );

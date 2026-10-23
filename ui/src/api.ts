@@ -84,6 +84,27 @@ export interface DagNode {
   started_at?: number | null;
   finished_at?: number | null;
   error?: string | null;
+  /** For `step.named(key)` nodes, the step and key (`cut_clip`, `3`); plain nodes have key null. */
+  step?: string;
+  key?: string | null;
+  /** Live progress of a running step (`dendrite.progress`). */
+  progress?: Progress | null;
+}
+
+export interface Progress {
+  done: number;
+  total: number | null;
+  unit: string | null;
+  updated_at: number;
+}
+
+/** An artifact the pipeline body itself read: a config it is configured by, or a result that decided what ran next. */
+export interface PipelineRead {
+  artifact: string;
+  /** How many steps had been called when it was read. */
+  after: number;
+  /** Node id (or `input:<name>`) that produced it; null when unknown. */
+  producer: string | null;
 }
 
 export type PlanOutcome = "reuse" | "run" | "frozen";
@@ -178,6 +199,7 @@ export interface Dag {
   experiment: ExperimentSummary;
   nodes: DagNode[];
   edges: DagEdge[];
+  reads?: PipelineRead[];
 }
 
 export interface Role {

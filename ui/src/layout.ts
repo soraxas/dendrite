@@ -79,13 +79,24 @@ function fitScale(l: Layout, w: number, h: number) {
   return Math.min((w - 80) / Math.max(l.width, 1), (h - 80) / Math.max(l.height, 1));
 }
 
+// Direction is chosen against this fixed frame, not the window, so resizing never flips it.
+const REFERENCE = { width: 1600, height: 1000 };
+
+/** Top-to-bottom when it fits the reference frame clearly better than left-to-right. */
+export function chooseDirection(lr: { width: number; height: number }, tb: { width: number; height: number }): "RIGHT" | "DOWN" {
+  const scale = (l: { width: number; height: number }) => fitScale(l as Layout, REFERENCE.width, REFERENCE.height);
+  return scale(tb) > scale(lr) * 1.15 ? "DOWN" : "RIGHT";
+}
+
 /**
- * Lay out a graph once per shape (`key`), choosing left-to-right or top-to-bottom by which
- * fits the container at the larger scale. While a new shape is being laid out the previous
+ * Lay out a graph once per shape (`key`). The direction (left-to-right or top-to-bottom) is
+ * picked from the first shape's proportions and then kept for this view, so neither a resize
+ * nor steps appearing during a run flips it. While a new shape is being laid out the previous
  * layout keeps rendering, so live updates never flash.
  */
 export function useElkLayout(nodes: LayoutNode[], edges: LayoutEdge[], key: string, size: { width: number; height: number }) {
   const cache = useRef(new Map<string, Layout>());
+  const dir = useRef<"RIGHT" | "DOWN" | null>(null);
   const [layout, setLayout] = useState<Layout | null>(null);
   const latest = useRef({ nodes, edges, size });
   latest.current = { nodes, edges, size };
@@ -99,10 +110,16 @@ export function useElkLayout(nodes: LayoutNode[], edges: LayoutEdge[], key: stri
       return;
     }
     let cancelled = false;
-    const { nodes: ns, edges: es, size: sz } = latest.current;
-    Promise.all([run(ns, es, "RIGHT", key), run(ns, es, "DOWN", key)])
-      .then(([lr, tb]) => {
-        const best = fitScale(tb, sz.width, sz.height) > fitScale(lr, sz.width, sz.height) * 1.15 ? tb : lr;
+    const { nodes: ns, edges: es } = latest.current;
+    const chosen = dir.current;
+    const done = chosen
+      ? run(ns, es, chosen, key)
+      : Promise.all([run(ns, es, "RIGHT", key), run(ns, es, "DOWN", key)]).then(([lr, tb]) => {
+          dir.current = chooseDirection(lr, tb);
+          return dir.current === "DOWN" ? tb : lr;
+        });
+    done
+      .then((best) => {
         cache.current.set(key, best);
         if (!cancelled) setLayout(best);
       })

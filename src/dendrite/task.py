@@ -166,6 +166,22 @@ def _flatten_refs(name: str, value: Any, out: dict[str, ArtifactRef]) -> None:
             _flatten_refs(f"{name}.{k}", v, out)
 
 
+QUEUED = "queued:"  # prefix of a queued node run's input that another step hasn't produced yet
+
+
+def _queued_inputs(name: str, value: Any, futures: dict[int, tuple[str, tuple[str, ...]]], out: dict[str, str]) -> None:
+    """``queued:<node>.<output>`` for each future (nested in lists/dicts) a step was called with."""
+    if id(value) in futures:
+        node, outputs = futures[id(value)]
+        out[name] = f"{QUEUED}{node}.{outputs[0] if len(outputs) == 1 else ', '.join(outputs)}"
+    elif isinstance(value, (list, tuple)):
+        for i, v in enumerate(value):
+            _queued_inputs(f"{name}[{i}]", v, futures, out)
+    elif isinstance(value, dict):
+        for k, v in value.items():
+            _queued_inputs(f"{name}.{k}", v, futures, out)
+
+
 class _Heartbeat:
     def __init__(self, db, signature: str, owner: str, ttl: float):
         self.db, self.signature, self.owner, self.ttl = db, signature, owner, ttl
@@ -198,10 +214,16 @@ class ArtifactTask:
         hash_source: bool = True,
         lease_ttl: float = 300.0,
         ignore: Sequence[str] = (),
+        _op: str | None = None,
+        _copy: bool = False,
         **task_options: Any,
     ):
         self.fn = fn
         self.name = name or fn.__name__
+        # The step's identity in the signature. Renamed copies (``with_options(name=…)``,
+        # ``named(key)``) keep it, so identical work under another node name is reused.
+        self.op = _op or self.name
+        self._named: dict[str, ArtifactTask] = {}
         self.ignore = tuple(ignore)
         self.outputs = tuple(outputs) if outputs else _outputs_from_annotation(fn)
         if len(set(self.outputs)) != len(self.outputs):
@@ -220,13 +242,16 @@ class ArtifactTask:
         self._task_options = task_options
         functools.update_wrapper(self, fn)
         runtime.track_module(fn.__module__)
-        _STEPS[(fn.__module__, self.name)] = self
-        self.diagnostics = analysis.check_step(self)
-        for d in self.diagnostics:
-            warnings.warn_explicit(
-                f"{self.name}: {d.message} [{d.code}]", analysis.StepDefinitionWarning,
-                d.file or "<unknown>", d.file_line or 0, module=fn.__module__,
-            )
+        if _copy:  # a renamed copy of a step that was already registered and checked
+            self.diagnostics = []
+        else:
+            _STEPS[(fn.__module__, self.name)] = self
+            self.diagnostics = analysis.check_step(self)
+            for d in self.diagnostics:
+                warnings.warn_explicit(
+                    f"{self.name}: {d.message} [{d.code}]", analysis.StepDefinitionWarning,
+                    d.file or "<unknown>", d.file_line or 0, module=fn.__module__,
+                )
 
         node = self
 
@@ -250,8 +275,22 @@ class ArtifactTask:
                 raise TypeError(f"{self.name} has no parameter {k!r}{analysis._suggest(k, known)}")
         return {f"{self.name}.{k}": v for k, v in params.items()}
 
+    def named(self, key: Any) -> "ArtifactTask":
+        """This step as node ``<name>[<key>]``, for calling it once per item in a loop.
+
+        Copies share the step's cache identity: two items doing identical work (same code,
+        inputs and params) reuse one result whatever their keys, so renumbering items never
+        recomputes them. Copies are created once per key and reused across runs.
+        """
+        key = str(key)
+        copy = self._named.get(key)
+        if copy is None:
+            copy = self._named[key] = self.with_options(name=f"{self.name}[{key}]", _copy=True)
+        return copy
+
     def with_options(self, **overrides: Any) -> "ArtifactTask":
         opts = dict(
+            _op=self.op,
             outputs=self.outputs,
             name=self.name,
             version=self.version,
@@ -277,7 +316,8 @@ class ArtifactTask:
         if state.plan:
             return PlanFuture(self._plan(state, args, kwargs))
         future = self._prefect_task.submit(**self._enqueue(args, kwargs))
-        state.futures.append(future)
+        state.futures.append(future)  # also keeps id(future) unique while the run lasts
+        state.future_nodes[id(future)] = (self.name, self.outputs)
         return future
 
     def _enqueue(self, args: tuple, kwargs: dict) -> dict[str, Any]:
@@ -285,14 +325,16 @@ class ArtifactTask:
         bound = self.signature.bind_partial(*args, **kwargs)
         state.claim(self.name)
         known: dict[str, ArtifactRef] = {}
+        queued: dict[str, str] = {}
         for k, v in bound.arguments.items():
             _flatten_refs(k, v, known)  # futures are resolved later; record what we know
+            _queued_inputs(k, v, state.future_nodes, queued)  # and which step each future comes from
         state.lab.db.upsert_node_run(
             state.experiment.id,
             self.name,
             status="queued",
             queued_at=time.time(),
-            inputs={k: r.hash for k, r in known.items()},
+            inputs={**queued, **{k: r.hash for k, r in known.items()}},
             started_at=None,
             finished_at=None,
             error=None,
@@ -407,7 +449,7 @@ class ArtifactTask:
 
     def spec(self, structure: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:
         return {
-            "op": self.name,
+            "op": self.op,
             "version": self.version,
             "code": self.code,
             "env": env_fingerprint(self.packages),
@@ -535,6 +577,7 @@ class ArtifactTask:
         )
         if self.source:
             db.record_source(exec_id, self.source)
+        db.upsert_node_run(exp_id, self.name, execution_id=exec_id)  # live progress finds it
         try:
             with _Heartbeat(db, signature, owner, self.lease_ttl) if lease else nullcontext():
                 refs, metric_values = self._compute(lab, exec_id, call, params)
@@ -569,7 +612,7 @@ class ArtifactTask:
                 kwargs[pname] = _map_refs(call[pname], lab.store.load)
         wd = lab.home / "tmp" / exec_id
         wd.mkdir(parents=True, exist_ok=True)
-        ctx = runtime.ExecContext(workdir=wd, execution_id=exec_id)
+        ctx = runtime.ExecContext(workdir=wd, execution_id=exec_id, db=lab.db)
         token = runtime._exec.set(ctx)
         settings = lab.settings
         allowed = [wd, lab.home, lab.store.cache_dir, getattr(lab.store, "root", lab.home)]

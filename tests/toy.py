@@ -109,3 +109,59 @@ def toy_reads(src):
 def toy_result(src):
     feats = featurize.submit(extract(src))
     return train(feats.result())  # bodies may resolve futures themselves
+
+
+FANOUT = {"s0": 1, "s1": 2}  # node key -> featurize scale; tests rewrite it between runs
+
+
+@pipeline(name="toy_fanout")
+def toy_fanout(src):
+    rows = extract(src)
+    return [featurize.named(key).submit(rows, scale=scale) for key, scale in FANOUT.items()]
+
+
+@artifact_task
+def tidy(src: Path) -> str:
+    """Builds and removes a scratch tree: rmtree opens names relative to a directory fd."""
+    import shutil
+
+    scratch = workdir() / "scratch"
+    (scratch / "deep").mkdir(parents=True)
+    (scratch / "deep" / "f.txt").write_text("x")
+    shutil.rmtree(scratch)
+    return src.read_text()
+
+
+@pipeline(name="toy_tidy")
+def toy_tidy(src):
+    return tidy(src)
+
+
+@artifact_task
+def slow_count(features: list, n: int = 4) -> int:
+    from dendrite import progress
+
+    for i in range(n):
+        progress(i + 1, n, "items")
+    return n
+
+
+@pipeline(name="toy_decides")
+def toy_decides(src, config):
+    from dendrite import load
+
+    settings = load(config)  # an input the body reads: it configures the run
+    feats = featurize(extract(src), scale=settings["scale"])
+    plan = load(feats)  # a step output the body reads: it decides the fan-out
+    return [slow_count.named(i).submit(feats, n=2 + i) for i in range(len(plan[:2]))]
+
+
+@artifact_task
+def echo(value) -> list:
+    return [str(v) for v in value]
+
+
+@pipeline(name="toy_wait")
+def toy_wait(src):
+    trained = train.submit(featurize(extract(src)))
+    return echo.submit(trained)  # queued until the slow train finishes

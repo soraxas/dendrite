@@ -115,14 +115,28 @@ export type PipelineData = Base & {
   source?: { verb: string; label: string; rest: string; open: () => void };
   /** Extra classes, e.g. "upstream" for a planned step that only runs because an earlier one does. */
   variant?: string;
+  /** Fraction done (0–1) of a running step that reports progress, or of a fan-out group. */
+  progress?: number;
+  /** A fan-out group card (`cut_clip ×3`): its expand/collapse control. */
+  group?: { collapsed: boolean; count: number; toggle: () => void };
+  /** A member of an expanded group: collapse it back from the member card. */
+  member?: { of: string; collapse: () => void };
 };
 export function PipelineNode({ data }: NodeProps & { data: PipelineData }) {
   const animated = data.status === "running" || data.status === "waiting";
   const src = data.source;
   return (
-    <Shell data={data} className={`${data.status} ${animated ? "animated" : ""} ${data.variant ?? ""}`} style={tone(data.status)} label={`${data.name}: ${data.line2}`}>
+    <Shell
+      data={data}
+      className={`${data.status} ${animated ? "animated" : ""} ${data.variant ?? ""} ${data.group ? "stack" : ""}`}
+      style={tone(data.status)}
+      label={`${data.name}${data.group ? ` ×${data.group.count}` : ""}: ${data.line2}`}
+    >
       <div className="accent" style={{ background: `var(--${data.status})` }} />
-      <div className="t1">{data.name}</div>
+      <div className="t1">
+        {data.name}
+        {data.group && <span className="count-badge" title={`Called once for each of ${data.group.count} items`}>×{data.group.count}</span>}
+      </div>
       {src ? (
         <div className="t2">
           {src.verb}{" "}
@@ -142,16 +156,33 @@ export function PipelineNode({ data }: NodeProps & { data: PipelineData }) {
         <div className="t2">{data.line2}</div>
       )}
       <div className="t3">{data.line3}</div>
+      {data.progress != null && (
+        <div className="pbar" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(data.progress * 100)}>
+          <span style={{ width: `${Math.min(100, data.progress * 100)}%`, background: `var(--${data.status})` }} />
+        </div>
+      )}
+      {(data.group || data.member) && (
+        <button
+          className="group-toggle nodrag"
+          title={data.group ? (data.group.collapsed ? `Show all ${data.group.count}` : "Collapse into one card") : `Collapse into ${data.member!.of}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            (data.group?.toggle ?? data.member!.collapse)();
+          }}
+        >
+          {data.group ? (data.group.collapsed ? "▸" : "▾") : "▴"}
+        </button>
+      )}
     </Shell>
   );
 }
 
-export type InputData = Base & { name: string; sub: string };
+export type InputData = Base & { name: string; sub: string; configures?: boolean };
 export function InputNode({ data }: NodeProps & { data: InputData }) {
   return (
-    <Shell data={data} className="pill" style={tone("input")} label={`input ${data.name}`}>
+    <Shell data={data} className={`pill ${data.configures ? "configures" : ""}`} style={tone("input")} label={`input ${data.name}`}>
       <div className="t1">{data.name}</div>
-      <div className="t3">{data.sub}</div>
+      <div className="t3">{data.configures ? "configures this run" : data.sub}</div>
     </Shell>
   );
 }

@@ -143,15 +143,23 @@ The flow of a run spans several modules in `src/dendrite/`:
    - **Stores.** `ArtifactStore.iter_objects()` lists `(hash, size, mtime)`. `FsspecStore` caches dir manifests locally under `cache/manifests/`.
    - **Server.** The server caches the inventory for 30 s (`?refresh=1`). Every mutation endpoint requires `allow_edit`; previews (`/api/gc`, `/evict` without `apply`) don't. The UI is `ui/src/components/Storage.tsx`, at `#/storage`.
 
+12. **Live graph.**
+   - **Progress.** `runtime.progress` writes `execution_progress` rows, throttled by `PROGRESS_INTERVAL`, through `ExecContext.db`. A running node run carries its `execution_id`, so `dag()` can attach `progress`.
+   - **Body reads.** `Lab.load` calls `runtime.note_read`, which records `pipeline_reads` when a run is active and no step is executing. Plans keep reads in `RunState.reads` only. `dag()`/`plan()` return them with each read's producer.
+   - **Push.** `GET /api/events` is Server-Sent Events. It compares `Metadata.change_tokens()` every `EVENT_INTERVAL`, because runs happen in other processes. `useLiveUpdates` in `ui/src/queries.ts` invalidates only the named experiments, and polling drops to a 15 s safety net while connected.
+   - **Grouping.** It is UI-only (`ui/src/fanout.ts`). Nodes named `step[key]` group by `step`, and groups of `COLLAPSE_AT` or more start collapsed.
+
 ## Invariants to preserve
 
 - Signatures must never include experiment ids or flow-run ids. That is what makes cross-experiment reuse work.
+- The signature's `op` is the step's identity (`ArtifactTask.op`), not its node name. Renamed copies (`step.named(key)`, `with_options(name=...)`) keep it, so fan-out items doing identical work share results. Named copies are created once per key, skip static checks and aren't registered in `_STEPS`.
 - Only params a node actually consumes are hashed.
 - Only `ArtifactRef`s cross Prefect task boundaries. Never pass large data through Prefect.
 - A cache hit must `store.verify()` its outputs, including every member of a directory manifest. A missing blob means recompute.
 - Experiment config (params, inputs, pins) is frozen at its first run. Before that, only `draft` experiments are editable. Re-running only replaces node_runs.
 - **Reclaiming space never risks a wrong result.** It may only delete blobs, never metadata rows or anything a cache hit could trust without `verify()`. Anything deleted must recompute when needed. `tests/test_storage.py` covers this.
-- **Plans are side-effect free.** A plan never writes node_runs, executions, blobs or leases, never touches Prefect, and never calls step functions. `tests/test_plan.py::test_plan_writes_nothing` checks this.
+- Progress and body reads are display-only: they never enter a signature.
+- **Plans are side-effect free.** A plan never writes node_runs, executions, blobs, leases or pipeline reads, never touches Prefect, and never calls step functions. `tests/test_plan.py::test_plan_writes_nothing` checks this.
 - **Step contract** (README, "The step contract"):
   - The pipeline body only wires steps together.
   - Step outputs depend only on what the signature hashes.
@@ -180,6 +188,7 @@ Spec-driven changes live in `openspec/`:
 - `openspec/specs/` holds the baseline specs from the archived `add-artifact-lineage` change.
 - `openspec/changes/draft-experiments/` is drafts, plans and the step contract (phase 1 of the editing UI).
 - `openspec/changes/storage-management/` is the storage inventory, delete, evict, GC and clean-up change.
+- `openspec/changes/live-graph/` is live progress, pushed updates, fan-out groups and pipeline-read edges.
 - `openspec/changes/react-flow-ui/` is the React Flow UI change. Archive it with `openspec archive react-flow-ui` once it has been reviewed.
 - Use `/opsx:propose`, `/opsx:apply` and `/opsx:archive` for new work.
 - Validate with `openspec validate <change>`.

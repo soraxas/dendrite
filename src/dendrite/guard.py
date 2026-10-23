@@ -48,6 +48,10 @@ class ReadGuard:
             return
         if path.endswith(_CODE_SUFFIXES) or path in self.seen:
             return
+        # Only file contents are inputs. This also skips directory opens (os.scandir, rmtree)
+        # and names opened relative to a directory fd, which resolve wrongly against the cwd.
+        if not os.path.isfile(path):
+            return
         self.seen.add(path)
         rel = os.path.relpath(path, self.root)
         msg = (

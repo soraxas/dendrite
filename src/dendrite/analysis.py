@@ -390,6 +390,8 @@ class _ShapeBuilder:
         submit = False
         if isinstance(f, ast.Attribute) and f.attr == "submit":
             submit, f = True, f.value
+        if isinstance(f, ast.Call) and isinstance(f.func, ast.Attribute) and f.func.attr == "named":
+            return self.lookup(f.func.value), None, submit, True  # one node name per key, by construction
         if isinstance(f, ast.Call) and isinstance(f.func, ast.Attribute) and f.func.attr == "with_options":
             step = self.lookup(f.func.value)
             name = next((k.value.value for k in f.keywords if k.arg == "name" and isinstance(k.value, ast.Constant)), None)
@@ -494,9 +496,9 @@ class _ShapeBuilder:
         path = tuple((f[1], f[2]) for f in self.ctx if f[0] == "if")
         earlier = self.calls.setdefault(name, [])
         if self.in_loop() and not renamed:
-            self.diag("call-in-loop", e, f"{name} is called in a loop; each run may call a step once, so give each call a distinct name with {name}.with_options(name=...)", step=name)
-        elif any(not _exclusive(path, p) for p in earlier):
-            self.diag("duplicate-call", e, f"{name} is called more than once in the same run; give the second call a distinct name with {name}.with_options(name=...)", step=name)
+            self.diag("call-in-loop", e, f"{name} is called in a loop; each run may call a node once, so call {name}.named(key) with a key per item", step=name)
+        elif not (renamed and explicit is None) and any(not _exclusive(path, p) for p in earlier):
+            self.diag("duplicate-call", e, f"{name} is called more than once in the same run; give each call its own node with {name}.named(key)", step=name)
         earlier.append(path)
 
         node = self.nodes.get(name)

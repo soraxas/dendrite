@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import os
+import re
 import time
 import uuid
 import warnings
@@ -184,8 +185,14 @@ class Lab:
         return ref
 
     def load(self, ref: str | ArtifactRef) -> Any:
-        """Local path (file/dir artifacts) or Python object (value artifacts)."""
-        return self.store.load(self.artifact(ref))
+        """Local path (file/dir artifacts) or Python object (value artifacts).
+
+        Inside a pipeline body the read is recorded (``runtime.note_read``), so the graph can
+        show what the body decided from it.
+        """
+        r = self.artifact(ref)
+        runtime.note_read(r)
+        return self.store.load(r)
 
     def lineage(self, key: str | ArtifactRef) -> dict[str, Any]:
         """Provenance graph around an artifact: ancestors, descendants and users."""
@@ -268,10 +275,18 @@ class Lab:
         inputs: Mapping[str, Any] | None = None,
         name: str | None = None,
         draft: bool = False,
+        parent: "Experiment | str | None" = None,
         _parent: str | None = None,
         _pins: dict[str, dict[str, str]] | None = None,
     ) -> "Experiment":
-        """New experiment. ``draft=True`` keeps its config editable until it first runs."""
+        """New experiment. ``draft=True`` keeps its config editable until it first runs.
+
+        ``parent`` records it as a fork of that experiment (for the fork tree, diffs and plan
+        reasons) while taking exactly the given params and inputs, unlike :meth:`Experiment.fork`,
+        which starts from the parent's config.
+        """
+        if parent is not None:
+            _parent = parent.id if isinstance(parent, Experiment) else self.get(parent).id
         pipe = _resolve_pipeline(pipeline)
         nested = _apply_overrides({}, params or {})
         input_hashes = {k: self.ingest(v).hash for k, v in (inputs or {}).items()}
@@ -433,6 +448,20 @@ def _resolve_pipeline(p: "Pipeline | str") -> "Pipeline":
         return _PIPELINES[p]
     except KeyError:
         raise KeyError(f"pipeline {p!r} is not registered; import the module that defines it") from None
+
+
+_FANOUT = re.compile(r"(?P<step>.+)\[(?P<key>[^\[\]]+)\]")
+
+
+def _fanout(node: str) -> dict[str, str | None]:
+    """``{"step", "key"}`` for a ``step.named(key)`` node (``key`` is None for plain nodes)."""
+    m = _FANOUT.fullmatch(node)
+    return {"step": m["step"], "key": m["key"]} if m else {"step": node, "key": None}
+
+
+def _reads(reads: list[dict[str, Any]], producers: dict[str, tuple[str, str]]) -> list[dict[str, Any]]:
+    """Body reads with the node (or input) that produced each artifact."""
+    return [{**r, "producer": producers.get(r["artifact"], (None, None))[0]} for r in reads]
 
 
 def _ref_dict(ref: ArtifactRef | None) -> dict[str, Any] | None:
@@ -716,6 +745,7 @@ class Experiment:
                 "id": p["node"],
                 "kind": "node",
                 "name": p["node"],
+                **_fanout(p["node"]),
                 "seq": p["seq"],
                 "status": "planned",
                 "plan": p.get("plan", "run"),
@@ -754,6 +784,7 @@ class Experiment:
             "totals": totals,
             "nodes": nodes,
             "edges": edges,
+            "reads": _reads(state.reads, producers),
         }
 
     def _resolve_pin(self, node: str, out: str, val: Any) -> dict[str, str]:
@@ -820,9 +851,14 @@ class Experiment:
             producers[h] = (nid, name)
             nodes.append({"id": nid, "kind": "input", "name": name, "status": "input", "artifact": _ref_dict(refs.get(h))})
         per_exec = db.metrics_for(nr["execution_id"] for nr in nrs)
+        live = db.progress_for(nr["execution_id"] for nr in nrs if nr["status"] == "running")
         for nr in nrs:
             for out, h in (nr["outputs"] or {}).items():
                 producers.setdefault(h, (nr["node"], out))
+            for h in (nr["inputs"] or {}).values():  # a queued step's inputs name the step they'll come from
+                if h.startswith("queued:"):
+                    node, _, out = h.removeprefix("queued:").rpartition(".")
+                    producers.setdefault(h, (node, out))
         edges = []
         for nr in nrs:
             ex = db.execution(nr["execution_id"]) if nr["execution_id"] else None
@@ -836,8 +872,10 @@ class Experiment:
                     "id": nr["node"],
                     "kind": "node",
                     "name": nr["node"],
+                    **_fanout(nr["node"]),
                     "seq": nr["seq"],
                     "status": nr["status"],
+                    "progress": live.get(nr["execution_id"]) if nr["status"] == "running" else None,
                     "signature": nr["signature"],
                     "execution_id": nr["execution_id"],
                     "execution_experiment": ex["experiment_id"] if ex else None,
@@ -856,7 +894,7 @@ class Experiment:
                 if h in producers:
                     src, out = producers[h]
                     edges.append({"from": src, "to": nr["node"], "artifact": h, "label": out, "input": in_name})
-        return {"experiment": self.summary(), "nodes": nodes, "edges": edges}
+        return {"experiment": self.summary(), "nodes": nodes, "edges": edges, "reads": _reads(db.reads(self.id), producers)}
 
     def summary(self) -> dict[str, Any]:
         r = self._row

@@ -146,6 +146,28 @@ leases = sa.Table(
 )
 
 
+# Artifacts the pipeline body itself read (`lab.load` in the body, e.g. a config or a plan that
+# decides a fan-out). `after` is how many nodes had been called when it was read.
+pipeline_reads = sa.Table(
+    "pipeline_reads",
+    meta,
+    sa.Column("experiment_id", sa.String(32), sa.ForeignKey("experiments.id"), primary_key=True),
+    sa.Column("seq", sa.Integer, primary_key=True),
+    sa.Column("artifact_hash", sa.String(64), nullable=False),
+    sa.Column("after", sa.Integer, nullable=False),
+)
+
+# Live progress a running step reports (`dendrite.progress`), per execution.
+execution_progress = sa.Table(
+    "execution_progress",
+    meta,
+    sa.Column("execution_id", sa.String(32), sa.ForeignKey("executions.id"), primary_key=True),
+    sa.Column("done", sa.Float, nullable=False),
+    sa.Column("total", sa.Float),
+    sa.Column("unit", sa.String(40)),
+    sa.Column("updated_at", sa.Float, nullable=False),
+)
+
 experiment_flags = sa.Table(
     "experiment_flags",
     meta,
@@ -303,6 +325,7 @@ class Metadata:
             if outside:
                 raise ValueError(f"experiment {outside[0]} is forked from one being deleted")
             conn.execute(node_runs.delete().where(node_runs.c.experiment_id.in_(ids)))
+            conn.execute(pipeline_reads.delete().where(pipeline_reads.c.experiment_id.in_(ids)))
             conn.execute(experiment_flags.delete().where(experiment_flags.c.experiment_id.in_(ids)))
             for exp_id in ids:  # ``ids`` lists children before parents (parent_id is a foreign key)
                 conn.execute(experiments.delete().where(experiments.c.id == exp_id))
@@ -343,6 +366,68 @@ class Metadata:
     def clear_node_runs(self, exp_id: str) -> None:
         with self.tx() as conn:
             conn.execute(node_runs.delete().where(node_runs.c.experiment_id == exp_id))
+            conn.execute(pipeline_reads.delete().where(pipeline_reads.c.experiment_id == exp_id))
+
+    # -- pipeline reads and progress -------------------------------------------------
+    def record_read(self, exp_id: str, seq: int, artifact_hash: str, after: int) -> None:
+        with self.tx() as conn:
+            conn.execute(pipeline_reads.insert().values(experiment_id=exp_id, seq=seq, artifact_hash=artifact_hash, after=after))
+
+    def reads(self, exp_id: str) -> list[dict]:
+        with self.ro() as conn:
+            rows = conn.execute(
+                sa.select(pipeline_reads.c.artifact_hash, pipeline_reads.c.after)
+                .where(pipeline_reads.c.experiment_id == exp_id)
+                .order_by(pipeline_reads.c.seq)
+            ).all()
+        return [{"artifact": h, "after": a} for h, a in rows]
+
+    def set_progress(self, exec_id: str, done: float, total: float | None, unit: str | None) -> None:
+        values = dict(done=done, total=total, unit=unit, updated_at=time.time())
+        with self.tx() as conn:
+            res = conn.execute(execution_progress.update().where(execution_progress.c.execution_id == exec_id).values(**values))
+            if res.rowcount == 0:
+                conn.execute(execution_progress.insert().values(execution_id=exec_id, **values))
+
+    def progress_for(self, exec_ids: Iterable[str]) -> dict[str, dict]:
+        ids = [i for i in set(exec_ids) if i]
+        if not ids:
+            return {}
+        with self.ro() as conn:
+            rows = conn.execute(sa.select(execution_progress).where(execution_progress.c.execution_id.in_(ids))).mappings().all()
+        return {r["execution_id"]: {k: r[k] for k in ("done", "total", "unit", "updated_at")} for r in rows}
+
+    def change_tokens(self) -> tuple[str, dict[str, str]]:
+        """A cheap fingerprint of the experiment list and of each experiment's live state.
+
+        The UI server compares these between polls to push "this changed" events; a run in
+        another process is only visible through the database.
+        """
+        with self.ro() as conn:
+            exps = conn.execute(
+                sa.select(experiments.c.id, experiments.c.status, experiments.c.name, experiments.c.parent_id,
+                          experiments.c.started_at, experiments.c.finished_at)
+            ).all()
+            flags = conn.execute(sa.select(experiment_flags.c.experiment_id, experiment_flags.c.keep)).all()
+            runs = conn.execute(
+                sa.select(node_runs.c.experiment_id, node_runs.c.status, sa.func.count(),
+                          sa.func.max(sa.func.coalesce(node_runs.c.finished_at, node_runs.c.started_at, node_runs.c.queued_at)))
+                .group_by(node_runs.c.experiment_id, node_runs.c.status)
+            ).all()
+            prog = conn.execute(
+                sa.select(node_runs.c.experiment_id, sa.func.max(execution_progress.c.updated_at))
+                .join(execution_progress, execution_progress.c.execution_id == node_runs.c.execution_id)
+                .group_by(node_runs.c.experiment_id)
+            ).all()
+        per: dict[str, list] = {}
+        for row in exps:
+            per.setdefault(row[0], []).append(tuple(row))
+        for row in runs:
+            per.setdefault(row[0], []).append(tuple(row))
+        for row in prog:
+            per.setdefault(row[0], []).append(tuple(row))
+        tree = repr(sorted((tuple(r) for r in exps), key=repr)) + repr(sorted(map(tuple, flags)))
+        return tree, {k: repr(sorted(v, key=repr)) for k, v in per.items()}
 
     def _upsert_node_run(self, conn: sa.Connection, exp_id: str, node: str, **values: Any) -> None:
         res = conn.execute(

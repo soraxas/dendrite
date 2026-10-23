@@ -237,3 +237,85 @@ def test_experiment_fork_tree(lab, source):
     assert tree == {a.id: None, b.id: a.id, c.id: b.id}
     assert c.params == {"train": {"iterations": 1, "seed": 3}}
     assert lab.get("c") == c
+
+
+def test_named_fanout_reuses_identical_work_across_renumbering(lab, source):
+    toy.FANOUT.clear()
+    toy.FANOUT.update({"s0": 1, "s1": 2})
+    a = lab.create(toy.toy_fanout, inputs={"src": source}).run()
+    assert statuses(a) == {"extract": "computed", "featurize[s0]": "computed", "featurize[s1]": "computed"}
+    toy.CALLS.clear()
+    toy.FANOUT.clear()
+    toy.FANOUT.update({"s0": 3, "s1": 1, "s2": 2})  # a new item first: every key shifts
+    b = lab.create(toy.toy_fanout, inputs={"src": source}).run()
+    assert dict(toy.CALLS) == {"featurize": 1}  # only scale=3 is new work
+    assert statuses(b)["featurize[s1]"] == statuses(b)["featurize[s2]"] == "cached"
+    assert b.load("featurize[s2]") == a.load("featurize[s1]")
+    toy.FANOUT.update({"s0": 1, "s1": 2})
+    toy.FANOUT.pop("s2")
+
+
+def test_named_copies_are_cached_and_not_rechecked():
+    copy = toy.featurize.named("k")
+    assert copy is toy.featurize.named("k") and copy.name == "featurize[k]" and copy.op == "featurize"
+    assert copy.diagnostics == [] and toy.featurize.named(7).name == "featurize[7]"
+
+
+def test_create_with_parent_takes_only_the_given_config(lab, source, tmp_path):
+    a = lab.create(toy.toy, inputs={"src": source}, params={"train.iterations": 4}).run()
+    b = lab.create(toy.toy, inputs={"src": source}, parent=a)
+    assert b.parent_id == a.id and b.params == {} and b.inputs == a.inputs
+    assert lab.create(toy.toy, inputs={"src": source}, parent=a.id).parent_id == a.id
+
+
+def test_body_reads_fanout_fields_and_progress(lab, source, tmp_path):
+    config = lab.ingest(lab.store.put_value({"scale": 2}))
+    exp = lab.create(toy.toy_decides, inputs={"src": source, "config": config}).run()
+    dag = exp.dag()
+    reads = dag["reads"]
+    assert [(r["producer"], r["after"]) for r in reads] == [("input:config", 0), ("featurize", 2)]
+    nodes = {n["id"]: n for n in dag["nodes"]}
+    assert (nodes["slow_count[1]"]["step"], nodes["slow_count[1]"]["key"]) == ("slow_count", "1")
+    assert (nodes["extract"]["step"], nodes["extract"]["key"]) == ("extract", None)
+    ex = nodes["slow_count[1]"]["execution_id"]
+    assert lab.db.progress_for([ex])[ex]["done"] == 3 and lab.db.progress_for([ex])[ex]["unit"] == "items"
+    assert nodes["slow_count[1]"]["progress"] is None  # finished steps don't carry live progress
+    # plans report the same reads, without writing them
+    d = exp.fork({"featurize.scale": 3}, draft=True)
+    plan = d.plan()
+    assert [r["producer"] for r in plan["reads"]] == ["input:config", "featurize"]
+    assert lab.db.reads(d.id) == []
+    exp.run()  # rerunning replaces the recorded reads instead of appending
+    assert len(lab.db.reads(exp.id)) == 2
+
+
+def test_progress_outside_a_step_raises():
+    from dendrite import progress
+
+    with pytest.raises(RuntimeError, match="inside an executing"):
+        progress(1, 2)
+
+
+def test_queued_steps_show_which_step_they_wait_for(lab, source):
+    import threading
+    import time
+
+    toy.SLEEP["train"] = 3.0
+    exp = lab.create(toy.toy_wait, inputs={"src": source})
+    runner = threading.Thread(target=exp.run)
+    runner.start()
+    try:
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            nodes = {n["id"]: n for n in exp.dag()["nodes"]}
+            if nodes.get("train", {}).get("status") == "running" and nodes.get("echo", {}).get("status") == "queued":
+                break
+            time.sleep(0.05)
+        assert nodes["echo"]["status"] == "queued"
+        edges = {(e["from"], e["to"]): e["label"] for e in exp.dag()["edges"]}
+        assert edges[("train", "echo")] == "model, report"  # known while train is still running
+    finally:
+        runner.join()
+        toy.SLEEP["train"] = 0.0
+    assert ("train", "echo") in {(e["from"], e["to"]) for e in exp.dag()["edges"]}
+    assert not any(str(h).startswith("queued:") for n in exp.node_runs() for h in (n["inputs"] or {}).values())

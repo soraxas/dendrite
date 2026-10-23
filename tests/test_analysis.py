@@ -219,6 +219,8 @@ def test_conditionals_loops_and_dynamic_calls(load):
             model = refine(model)
         for i in range(3):
             extract.with_options(name=f"x{i}")(video)
+        for i in range(3):
+            colmap.named(i).submit(frames)  # one node per key: no loop warning
         print(len(frames))
         return json.dumps(model)
     ''')

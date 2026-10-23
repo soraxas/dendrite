@@ -306,3 +306,38 @@ button.top-link.active { color: var(--accent); border-color: var(--accent); }
 .tile-ask { display: grid; gap: 4px; font-size: 12px; }
 .tile-ask button { justify-self: start; }
 .cleanup .force { display: block; }
+
+/* fan-out groups, pipeline reads, live progress */
+.gnode .group-toggle { position: absolute; right: 6px; top: 6px; padding: 0 6px; font-size: 11px; line-height: 18px; color: var(--muted); background: var(--panel); }
+.gnode .group-toggle:hover { color: var(--accent); border-color: var(--accent); }
+.gnode .pbar { position: absolute; left: 16px; right: 12px; bottom: 5px; height: 3px; border-radius: 2px; background: var(--line); overflow: hidden; }
+.gnode .pbar span { display: block; height: 100%; transition: width .2s linear; }
+.gnode.pill.configures { border-style: dashed; }
+.elk-edge-label.control { font-style: italic; }
+.live-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; background: var(--computed); }
+.live-dot.off { background: var(--queued); }
+
+/* graph changes animate: nodes glide to new positions, new nodes and re-routed edges fade in */
+.react-flow__node { transition: transform 350ms ease; }
+.react-flow__node > .gnode { animation: node-in 300ms ease both; }
+.react-flow__edge { animation: edge-in 250ms ease 300ms both; }
+@keyframes node-in { from { opacity: 0; transform: scale(.94); } to { opacity: 1; transform: none; } }
+@keyframes edge-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .react-flow__node { transition: none; }
+  .react-flow__node > .gnode, .react-flow__edge { animation: none; }
+}
+
+/* data chips around a selected step: tinted so they stand out from the canvas, in vs out distinct */
+.ports { background: color-mix(in srgb, var(--accent) 16%, var(--panel)); border-color: var(--accent); }
+.ports.out { background: color-mix(in srgb, var(--computed) 16%, var(--panel)); border-color: var(--computed); }
+.ports .ports-title { color: var(--ink); }
+.port { background: var(--panel); border-color: var(--line-strong); color: var(--ink); }
+.ports.in .port:hover, .ports.in .port.on { border-color: var(--accent); background: var(--accent-bg); }
+.ports.out .port:hover, .ports.out .port.on { border-color: var(--computed); background: var(--computed-bg); }
+.elk-edge-label { animation: edge-in 250ms ease 300ms both; }
+@media (prefers-reduced-motion: reduce) { .elk-edge-label { animation: none; } }
+
+/* fan-out group cards: a count badge and a stacked edge, so they read as "many of this step" */
+.count-badge { display: inline-block; margin-left: 7px; padding: 0 7px; border-radius: 999px; font-size: 11px; font-weight: 700; line-height: 17px; vertical-align: 1px; color: var(--panel); background: var(--accent); }
+.react-flow__node:has(.gnode.stack) { filter: drop-shadow(5px 5px 0 var(--line-strong)) drop-shadow(5px 5px 0 color-mix(in srgb, var(--line-strong) 55%, transparent)); }

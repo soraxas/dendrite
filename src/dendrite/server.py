@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import pickle
 import time
 from importlib import resources
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -125,6 +128,8 @@ class GcRequest(BaseModel):
     include_recent: bool = False
 
 
+EVENT_INTERVAL = 0.25  # seconds between change checks for /api/events
+EVENT_HEARTBEAT = 15.0  # seconds between keep-alive comments when nothing changes
 STORAGE_TTL = 30.0  # seconds the inventory is cached (listing a large bucket is slow)
 
 EDIT_DISABLED = "editing is disabled; start `dendrite ui` on localhost or with --allow-edit"
@@ -343,6 +348,39 @@ def create_app(lab: Lab | None = None, ui_dir: Path = UI_DIR, allow_edit: bool =
         module = _PIPELINES[exp.pipeline_name].fn.__module__
         out["module"] = None if module == "__main__" else module
         return out
+
+    @app.get("/api/events")
+    async def events(request: Request, limit: int | None = None) -> StreamingResponse:
+        """Server-Sent Events: ``{"tree": bool, "experiments": [ids]}`` whenever something changed.
+
+        Runs usually happen in another process, so changes are detected by fingerprinting the
+        database (``Metadata.change_tokens``) every ``EVENT_INTERVAL``. Clients refetch only what
+        an event names. ``limit`` ends the stream after that many events (for tests and curl).
+        """
+
+        async def stream():
+            tree, per = await run_in_threadpool(lab.db.change_tokens)
+            yield "retry: 2000\ndata: " + json.dumps({"hello": True}) + "\n\n"
+            sent, quiet = 0, 0.0
+            while limit is None or sent < limit:
+                await asyncio.sleep(EVENT_INTERVAL)
+                if await request.is_disconnected():
+                    return
+                new_tree, new_per = await run_in_threadpool(lab.db.change_tokens)
+                changed = sorted(k for k in set(per) | set(new_per) if per.get(k) != new_per.get(k))
+                if changed or new_tree != tree:
+                    tree, per = new_tree, new_per
+                    sent += 1
+                    quiet = 0.0
+                    yield "data: " + json.dumps({"tree": True, "experiments": changed}) + "\n\n"
+                else:
+                    quiet += EVENT_INTERVAL
+                    if quiet >= EVENT_HEARTBEAT:
+                        quiet = 0.0
+                        yield ": keep-alive\n\n"
+
+        headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+        return StreamingResponse(stream(), media_type="text/event-stream", headers=headers)
 
     @app.get("/api/experiments")
     def experiments() -> list[dict[str, Any]]:

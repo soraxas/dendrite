@@ -6,6 +6,7 @@ import importlib
 import os
 import sys
 import threading
+import time
 import uuid
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -29,6 +30,10 @@ class RunState:
     refs: dict[str, Any] = field(default_factory=dict)  # hash -> ArtifactRef seen while planning
     parent_runs: dict[str, dict[str, Any]] = field(default_factory=dict)  # node -> parent's node_run
     parent_params: dict[str, dict[str, Any]] = field(default_factory=dict)
+    reads: list[dict[str, Any]] = field(default_factory=list)  # artifacts the body itself loaded
+    # id(future) -> (node, outputs) for submitted steps, so a queued step's inputs can name the
+    # step they will come from before that step has produced anything.
+    future_nodes: dict[int, tuple[str, tuple[str, ...]]] = field(default_factory=dict)
 
     @property
     def lab(self) -> "Lab":
@@ -38,8 +43,8 @@ class RunState:
         with self.lock:
             if node in self.called:
                 raise RuntimeError(
-                    f"node {node!r} was called twice in one pipeline run; give the second call a "
-                    f"distinct name with {node}.with_options(name=...)"
+                    f"node {node!r} was called twice in one pipeline run; give each call its own node "
+                    f"with {node}.named(key)"
                 )
             self.called.add(node)
 
@@ -49,6 +54,8 @@ class ExecContext:
     workdir: Path
     execution_id: str
     metrics: list[tuple[str, int, float]] = field(default_factory=list)
+    db: Any = None
+    last_progress: float = 0.0
 
 
 # Prefect may run tasks on worker threads, so runs are looked up by id rather than via a
@@ -138,6 +145,50 @@ def workdir() -> Path:
     if ctx is None:
         raise RuntimeError("workdir() is only available inside an executing artifact task")
     return ctx.workdir
+
+
+PROGRESS_INTERVAL = 0.25  # seconds between progress writes; the final one is always written
+
+
+def progress(done: float, total: float | None = None, unit: str | None = None) -> None:
+    """Report how far the current step has got, e.g. ``progress(40, 85, "frames")``.
+
+    The UI shows it live on the step's card, with time remaining. Writes are throttled, so it
+    is fine to call per item. Progress is display only and never part of a signature.
+    """
+    ctx = _exec.get()
+    if ctx is None:
+        raise RuntimeError("progress() is only available inside an executing artifact task")
+    now = time.monotonic()
+    final = total is not None and done >= total
+    if ctx.db is None or (not final and now - ctx.last_progress < PROGRESS_INTERVAL):
+        return
+    ctx.last_progress = now
+    ctx.db.set_progress(ctx.execution_id, float(done), None if total is None else float(total), unit)
+
+
+def note_read(ref: Any) -> None:
+    """Record that the pipeline body (not a step) read ``ref``, e.g. a config or a fan-out plan."""
+    run_id = _active_run.get()
+    if run_id is None or _exec.get() is not None or run_id not in _RUNS:
+        return
+    state = _RUNS[run_id]
+    with state.lock:
+        entry = {"artifact": ref.hash, "after": len(state.called)}
+        if any(r["artifact"] == ref.hash for r in state.reads):
+            return
+        seq = len(state.reads)
+        state.reads.append(entry)
+    if not state.plan:
+        state.lab.db.record_read(state.experiment.id, seq, ref.hash, entry["after"])
+
+
+def load(ref: Any) -> Any:
+    """Read an artifact inside a pipeline body, e.g. a plan whose contents decide a fan-out.
+
+    Same as ``lab.load``; the read is recorded so the graph can show what it decided.
+    """
+    return active().lab.load(ref)
 
 
 def log_metric(key: str, value: float, step: int = 0) -> None:

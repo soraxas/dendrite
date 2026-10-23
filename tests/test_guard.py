@@ -98,3 +98,11 @@ def test_guard_is_idle_outside_steps(project):
     with warnings.catch_warnings():
         warnings.simplefilter("error", UndeclaredReadWarning)
         (project / "config.yaml").read_text()
+
+
+def test_directory_walks_and_removals_are_not_reads(project, monkeypatch, source):
+    (project / "scratch" / "deep").mkdir(parents=True)  # same relative names exist in the project
+    (project / "scratch" / "deep" / "f.txt").write_text("decoy")
+    lab = make_lab(project, monkeypatch, "error")
+    lab.create(toy.toy_tidy, inputs={"src": source}).run()
+    lab.db.dispose()

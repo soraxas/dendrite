@@ -27,9 +27,12 @@ export interface GraphNode<T extends Record<string, unknown> = Record<string, un
   minimapColor?: string;
 }
 
-export interface GraphEdge extends LayoutEdge {}
+export interface GraphEdge extends LayoutEdge {
+  /** A control edge (what the pipeline decided from a result), not data flowing. */
+  dashed?: boolean;
+}
 
-type ElkEdgeData = { points: Point[]; label?: string; labelBox?: { x: number; y: number; width: number; height: number }; hl: boolean };
+type ElkEdgeData = { points: Point[]; label?: string; labelBox?: { x: number; y: number; width: number; height: number }; hl: boolean; dashed?: boolean };
 
 function roundedPath(pts: Point[], r = 8): string {
   if (pts.length < 2) return "";
@@ -55,12 +58,12 @@ function ElkEdge({ id, data, markerEnd }: EdgeProps<Edge<ElkEdgeData>>) {
         id={id}
         path={roundedPath(data.points)}
         markerEnd={markerEnd}
-        style={{ stroke, strokeWidth: data.hl ? 2.2 : 1.5 }}
+        style={{ stroke, strokeWidth: data.hl ? 2.2 : 1.5, strokeDasharray: data.dashed ? "5 5" : undefined }}
       />
       {data.label && data.labelBox && (
         <EdgeLabelRenderer>
           <div
-            className={`elk-edge-label ${data.hl ? "hl" : ""}`}
+            className={`elk-edge-label ${data.hl ? "hl" : ""} ${data.dashed ? "control" : ""}`}
             style={{ transform: `translate(${data.labelBox.x}px, ${data.labelBox.y}px)` }}
           >
             {data.label}
@@ -108,6 +111,7 @@ function Canvas({ nodes, edges, nodeTypes, selectedId, focusId, onSelect, legend
     [nodes, edges],
   );
   const layout = useElkLayout(nodes, edges, shapeKey, size);
+  const fitted = useRef(false);
   const { fitView, getZoom, setCenter } = useReactFlow();
 
   const incident = useMemo(() => {
@@ -139,12 +143,13 @@ function Canvas({ nodes, edges, nodeTypes, selectedId, focusId, onSelect, legend
         const r = layout.edges.get(e.id)!;
         const hl = incident.has(e.id);
         return {
-          id: e.id,
+          // Keyed by layout too: a new shape remounts edges, which fade in once nodes have moved.
+          id: `${e.id}@${layout.key}`,
           source: e.from,
           target: e.to,
           type: "elk",
           markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16, color: hl ? "var(--accent)" : "var(--edge)" },
-          data: { points: r.points, label: e.label, labelBox: r.label, hl },
+          data: { points: r.points, label: e.label, labelBox: r.label, hl, dashed: e.dashed },
         };
       });
   }, [layout, edges, incident]);
@@ -153,8 +158,10 @@ function Canvas({ nodes, edges, nodeTypes, selectedId, focusId, onSelect, legend
   // would make text illegible, centre the focus node at a readable zoom instead.
   useEffect(() => {
     if (!layout) return;
+    const first = !fitted.current;
+    fitted.current = true;
     requestAnimationFrame(async () => {
-      await fitView({ padding: 0.12, maxZoom: 1.2, minZoom: 0.2 });
+      await fitView({ padding: 0.12, maxZoom: 1.2, minZoom: 0.2, duration: first ? 0 : 350 });
       const focus = focusId ? layout.nodes.get(focusId) : undefined;
       const spec = focusId ? nodes.find((n) => n.id === focusId) : undefined;
       if (getZoom() < MIN_LEGIBLE_ZOOM && focus && spec) {
@@ -227,12 +234,12 @@ export function Graph(props: Props) {
 }
 
 /** Merge parallel edges between the same pair of nodes into one edge with a combined label. */
-export function mergeEdges(edges: { from: string; to: string; label: string }[]): GraphEdge[] {
+export function mergeEdges(edges: { from: string; to: string; label: string; dashed?: boolean }[]): GraphEdge[] {
   const merged = new Map<string, GraphEdge>();
   for (const e of edges) {
-    const id = `${e.from}->${e.to}`;
+    const id = `${e.from}${e.dashed ? "~>" : "->"}${e.to}`;
     const m = merged.get(id);
-    if (!m) merged.set(id, { id, from: e.from, to: e.to, label: e.label });
+    if (!m) merged.set(id, { id, from: e.from, to: e.to, label: e.label, ...(e.dashed ? { dashed: true } : {}) });
     else if (e.label && !(m.label ?? "").split(", ").includes(e.label)) m.label = m.label ? `${m.label}, ${e.label}` : e.label;
   }
   return [...merged.values()];

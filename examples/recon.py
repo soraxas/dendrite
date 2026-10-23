@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 
 import dendrite
-from dendrite import artifact_task, log_metric, pipeline, workdir
+from dendrite import artifact_task, log_metric, pipeline, progress, workdir
 
 SLEEP = float(os.environ.get("DEMO_SLEEP", "0.3"))
 
@@ -46,9 +46,10 @@ def colmap(frames: Path, matcher: str = "sequential") -> tuple[Path, Path]:
 @artifact_task(outputs=["model"], packages=["prefect"])
 def train_splats(frames: Path, cameras: Path, sparse: Path, iterations: int = 30_000, lr: float = 1e-3, seed: int = 42):
     rng = random.Random(seed)
-    time.sleep(SLEEP * 3)
     for step in range(0, iterations + 1, max(1, iterations // 5)):
+        time.sleep(SLEEP * 0.5)
         log_metric("loss", 1.0 / (1 + step * lr) + rng.random() * 1e-3, step=step)
+        progress(step, iterations, "iterations")  # shown live on the step's card
     model = workdir() / "splats.ply"
     model.write_text(f"ply\n# iterations={iterations} lr={lr} seed={seed}\n")
     return model

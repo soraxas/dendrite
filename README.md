@@ -117,6 +117,20 @@ Only the params a node consumes go into its signature. Changing `train_splats.it
 - **Leases.** A lease row per signature means concurrent experiments compute a node once, and the others wait and reuse the result. A heartbeat keeps long GPU jobs alive. A crashed holder's lease expires and gets stolen.
 - `@artifact_task(cache=False)` marks non-deterministic nodes. They always execute, and lineage is still recorded.
 - `hash_source=False` together with `version="…"` keeps cosmetic code edits from invalidating the cache.
+- **Fan-out.** To call a step once per item, use `step.named(key)`, which makes node `step[key]`:
+
+  ```python
+  plan = lab.load(plan_segments(video))          # runtime.active().lab.load inside a pipeline
+  for name, seg in plan["segments"].items():
+      clips[name] = encode.named(name).submit(video, start=seg["start"], duration=seg["duration"])
+  ```
+
+  Named copies keep the step's identity in the signature, so identical work is reused whatever its key. Renumbered items never recompute.
+- **Progress.** `dendrite.progress(done, total, "frames")` inside a step shows live on its card: a bar, plus "Running · 40/85 frames · ~6s left". Writes are throttled, so calling it per item is fine.
+- **What the pipeline reads.** `dendrite.load(ref)` (or `lab.load`) in a pipeline body is recorded:
+  - An input read this way is shown as configuring the run.
+  - A step result read this way, such as a plan that decides the fan-out, gets dashed "decides" edges to the steps called after it.
+- `lab.create(..., parent=exp)` records a new experiment as a fork of `exp` (fork tree, diffs, plan reasons) while taking exactly the config you pass, unlike `exp.fork()`, which starts from the parent's config.
 
 ### Checks before anything runs
 
@@ -209,6 +223,7 @@ Lab(store_url="s3://lineage/prod", storage_options={"endpoint_url": "http://mini
 - node details: signature, the execution it reused and which experiment computed it, params, inputs/outputs, and metric sparklines
 - artifact lineage: artifacts (data) and executions (computation) are drawn as distinct node types, and artifacts are labelled by output name. The selection is kept in the URL and the side panel always describes it. "Used by" reads like *produced by extract_frames · read by colmap, train_splats*.
 - an experiment diff: params, per-node reuse, and metric deltas
+- live updates: the server pushes change events (Server-Sent Events, `/api/events`), so steps change state and report progress within a fraction of a second, even when the run is in another process. Fan-out steps (`step.named(key)`) collapse into one `step ×N` card, and clicking a selected step again deselects it.
 - code: every run records a snapshot of its step's source, with file and line. You can view it in an editor. While the file still contains exactly that code, you can also edit and save it back. Saving asks for confirmation, refuses if the file changed underneath you, and is only enabled when `dendrite ui` runs on localhost (or with `--allow-edit`).
 
 ### Code view: edit the pipeline and watch its shape

@@ -9,7 +9,9 @@ import { DiffPage, MetricsPage, ParamsPage } from "./components/Pages";
 import { Sidebar } from "./components/Sidebar";
 import { StoragePage } from "./components/Storage";
 import { Toolbar } from "./components/Toolbar";
-import { useDag, useDiff, useExperiments, useInfo, useLineage, usePlan } from "./queries";
+import { collapsedSteps, fanoutGroups, groupId, nextSelection } from "./fanout";
+import { GroupDetail } from "./components/DetailPanel";
+import { useDag, useDiff, useExperiments, useInfo, useIsLive, useLineage, useLiveUpdates, usePlan } from "./queries";
 import { parse, splitSel, useRoute, type Route } from "./router";
 import { confirmLeave } from "./unsaved";
 
@@ -69,6 +71,8 @@ export function App() {
       return !c;
     });
   }, []);
+  useLiveUpdates();
+  const live = useIsLive();
   const { data: tree = [] } = useExperiments();
   const { data: info } = useInfo();
   const inLineage = route.view === "lineage";
@@ -95,6 +99,19 @@ export function App() {
   }, [tree]);
 
   const setSel = useCallback((sel?: string) => navigate({ ...route, sel }, { replace: true }), [navigate, route]);
+  // Clicking the selected item again deselects it (closing its data chips).
+  const pick = useCallback((sel: string) => setSel(nextSelection(route.sel, sel)), [setSel, route.sel]);
+  // Fan-out groups the user flipped from their default, per experiment.
+  const [toggled, setToggled] = useState<Record<string, string[]>>({});
+  const toggleGroup = useCallback((step: string) => {
+    if (!route.exp) return;
+    setToggled((t) => {
+      const cur = new Set(t[route.exp!] ?? []);
+      if (cur.has(step)) cur.delete(step);
+      else cur.add(step);
+      return { ...t, [route.exp!]: [...cur] };
+    });
+  }, [route.exp]);
   const nav: Nav = useMemo(() => ({
     openExp: (id) => navigate({ view: "dag", exp: id }),
     openStep: (expId, node) => navigate({ view: "dag", exp: expId, sel: `node:${node}` }),
@@ -107,6 +124,9 @@ export function App() {
   const { kind, id } = splitSel(route.sel);
   const go = (r: Route) => navigate(r);
   const running = tree.filter((e) => e.status === "running");
+
+  const groups = useMemo(() => fanoutGroups(dag?.nodes ?? []), [dag?.nodes]);
+  const collapsedGroups = useMemo(() => collapsedSteps(groups, new Set(toggled[route.exp ?? ""] ?? [])), [groups, toggled, route.exp]);
 
   // ---- main area
   let toolbar = null;
@@ -159,7 +179,7 @@ export function App() {
           selected={graphSel}
           nameOf={nameOf}
           back={route.exp ? { label: nameOf(route.exp), go: () => nav.openExp(route.exp!) } : undefined}
-          onSelect={(gid) => setSel(execIds.has(gid) ? `exec:${gid}` : `artifact:${gid}`)}
+          onSelect={(gid) => pick(execIds.has(gid) ? `exec:${gid}` : `artifact:${gid}`)}
         />
       );
     }
@@ -179,7 +199,10 @@ export function App() {
         )}
       </>
     );
-    graphSel = kind === "node" ? id : kind === "input" ? `input:${id}` : kind === "artifact" && id ? ownerOf(dag, id) : undefined;
+    graphSel = kind === "node" ? id : kind === "input" ? `input:${id}` : kind === "group" ? groupId(id!) : kind === "artifact" && id ? ownerOf(dag, id) : undefined;
+    // A selected item inside a collapsed group highlights the group.
+    const inGroup = graphSel && groups.find((g) => collapsedGroups.has(g.step) && g.members.some((m) => m.id === graphSel));
+    if (inGroup) graphSel = inGroup.id;
     if (route.view === "params") body = <ParamsPage dag={dag} onArtifact={nav.selectArtifact} />;
     else if (route.view === "code") body = <CodeView key={dag.experiment.pipeline} pipeline={dag.experiment.pipeline} dag={dag} canEdit={canEdit} />;
     else if (route.view === "metrics") body = <MetricsPage dag={dag} />;
@@ -190,7 +213,9 @@ export function App() {
           dag={dag}
           nameOf={nameOf}
           selected={graphSel}
-          onSelect={(gid) => setSel(gid.startsWith("input:") ? gid : `node:${gid}`)}
+          onSelect={(gid) => pick(gid.startsWith("input:") ? gid : gid.startsWith("group:") ? gid : `node:${gid}`)}
+          collapsed={collapsedGroups}
+          onToggleGroup={toggleGroup}
           onArtifact={nav.selectArtifact}
           onOpenSource={nav.openStep}
           activeArtifact={kind === "artifact" ? id : undefined}
@@ -216,6 +241,19 @@ export function App() {
         <p>Evicted or cleaned-up results recompute the next time a run needs them. Lineage records always stay.</p>
       </section>
     );
+  } else if (kind === "group" && dag && id) {
+    const g = groups.find((x) => x.step === id);
+    detail = g ? (
+      <GroupDetail
+        group={g}
+        collapsed={collapsedGroups.has(g.step)}
+        onToggle={() => toggleGroup(g.step)}
+        onOpen={(node) => {
+          if (collapsedGroups.has(g.step)) toggleGroup(g.step);
+          setSel(`node:${node}`);
+        }}
+      />
+    ) : null;
   } else if (kind === "node" && dag) {
     const n = dag.nodes.find((x) => x.kind === "node" && x.id === id);
     detail = !n ? null : plan ? (
@@ -256,6 +294,9 @@ export function App() {
           </span>
         )}
         <span className="spacer" />
+        <span className="live" title={live ? "Live: the page updates as soon as something changes" : "Not connected for live updates; the page refreshes every few seconds"}>
+          <i className={`live-dot ${live ? "" : "off"}`} /> {live ? "live" : "polling"}
+        </span>
         <button className={`top-link ${inStorage ? "active" : ""}`} title="Storage use, deleting experiments and cleaning up" onClick={() => navigate({ view: "storage" })}>
           Storage
         </button>
