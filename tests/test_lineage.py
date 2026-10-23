@@ -319,3 +319,24 @@ def test_queued_steps_show_which_step_they_wait_for(lab, source):
         toy.SLEEP["train"] = 0.0
     assert ("train", "echo") in {(e["from"], e["to"]) for e in exp.dag()["edges"]}
     assert not any(str(h).startswith("queued:") for n in exp.node_runs() for h in (n["inputs"] or {}).values())
+
+
+def test_dag_query_count_does_not_grow_with_fanout(lab, source):
+    import sqlalchemy as sa
+
+    toy.FANOUT.clear()
+    toy.FANOUT.update({f"s{i}": i + 1 for i in range(40)})
+    try:
+        exp = lab.create(toy.toy_fanout, inputs={"src": source}).run()
+    finally:
+        toy.FANOUT.clear()
+        toy.FANOUT.update({"s0": 1, "s1": 2})
+    queries = []
+    listen = lambda *a: queries.append(1)  # noqa: E731
+    sa.event.listen(lab.db.reader, "before_cursor_execute", listen)
+    try:
+        dag = exp.dag()
+    finally:
+        sa.event.remove(lab.db.reader, "before_cursor_execute", listen)
+    assert len([n for n in dag["nodes"] if n["kind"] == "node"]) == 41
+    assert len(queries) < 15  # a fixed handful of bulk reads, whatever the fan-out size

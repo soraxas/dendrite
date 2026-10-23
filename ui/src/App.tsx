@@ -233,6 +233,7 @@ export function App() {
     );
     graphSel = kind === "node" ? id : kind === "input" ? `input:${id}` : kind === "group" ? groupId(id!) : kind === "artifact" && id ? ownerOf(dag, id) : undefined;
     if (kind === "stage" && id) graphSel = `stage:${id}`;
+    if (kind === "group" && id && !collapsedGroups.has(id)) graphSel = `fan:${id}`; // its frame, when expanded
     // A selected item inside a folded stage or group highlights that card.
     if (graphSel && cards.members.has(graphSel)) graphSel = cards.members.get(graphSel);
     if (route.view === "params") body = <ParamsPage dag={dag} onArtifact={nav.selectArtifact} />;
@@ -245,7 +246,15 @@ export function App() {
           dag={dag}
           nameOf={nameOf}
           selected={graphSel}
-          onSelect={(gid) => pick(gid.startsWith("input:") || gid.startsWith("group:") || gid.startsWith("stage:") ? gid : `node:${gid}`)}
+          onSelect={(gid) =>
+            pick(
+              gid.startsWith("fan:") || gid.startsWith("more:") // a fan-out frame or its "+N more": list the items
+                ? `group:${gid.slice(gid.indexOf(":") + 1)}`
+                : gid.startsWith("input:") || gid.startsWith("group:") || gid.startsWith("stage:")
+                  ? gid
+                  : `node:${gid}`,
+            )
+          }
           collapsed={collapsedGroups}
           onToggleGroup={toggleGroup}
           grouping={cards}

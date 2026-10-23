@@ -135,3 +135,45 @@ export function progressLine(p: { done: number; total: number | null; unit: stri
 }
 
 const fmtCount = (x: number) => (Number.isInteger(x) ? String(x) : x.toFixed(1));
+
+/** An expanded fan-out draws at most this many items; the rest are one "+N more" node. */
+export const SHOW_AT_MOST = 12;
+const URGENT: Record<string, number> = { failed: 0, running: 1, waiting: 2, queued: 3 };
+
+/** The items worth drawing: failures and work in progress first, then the first finished ones, in call order. */
+export function sampleItems<T extends DagNode>(members: T[], limit = SHOW_AT_MOST): { shown: T[]; hidden: T[] } {
+  if (members.length <= limit) return { shown: members, hidden: [] };
+  const ranked = members.map((m, i) => ({ m, i, r: URGENT[m.status] ?? 9 })).sort((a, b) => a.r - b.r || a.i - b.i);
+  const keep = new Set(ranked.slice(0, limit).map((x) => x.i));
+  return { shown: members.filter((_, i) => keep.has(i)), hidden: members.filter((_, i) => !keep.has(i)) };
+}
+
+export interface GridCell {
+  status: string;
+  title: string;
+  /** The item to open when the cell is clicked (a failed or running one, if the batch has any). */
+  pick: string;
+}
+
+export const GRID_COLS = 24;
+export const GRID_MAX_ROWS = 5;
+export const gridRows = (cells: number) => Math.min(GRID_MAX_ROWS, Math.ceil(cells / GRID_COLS));
+
+/** One cell per item, or per batch once items outnumber the grid; a batch shows its most urgent status. */
+export function gridCells(members: DagNode[], maxCells = GRID_COLS * GRID_MAX_ROWS): GridCell[] {
+  const per = Math.max(1, Math.ceil(members.length / maxCells));
+  const cells: GridCell[] = [];
+  for (let i = 0; i < members.length; i += per) {
+    const batch = members.slice(i, i + per);
+    const worst = batch.reduce((w, m) => ((URGENT[m.status] ?? 9) < (URGENT[w.status] ?? 9) ? m : w), batch[0]);
+    const counts = new Map<string, number>();
+    for (const m of batch) counts.set(m.status, (counts.get(m.status) ?? 0) + 1);
+    const what = [...counts].map(([st, c]) => `${c} ${st}`).join(", ");
+    const title = per === 1 ? `${batch[0].key ?? batch[0].name}: ${batch[0].status}` : `items ${batch[0].key}–${batch[batch.length - 1].key}: ${what}`;
+    cells.push({ status: worst.status, title, pick: worst.id });
+  }
+  return cells;
+}
+
+export const moreId = (step: string) => `more:${step}`;
+export const fanFrameId = (step: string) => `fan:${step}`;

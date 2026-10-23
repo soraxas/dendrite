@@ -10,7 +10,16 @@ export interface LayoutNode {
   id: string;
   width: number;
   height: number;
+  /** Id of the frame (sub flow) this node sits in; frames are laid out around their children. */
+  parent?: string;
+  /** A frame: sized by ELK to fit its children, with room for its header. */
+  frame?: boolean;
+  /** A frame whose children are parallel items with no edges between them: packed in a grid. */
+  pack?: boolean;
 }
+
+export const FRAME_HEADER = 46;
+const FRAME_PADDING = `[top=${FRAME_HEADER + 14},left=18,bottom=18,right=18]`;
 export interface LayoutEdge {
   id: string;
   from: string;
@@ -26,7 +35,12 @@ export interface Layout {
   dir: "RIGHT" | "DOWN";
   width: number;
   height: number;
+  /** Absolute positions (flow coordinates) of every node, frames included. */
   nodes: Map<string, Point>;
+  /** Positions relative to the node's frame (equal to `nodes` for top-level nodes). */
+  relative: Map<string, Point>;
+  /** Sizes ELK gave frames. */
+  sizes: Map<string, { width: number; height: number }>;
   edges: Map<string, { points: Point[]; label?: { x: number; y: number; width: number; height: number } }>;
 }
 
@@ -34,9 +48,22 @@ const LABEL_CHAR_W = 6.6;
 
 async function run(nodes: LayoutNode[], edges: LayoutEdge[], dir: "RIGHT" | "DOWN", key: string): Promise<Layout> {
   const ids = new Set(nodes.map((n) => n.id));
+  const hasFrames = nodes.some((n) => n.frame);
+  // Frames contain their children (ELK's compound layout); everything else is a leaf.
+  const elkNode = (n: LayoutNode): ElkNode =>
+    n.frame
+      ? {
+          id: n.id,
+          layoutOptions: n.pack
+            ? { "elk.padding": FRAME_PADDING, "elk.hierarchyHandling": "SEPARATE_CHILDREN", "elk.algorithm": "rectpacking", "elk.aspectRatio": "1.8", "elk.spacing.nodeNode": "18" }
+            : { "elk.padding": FRAME_PADDING, "elk.direction": dir },
+          children: nodes.filter((c) => c.parent === n.id).map(elkNode),
+        }
+      : { id: n.id, width: n.width, height: n.height };
   const graph: ElkNode = {
     id: "root",
     layoutOptions: {
+      ...(hasFrames ? { "elk.hierarchyHandling": "INCLUDE_CHILDREN" } : {}),
       "elk.algorithm": "layered",
       "elk.direction": dir,
       "elk.edgeRouting": "ORTHOGONAL",
@@ -49,7 +76,7 @@ async function run(nodes: LayoutNode[], edges: LayoutEdge[], dir: "RIGHT" | "DOW
       "elk.layered.considerModelOrder.strategy": "NODES_AND_EDGES",
       "elk.edgeLabels.placement": "CENTER",
     },
-    children: nodes.map((n) => ({ id: n.id, width: n.width, height: n.height })),
+    children: nodes.filter((n) => !n.parent || !ids.has(n.parent)).map(elkNode),
     edges: edges
       .filter((e) => ids.has(e.from) && ids.has(e.to) && e.from !== e.to)
       .map((e) => ({
@@ -61,18 +88,35 @@ async function run(nodes: LayoutNode[], edges: LayoutEdge[], dir: "RIGHT" | "DOW
   };
   const out = await (elk ??= new ELK({ workerUrl })).layout(graph);
   const pos = new Map<string, Point>();
-  for (const c of out.children ?? []) pos.set(c.id, { x: c.x ?? 0, y: c.y ?? 0 });
+  const rel = new Map<string, Point>();
+  const sizes = new Map<string, { width: number; height: number }>();
+  const walk = (cs: ElkNode[] | undefined, ox: number, oy: number) => {
+    for (const c of cs ?? []) {
+      const r = { x: c.x ?? 0, y: c.y ?? 0 };
+      rel.set(c.id, r);
+      pos.set(c.id, { x: ox + r.x, y: oy + r.y });
+      if (c.children?.length) {
+        sizes.set(c.id, { width: c.width ?? 0, height: c.height ?? 0 });
+        walk(c.children, ox + r.x, oy + r.y);
+      }
+    }
+  };
+  walk(out.children, 0, 0);
+  // Edge routes are relative to the edge's container (the frame holding both ends, or the root).
   const routed: Layout["edges"] = new Map();
   for (const e of out.edges ?? []) {
     const s = e.sections?.[0];
     if (!s) continue;
+    const container = (e as { container?: string }).container;
+    const o = container && container !== "root" ? pos.get(container) ?? { x: 0, y: 0 } : { x: 0, y: 0 };
+    const at = (p: Point) => ({ x: p.x + o.x, y: p.y + o.y });
     const l = e.labels?.[0];
     routed.set(e.id, {
-      points: [s.startPoint, ...(s.bendPoints ?? []), s.endPoint],
-      label: l ? { x: l.x ?? 0, y: l.y ?? 0, width: l.width ?? 0, height: l.height ?? 0 } : undefined,
+      points: [s.startPoint, ...(s.bendPoints ?? []), s.endPoint].map(at),
+      label: l ? { x: (l.x ?? 0) + o.x, y: (l.y ?? 0) + o.y, width: l.width ?? 0, height: l.height ?? 0 } : undefined,
     });
   }
-  return { key, dir, width: out.width ?? 0, height: out.height ?? 0, nodes: pos, edges: routed };
+  return { key, dir, width: out.width ?? 0, height: out.height ?? 0, nodes: pos, relative: rel, sizes, edges: routed };
 }
 
 function fitScale(l: Layout, w: number, h: number) {

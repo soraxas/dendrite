@@ -28,6 +28,12 @@ export interface GraphNode<T extends Record<string, unknown> = Record<string, un
   minimapColor?: string;
   /** Ids this node grows out of (or folds into) when it appears, e.g. a fan-out group and its items. */
   origins?: string[];
+  /** The frame (sub flow) this node sits in. */
+  parent?: string;
+  /** A frame: ELK sizes it around its children; `width`/`height` are ignored. */
+  frame?: boolean;
+  /** A frame of parallel items: packed in a grid (see `LayoutNode.pack`). */
+  pack?: boolean;
 }
 
 export interface GraphEdge extends LayoutEdge {
@@ -114,7 +120,7 @@ function Canvas({ nodes, edges, nodeTypes, selectedId, focusId, onSelect, legend
   const box = useRef<HTMLDivElement>(null);
   const size = useSize(box);
   const shapeKey = useMemo(
-    () => nodes.map((n) => n.id).join("|") + "#" + edges.map((e) => `${e.from}>${e.to}`).join("|"),
+    () => nodes.map((n) => (n.parent ? `${n.id}<${n.parent}` : n.id)).join("|") + "#" + edges.map((e) => `${e.from}>${e.to}`).join("|"),
     [nodes, edges],
   );
   const layout = useElkLayout(nodes, edges, shapeKey, size);
@@ -133,11 +139,20 @@ function Canvas({ nodes, edges, nodeTypes, selectedId, focusId, onSelect, legend
   useEffect(() => {
     if (layout && settled === layout.key) previous.current = layout.nodes;
   }, [layout, settled]);
+  // Where a newly appearing node starts, relative to its frame like React Flow positions it.
   const startAt = (n: GraphNode): Point | undefined => {
     if (!layout || settled === layout.key || previous.current.has(n.id)) return undefined;
     const from = (n.origins ?? []).map((o) => previous.current.get(o)).filter((p): p is Point => !!p);
     if (!from.length) return undefined;
-    return { x: from.reduce((s, p) => s + p.x, 0) / from.length, y: from.reduce((s, p) => s + p.y, 0) / from.length };
+    const abs = { x: from.reduce((s, p) => s + p.x, 0) / from.length, y: from.reduce((s, p) => s + p.y, 0) / from.length };
+    const parent = n.parent ? layout.nodes.get(n.parent) : undefined;
+    return parent ? { x: abs.x - parent.x, y: abs.y - parent.y } : abs;
+  };
+  // React Flow needs every frame before the nodes inside it.
+  const depth = (n: GraphNode): number => {
+    let d = 0;
+    for (let p = n.parent; p; p = nodes.find((x) => x.id === p)?.parent) d++;
+    return d;
   };
 
   const incident = useMemo(() => {
@@ -149,20 +164,26 @@ function Canvas({ nodes, edges, nodeTypes, selectedId, focusId, onSelect, legend
     if (!layout) return [];
     return nodes
       .filter((n) => layout.nodes.has(n.id))
-      .map((n) => ({
+      .map((n) => ({ n, d: depth(n) }))
+      .sort((a, b) => a.d - b.d)
+      .map(({ n }) => {
+        const size = n.frame ? layout.sizes.get(n.id) ?? { width: n.width, height: n.height } : { width: n.width, height: n.height };
+        return {
         id: n.id,
         type: n.type,
-        position: startAt(n) ?? layout.nodes.get(n.id)!,
-        width: n.width,
-        height: n.height,
+        position: startAt(n) ?? (n.parent && layout.nodes.has(n.parent) ? layout.relative.get(n.id)! : layout.nodes.get(n.id)!),
+        ...(n.parent && layout.nodes.has(n.parent) ? { parentId: n.parent } : {}),
+        width: size.width,
+        height: size.height,
         // Without `measured`, React Flow treats every updated node as new and drops its handle
         // positions until it re-measures, so every edge unmounts for a frame on each update.
-        measured: { width: n.width, height: n.height },
+        measured: size,
         data: { ...n.data, dir: layout.dir, selected: n.id === selectedId },
-        className: startAt(n) ? "from-origin" : undefined,
+        className: [startAt(n) ? "from-origin" : "", n.frame ? "frame" : ""].join(" ").trim() || undefined,
         draggable: false,
         selectable: false,
-      }));
+        };
+      });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layout, nodes, selectedId, settled]);
 
@@ -198,7 +219,8 @@ function Canvas({ nodes, edges, nodeTypes, selectedId, focusId, onSelect, legend
       let fits = true;
       for (const n of nodes) {
         const p = layout.nodes.get(n.id);
-        if (p && (p.x < view.left || p.y < view.top || p.x + n.width > view.right || p.y + n.height > view.bottom)) fits = false;
+        const s = layout.sizes.get(n.id) ?? n;
+        if (p && (p.x < view.left || p.y < view.top || p.x + s.width > view.right || p.y + s.height > view.bottom)) fits = false;
       }
       if (fits) return;
       const t = setTimeout(() => fitView({ padding: 0.12, maxZoom: 1.2, minZoom: MIN_LEGIBLE_ZOOM, duration: 300 }), MOVE_MS);

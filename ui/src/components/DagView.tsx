@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ArtifactRef, Dag, DagNode, PlanNode } from "../api";
-import { collapseEdges, configInputs, controlEdges, progressLine, summarize, summarizePlan } from "../fanout";
-import { EMPTY_VIEW, grouping as computeGrouping, stagePath, type Grouping } from "../stages";
+import { collapseEdges, configInputs, controlEdges, fanFrameId, gridCells, gridRows, moreId, progressLine, sampleItems, summarize, summarizePlan } from "../fanout";
+import { EMPTY_VIEW, grouping as computeGrouping, stageId, stagePath, type Grouping } from "../stages";
 import { PLAN, REASON, STATUS, UPSTREAM_NOTE } from "../copy";
 import { fmtDur, fmtSize, fmtVal } from "../format";
 import { Graph, mergeEdges, type GraphNode } from "./Graph";
@@ -109,6 +109,96 @@ interface Props {
   onShowSteps?: (show: boolean) => void;
 }
 
+/**
+ * Sub flows: expanded stages and fan-outs become frames around their steps, a big expanded
+ * fan-out gets a "+N more" node, and every card is placed in its innermost frame. Frames that
+ * would be empty are dropped.
+ */
+export function framed(cards: GraphNode[], nodes: DagNode[], g: Grouping, planned: boolean, onToggleStage: (id: string) => void, onToggleGroup: (step: string) => void): GraphNode[] {
+  const open = new Set(g.stages.filter((s) => !g.collapsedStages.has(s.id)).map((s) => s.id));
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const innermost = (path: string[]) => {
+    let best: string | undefined;
+    for (let i = 1; i <= path.length; i++) {
+      const id = stageId(path.slice(0, i));
+      if (!open.has(id)) break;
+      best = id;
+    }
+    return best;
+  };
+  const pathOf = (n: DagNode | undefined) => (n ? stagePath(n, g.view).map((x) => x.name) : []);
+  const openFan = g.fan.filter((f) => !g.collapsedFan.has(f.step) && !f.members.every((m) => g.members.get(m.id)?.startsWith("stage:")));
+  const fanOf = new Map<string, string>();
+  for (const f of openFan) for (const m of f.members) fanOf.set(m.id, fanFrameId(f.step));
+  const out: GraphNode[] = [];
+  for (const c of cards) {
+    let parent: string | undefined;
+    if (c.id.startsWith("stage:")) parent = innermost(c.id.slice(6).split("/").slice(0, -1));
+    else if (c.id.startsWith("group:")) parent = innermost(pathOf(g.fan.find((f) => `group:${f.step}` === c.id)?.members[0]));
+    else parent = fanOf.get(c.id) ?? innermost(pathOf(byId.get(c.id)));
+    out.push(parent ? { ...c, parent } : c);
+  }
+  for (const f of openFan) {
+    const { shown, hidden } = sampleItems(f.members);
+    const frame = fanFrameId(f.step);
+    if (hidden.length) {
+      out.push({
+        id: moreId(f.step),
+        parent: frame,
+        type: "moreNode",
+        width: 220,
+        height: 52,
+        data: { label: `+${hidden.length} more ${f.step}`, sub: "click to list every item", hover: { title: `${hidden.length} more items`, body: `Only ${shown.length} of ${f.members.length} items are drawn: failed and running ones first. The full list, with filters, is in the panel.`, facts: [], hint: "Click to list them all" } },
+      });
+    }
+    const s = planned ? summarizePlan(f.members as PlanNode[]) : summarize(f.members);
+    out.push({
+      id: frame,
+      frame: true,
+      pack: true,
+      parent: innermost(pathOf(f.members[0])),
+      type: "frameNode",
+      width: 0,
+      height: 0,
+      data: {
+        name: `${f.step} ×${f.members.length}`,
+        sub: hidden.length ? `showing ${shown.length} of ${f.members.length} · ${s.line2}` : s.line2,
+        color: "gray",
+        foldLabel: "▴ Fold into one card",
+        collapse: () => onToggleGroup(f.step),
+      },
+    });
+  }
+  for (const st of g.stages) {
+    if (!open.has(st.id) || st.path.slice(0, -1).some((_, i) => !open.has(stageId(st.path.slice(0, i + 1))))) continue;
+    const count = st.members.length;
+    out.push({
+      id: st.id,
+      frame: true,
+      parent: innermost(st.path.slice(0, -1)),
+      type: "frameNode",
+      width: 0,
+      height: 0,
+      data: {
+        name: st.name,
+        sub: [st.description, `${count} step${count === 1 ? "" : "s"}`].filter(Boolean).join(" · "),
+        color: st.color,
+        foldLabel: "▴ Fold",
+        collapse: () => onToggleStage(st.id),
+      },
+    });
+  }
+  // Drop frames with nothing inside (e.g. every step of a stage folded into a fan-out elsewhere).
+  let kept = out;
+  for (;;) {
+    const used = new Set(kept.map((n) => n.parent).filter(Boolean));
+    const next = kept.filter((n) => !n.frame || used.has(n.id));
+    const orphaned = new Set(kept.filter((n) => !next.includes(n)).map((n) => n.id));
+    if (!orphaned.size) return next.map((n) => (n.parent && orphaned.has(n.parent) ? { ...n, parent: undefined } : n));
+    kept = next.map((n) => (n.parent && orphaned.has(n.parent) ? { ...n, parent: undefined } : n));
+  }
+}
+
 export function DagView({
   dag, nameOf, selected, onSelect, onArtifact, onOpenSource, activeArtifact, planned = false,
   collapsed = new Set(), onToggleGroup = () => {}, grouping, onToggleStage = () => {}, showSteps = false, onShowSteps,
@@ -125,13 +215,7 @@ export function DagView({
   const members = g0.members;
   const stages = g0.stages;
   const configs = useMemo(() => configInputs(dag.nodes, dag.reads ?? []), [dag.nodes, dag.reads]);
-  // A card inside an expanded stage carries that stage's coloured tag (click it to fold back).
-  const tagFor = (n: DagNode) => {
-    const path = stagePath(n, g0.view).map((x) => x.name);
-    const inner = path.length ? stages.find((x) => x.path.join("/") === path.join("/")) : undefined;
-    return inner ? { stageTag: { name: inner.name, color: inner.color, collapse: () => onToggleStage(inner.id) } } : {};
-  };
-  const nodes: GraphNode[] = useMemo(
+  const cards: GraphNode[] = useMemo(
     () =>
       dag.nodes.flatMap((n): GraphNode[] => {
         const groupKey = members.get(n.id);
@@ -163,16 +247,18 @@ export function DagView({
             },
           }];
         }
+        if (groupKey?.startsWith("more:")) return []; // not drawn: counted in its fan-out's "+N more" node
         if (groupKey) {
           const g = groups.find((x) => x.id === groupKey)!;
           if (g.members[0].id !== n.id) return []; // the group is drawn once, at its first item
           const s = planned ? summarizePlan(g.members as PlanNode[]) : summarize(g.members);
+          const grid = planned ? undefined : gridCells(g.members);
           return [{
             id: g.id,
             origins: g.members.map((m) => m.id), // a collapsing group folds out of its items
             type: "pipelineNode",
             width: 250,
-            height: 68,
+            height: 68 + (grid ? gridRows(grid.length) * 9 + 6 : 0),
             minimapColor: `var(--${s.status})`,
             data: {
               name: g.step,
@@ -181,11 +267,12 @@ export function DagView({
               line3: s.line3,
               progress: !planned && s.done < s.total ? s.fraction : undefined,
               group: { collapsed: true, count: g.members.length, toggle: () => onToggleGroup(g.step) },
-              ...tagFor(g.members[0]),
+              grid,
+              onPickItem: (id: string) => onSelect(id),
               hover: {
                 title: `${g.step} — once per item`,
                 body: `The pipeline calls ${g.step} once for each of ${g.members.length} items. They're shown as one card; expand it to see each item.`,
-                facts: [["items", g.members.map((m) => m.key).join(", ")]],
+                facts: [["items", g.members.length > 12 ? `${g.members.slice(0, 6).map((m) => m.key).join(", ")} … ${g.members[g.members.length - 1].key}` : g.members.map((m) => m.key).join(", ")]],
                 hint: "Click to list the items · ▸ to expand",
               },
             },
@@ -193,10 +280,10 @@ export function DagView({
         }
         const expandedOf = n.kind === "node" ? groups.find((g) => g.members.some((m) => m.id === n.id)) : undefined;
         const path = n.kind === "node" ? stagePath(n, g0.view).map((x) => x.name) : [];
-        const inner = path.length ? stages.find((x) => x.path.join("/") === path.join("/")) : undefined;
-        const stageTag = tagFor(n);
-        const member = expandedOf ? { member: { of: `${expandedOf.step} ×${expandedOf.members.length}`, collapse: () => onToggleGroup(expandedOf.step) } } : {};
-        const origins = expandedOf ? [expandedOf.id] : inner ? path.map((_, i) => `stage:${path.slice(0, i + 1).join("/")}`) : undefined; // grow out of the card they folded into
+        const stageTag = {}; // membership is shown by the frame around the step
+        const member = {};
+        // Grow out of the card the step was folded into.
+        const origins = expandedOf ? [expandedOf.id] : path.length ? path.map((_, i) => stageId(path.slice(0, i + 1))) : undefined;
         if (n.kind === "input") {
           const a = n.artifact;
           const configures = configs.has(n.id);
@@ -267,14 +354,23 @@ export function DagView({
           },
         }];
       }),
-    [dag, nameOf, onArtifact, onOpenSource, activeArtifact, planned, groups, members, stages, configs, onToggleGroup, onToggleStage, now, g0],
+    [dag, nameOf, onArtifact, onOpenSource, activeArtifact, planned, groups, members, stages, configs, onToggleGroup, onToggleStage, onSelect, now, g0],
   );
+  const nodes = useMemo(() => framed(cards, dag.nodes, g0, planned, onToggleStage, onToggleGroup), [cards, dag.nodes, g0, planned, onToggleStage, onToggleGroup]);
+  // Items of an expanded fan-out are parallel siblings: their edges attach to the frame around
+  // them, so 12 drawn items (or 1000 counted ones) give one edge in and one out.
+  const routed = useMemo(() => {
+    const m = new Map(members);
+    for (const n of nodes) if (n.parent?.startsWith("fan:") && !n.frame) m.set(n.id, n.parent);
+    for (const [id, to] of members) if (to.startsWith("more:")) m.set(id, `fan:${to.slice(5)}`);
+    return m;
+  }, [members, nodes]);
   const edges = useMemo(
     () => [
-      ...mergeEdges(collapseEdges(dag.edges, members)),
-      ...mergeEdges(controlEdges(dag.nodes, dag.edges, dag.reads ?? [], members).map((e) => ({ ...e, dashed: true }))),
+      ...mergeEdges(collapseEdges(dag.edges, routed)),
+      ...mergeEdges(controlEdges(dag.nodes, dag.edges, dag.reads ?? [], routed).map((e) => ({ ...e, dashed: true }))),
     ],
-    [dag.edges, dag.nodes, dag.reads, members],
+    [dag.edges, dag.nodes, dag.reads, routed],
   );
   const present = useMemo(
     () =>

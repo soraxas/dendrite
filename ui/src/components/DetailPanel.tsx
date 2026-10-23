@@ -377,15 +377,31 @@ export function ExecutionDetailPanel({ id, nav }: { id: string; nav: Nav }) {
   );
 }
 
-/** A fan-out group (`cut_clip ×3`): its items, each one click from its own details. */
+const FILTERS: [string, string, (status: string) => boolean][] = [
+  ["all", "All", () => true],
+  ["failed", "Failed", (s) => s === "failed"],
+  ["active", "Running", (s) => s === "running" || s === "waiting"],
+  ["queued", "Queued", (s) => s === "queued"],
+  ["done", "Done", (s) => s === "computed" || s === "cached" || s === "pinned"],
+];
+const PAGE = 100;
+
+/** A fan-out group (`cut_clip ×1000`): every item, filterable and searchable, one click from its details. */
 export function GroupDetail({ group, collapsed, onToggle, onOpen }: {
   group: FanoutGroup;
   collapsed: boolean;
   onToggle: () => void;
   onOpen: (node: string) => void;
 }) {
+  const [filter, setFilter] = useState("all");
+  const [query, setQuery] = useState("");
+  const [shown, setShown] = useState(PAGE);
   const planned = group.members.some((m) => (m as PlanNode).plan);
   const s = planned ? summarizePlan(group.members as PlanNode[]) : summarize(group.members);
+  const test = FILTERS.find((f) => f[0] === filter)![2];
+  const q = query.trim().toLowerCase();
+  const rows = group.members.filter((m) => (planned || test(m.status)) && (!q || String(m.key ?? m.name).toLowerCase().includes(q)));
+  const count = (pred: (status: string) => boolean) => group.members.filter((m) => pred(m.status)).length;
   return (
     <>
       <Selected kind="step, once per item" label={`${group.step} ×${group.members.length}`} />
@@ -394,13 +410,23 @@ export function GroupDetail({ group, collapsed, onToggle, onOpen }: {
           <dt>items</dt><dd>{s.line2}</dd>
           {s.line3 && (<><dt>time</dt><dd>{s.line3}</dd></>)}
         </dl>
-        <button style={{ marginTop: 10 }} onClick={onToggle}>{collapsed ? `Show all ${group.members.length} on the graph` : "Collapse into one card"}</button>
+        <button style={{ marginTop: 10 }} onClick={onToggle}>{collapsed ? "Show items on the graph" : "Fold into one card"}</button>
       </section>
       <section>
         <h3>Items</h3>
+        {!planned && (
+          <div className="tabs" role="tablist" style={{ flexWrap: "wrap", marginBottom: 8 }}>
+            {FILTERS.map(([key, label, pred]) => (
+              <button key={key} role="tab" aria-selected={filter === key} className={filter === key ? "active" : ""} onClick={() => (setFilter(key), setShown(PAGE))}>
+                {label} {count(pred)}
+              </button>
+            ))}
+          </div>
+        )}
+        <input type="search" className="item-search" aria-label="Find an item" placeholder="Find an item…" value={query} onChange={(e) => (setQuery(e.target.value), setShown(PAGE))} />
         <table>
           <tbody>
-            {group.members.map((m) => {
+            {rows.slice(0, shown).map((m) => {
               const p = (m as PlanNode).plan;
               return (
                 <tr key={m.id}>
@@ -410,8 +436,10 @@ export function GroupDetail({ group, collapsed, onToggle, onOpen }: {
                 </tr>
               );
             })}
+            {!rows.length && <tr><td colSpan={3} className="muted">No items match.</td></tr>}
           </tbody>
         </table>
+        {rows.length > shown && <button style={{ marginTop: 8 }} onClick={() => setShown(shown + PAGE)}>Show {Math.min(PAGE, rows.length - shown)} more of {rows.length - shown}</button>}
       </section>
     </>
   );

@@ -27,3 +27,11 @@ A per-pipeline view SHALL let users assign ungrouped steps to stages and relabel
 #### Scenario: Group someone else's pipeline
 - **WHEN** a user assigns two ungrouped steps to a new stage "Audio" in the UI
 - **THEN** every experiment of that pipeline shows an "Audio" stage card containing them, and nothing is recomputed
+
+### Requirement: Sub flows and large fan-outs
+An expanded stage or fan-out SHALL be drawn as a frame containing its steps. A fan-out SHALL never draw more than a small fixed number of items. Its card SHALL show a status grid of every item, batched when there are many. Expanding it SHALL draw failed, running and queued items first, plus a "+N more" node that opens the full, filterable list. Edges of a fan-out's items SHALL attach to its frame.
+
+#### Scenario: A thousand frames
+- **WHEN** a run calls `extract.named(i)` for 1000 frames
+- **THEN** the graph draws one card with a status grid; expanding it draws at most 12 items, the rest are counted in "+988 more", and the full list is in the panel
+

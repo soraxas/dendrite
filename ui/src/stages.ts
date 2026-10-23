@@ -1,7 +1,7 @@
 // Stages (`dendrite.stage` in code, or assigned in the UI's pipeline view) as collapsible cards:
 // the pipeline's high-level picture. Pure functions over the DAG, so they're testable.
 import type { DagNode, PipelineView, StageInfo } from "./api";
-import { fanoutGroups, groupId, type FanoutGroup } from "./fanout";
+import { fanoutGroups, groupId, moreId, sampleItems, type FanoutGroup } from "./fanout";
 
 export const STAGE_COLORS = ["teal", "blue", "purple", "orange", "green", "pink", "red", "gray"] as const;
 export const EMPTY_VIEW: PipelineView = { assign: {}, styles: {} };
@@ -86,7 +86,10 @@ export function grouping(nodes: DagNode[], view: PipelineView, opts: { collapsed
   const stages = stageGroups(nodes, view);
   const collapsedStages = new Set(stages.filter((s) => !opts.showSteps !== opts.stageToggled.has(s.id)).map((s) => s.id));
   const members = new Map<string, string>();
-  for (const g of fan) if (opts.collapsedFan.has(g.step)) for (const m of g.members) members.set(m.id, groupId(g.step));
+  for (const g of fan) {
+    if (opts.collapsedFan.has(g.step)) for (const m of g.members) members.set(m.id, groupId(g.step));
+    else for (const m of sampleItems(g.members).hidden) members.set(m.id, moreId(g.step)); // expanded, but capped
+  }
   for (const n of nodes) {
     if (n.kind !== "node") continue;
     const path = stagePath(n, view).map((s) => s.name);

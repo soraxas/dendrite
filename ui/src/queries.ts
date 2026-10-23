@@ -14,6 +14,7 @@ function setLive(on: boolean) {
 export const isLive = () => liveConnected;
 export const useIsLive = () => useSyncExternalStore((cb) => (liveListeners.add(cb), () => liveListeners.delete(cb)), isLive);
 const SAFETY_NET = 15000;
+const REFETCH_GAP = 500; // at most two refetches a second per query, however busy a big fan-out gets
 
 /** Subscribe to the server's change events for the lifetime of the app. */
 export function useLiveUpdates(): void {
@@ -23,19 +24,33 @@ export function useLiveUpdates(): void {
     const es = new EventSource("/api/events");
     es.onopen = () => setLive(true);
     es.onerror = () => setLive(false); // EventSource retries by itself; polling covers the gap
+    // Coalesce: a key invalidated again within REFETCH_GAP is refetched once, at the end of the gap.
+    const last = new Map<string, number>();
+    const pending = new Map<string, number>();
+    const invalidate = (queryKey: unknown[]) => {
+      const k = JSON.stringify(queryKey);
+      const wait = (last.get(k) ?? 0) + REFETCH_GAP - Date.now();
+      if (wait <= 0) {
+        last.set(k, Date.now());
+        qc.invalidateQueries({ queryKey });
+      } else if (!pending.has(k)) {
+        pending.set(k, window.setTimeout(() => (pending.delete(k), last.set(k, Date.now()), qc.invalidateQueries({ queryKey })), wait));
+      }
+    };
     es.onmessage = (m) => {
       const e = JSON.parse(m.data) as { hello?: boolean; tree?: boolean; experiments?: string[] };
       setLive(true);
       if (e.hello) return;
-      if (e.tree) qc.invalidateQueries({ queryKey: ["experiments"] });
+      if (e.tree) invalidate(["experiments"]);
       for (const id of e.experiments ?? []) {
-        qc.invalidateQueries({ queryKey: ["dag", id] });
-        qc.invalidateQueries({ queryKey: ["plan", id] });
+        invalidate(["dag", id]);
+        invalidate(["plan", id]);
       }
-      if (e.experiments?.length) for (const k of ["diff", "lineage", "artifact", "execution", "storage"]) qc.invalidateQueries({ queryKey: [k] });
+      if (e.experiments?.length) for (const k of ["diff", "lineage", "artifact", "execution", "storage"]) invalidate([k]);
     };
     return () => {
       es.close();
+      pending.forEach((t) => window.clearTimeout(t));
       setLive(false);
     };
   }, [qc]);

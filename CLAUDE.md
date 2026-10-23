@@ -154,6 +154,11 @@ The flow of a run spans several modules in `src/dendrite/`:
    - **Static shape.** `analysis.py` pushes `("stage", name)` frames for `with stage("…")` and for `@stage` helpers (expanded up to depth 3), so shape nodes carry `stage` names.
    - **View.** `pipeline_views` stores the UI overlay (`assign` step→stage, `styles` stage→label/description/color) behind `GET`/`PUT /api/pipelines/{name}/view`.
    - **UI.** `ui/src/stages.ts` combines code stages, the view and fan-out into one member map (outermost collapsed stage wins, then a collapsed fan-out group). Editing lives in `components/StageDetail.tsx`.
+   - **Sub flows.**
+     - `DagView.framed()` turns expanded stages and fan-outs into frame nodes (`frame`, `parent`).
+     - `layout.ts` lays them out with ELK's `INCLUDE_CHILDREN`. Edge sections are relative to their `container`; fan-out frames use `rectpacking`.
+     - Expanded fan-outs draw at most `SHOW_AT_MOST` items (`sampleItems`), and the rest map to `more:<step>`.
+     - Items' edges attach to their `fan:<step>` frame. Never draw every item of a fan-out.
 
 ## Invariants to preserve
 

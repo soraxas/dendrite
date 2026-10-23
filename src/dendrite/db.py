@@ -766,6 +766,17 @@ class Metadata:
         out["metrics"] = [{"key": k, "step": s, "value": v} for k, s, v in ms]
         return out
 
+    def executions_brief(self, exec_ids: Iterable[str]) -> dict[str, dict]:
+        """``{id: {started_at, finished_at, experiment_id}}`` in one query (for DAGs with many nodes)."""
+        ids = [i for i in set(exec_ids) if i]
+        if not ids:
+            return {}
+        with self.ro() as conn:
+            rows = conn.execute(
+                sa.select(executions.c.id, executions.c.started_at, executions.c.finished_at, executions.c.experiment_id).where(executions.c.id.in_(ids))
+            ).mappings().all()
+        return {r["id"]: dict(r) for r in rows}
+
     def metrics_for(self, exec_ids: Iterable[str]) -> dict[str, dict[str, float]]:
         """Last-step value of every metric, per execution."""
         ids = [i for i in set(exec_ids) if i]

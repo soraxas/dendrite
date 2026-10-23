@@ -43,6 +43,12 @@ describe("live updates", () => {
     const keys = invalidate.mock.calls.map((c) => JSON.stringify(c[0]!.queryKey));
     expect(keys).toEqual(expect.arrayContaining(['["experiments"]', '["dag","e-1"]', '["plan","e-1"]']));
     expect(keys).not.toContain('["dag","e-2"]');
+    // a burst of events for one experiment refetches it at most once per gap
+    invalidate.mockClear();
+    act(() => {
+      for (let i = 0; i < 10; i++) es.onmessage!({ data: JSON.stringify({ experiments: ["e-1"] }) });
+    });
+    expect(invalidate.mock.calls.filter((c) => JSON.stringify(c[0]!.queryKey) === '["dag","e-1"]').length).toBe(0); // still inside the gap
     act(() => es.onerror!());
     expect(isLive()).toBe(false);
     unmount();

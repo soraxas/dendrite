@@ -862,8 +862,9 @@ class Experiment:
                     node, _, out = h.removeprefix("queued:").rpartition(".")
                     producers.setdefault(h, (node, out))
         edges = []
+        brief = db.executions_brief(nr["execution_id"] for nr in nrs)  # one query, not one per node
         for nr in nrs:
-            ex = db.execution(nr["execution_id"]) if nr["execution_id"] else None
+            ex = brief.get(nr["execution_id"]) if nr["execution_id"] else None
             duration = None
             if ex and ex["finished_at"]:
                 duration = ex["finished_at"] - ex["started_at"]

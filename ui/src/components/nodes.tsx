@@ -2,6 +2,7 @@
 // Every node can carry a hover card that says, in a sentence, what happened.
 import { Handle, NodeToolbar, Position, type NodeProps } from "@xyflow/react";
 import { useState, type CSSProperties, type ReactNode } from "react";
+import type { GridCell } from "../fanout";
 
 export interface HoverCard {
   title: string;
@@ -129,7 +130,31 @@ export type PipelineData = Base & {
   stageCard?: { color: string; collapsed: boolean; toggle: () => void };
   /** A step inside an expanded stage: the stage's tag, which folds it back. */
   stageTag?: { name: string; color: string; collapse: () => void };
+  /** A fan-out card's status grid: one cell per item, or per batch of items when there are many. */
+  grid?: GridCell[];
+  onPickItem?: (id: string) => void;
 };
+
+function StatusGrid({ cells, onPick }: { cells: GridCell[]; onPick?: (id: string) => void }) {
+  return (
+    <div className="status-grid nodrag" role="list" aria-label="Item statuses">
+      {cells.map((c, i) => (
+        <span
+          key={i}
+          role="listitem"
+          className={`cell ${c.status}`}
+          title={c.title}
+          style={{ background: `var(--${c.status})` }}
+          onClick={(e) => {
+            if (!onPick) return;
+            e.stopPropagation();
+            onPick(c.pick);
+          }}
+        />
+      ))}
+    </div>
+  );
+}
 export function PipelineNode({ data }: NodeProps & { data: PipelineData }) {
   const animated = data.status === "running" || data.status === "waiting";
   const src = data.source;
@@ -177,6 +202,7 @@ export function PipelineNode({ data }: NodeProps & { data: PipelineData }) {
         <div className="t2">{data.line2}</div>
       )}
       <div className="t3">{data.line3}</div>
+      {data.grid && <StatusGrid cells={data.grid} onPick={data.onPickItem} />}
       {data.progress != null && (
         <div className="pbar" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(data.progress * 100)}>
           <span style={{ width: `${Math.min(100, data.progress * 100)}%`, background: `var(--${data.status})` }} />
@@ -206,6 +232,54 @@ export function PipelineNode({ data }: NodeProps & { data: PipelineData }) {
           {data.group ? (data.group.collapsed ? "▸" : "▾") : "▴"}
         </button>
       )}
+    </Shell>
+  );
+}
+
+export type FrameData = Base & {
+  name: string;
+  sub: string;
+  color: string;
+  /** Fold the frame back into one card. */
+  collapse: () => void;
+  foldLabel: string;
+};
+/** An expanded stage or fan-out: a sub flow whose steps sit inside it. Its header folds it back. */
+export function FrameNode({ data }: NodeProps & { data: FrameData }) {
+  return (
+    <div
+      className={`frame-node ${data.selected ? "sel" : ""}`}
+      // A fan-out frame takes its items' edges (they are parallel siblings), so it needs handles.
+      style={{ borderColor: `var(--stage-${data.color})`, background: `color-mix(in srgb, var(--stage-${data.color}) 7%, transparent)` }}
+      aria-label={`${data.name}: ${data.sub}`}
+    >
+      <Handles dir={data.dir} />
+      <div className="frame-head" style={{ background: `color-mix(in srgb, var(--stage-${data.color}) 18%, var(--panel))` }}>
+        <span className="frame-dot" style={{ background: `var(--stage-${data.color})` }} />
+        <span className="frame-name">{data.name}</span>
+        <span className="frame-sub">{data.sub}</span>
+        <span className="spacer" />
+        <button
+          className="frame-fold nodrag"
+          onClick={(e) => {
+            e.stopPropagation();
+            data.collapse();
+          }}
+        >
+          {data.foldLabel}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+export type MoreData = Base & { label: string; sub: string };
+/** "+988 more": the items of a big fan-out that aren't drawn; click to list them all. */
+export function MoreNode({ data }: NodeProps & { data: MoreData }) {
+  return (
+    <Shell data={data} className="pill more" style={tone("queued")} label={data.label}>
+      <div className="t1">{data.label}</div>
+      <div className="t3">{data.sub}</div>
     </Shell>
   );
 }
@@ -243,6 +317,8 @@ export function ExecutionNode({ data }: NodeProps & { data: ExecutionData }) {
 }
 
 export const nodeTypes = {
+  frameNode: FrameNode,
+  moreNode: MoreNode,
   pipelineNode: PipelineNode,
   inputNode: InputNode,
   artifactNode: ArtifactNode,
