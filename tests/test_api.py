@@ -50,7 +50,11 @@ def test_api_endpoints(lab, source, tmp_path, monkeypatch):
     report = b.output("train", "report")
     lin = client.get(f"/api/artifacts/{report.hash}/lineage").json()
     assert lin["artifact"]["label"] == "report"
-    assert (lin["artifact"]["producer_node"], lin["artifact"]["role"], lin["artifact"]["kind"]) == ("train", "focus", "value")
+    assert (lin["artifact"]["producer_node"], lin["artifact"]["role"], lin["artifact"]["kind"]) == (
+        "train",
+        "focus",
+        "value",
+    )
     arts = {x["label"]: x for x in lin["artifacts"]}
     assert arts["src"]["role"] == "ancestor" and arts["src"]["producer_node"] is None  # source input name
     assert arts["rows"]["producer_node"] == "extract" and arts["features"]["producer_node"] == "featurize"

@@ -17,8 +17,8 @@ def _fmt_time(t: float | None) -> str:
 
 
 def _table(rows: list[list[str]], header: list[str]) -> str:
-    widths = [max(len(str(x)) for x in col) for col in zip(header, *rows)]
-    line = lambda r: "  ".join(str(x).ljust(w) for x, w in zip(r, widths))  # noqa: E731
+    widths = [max(len(str(x)) for x in col) for col in zip(header, *rows, strict=False)]
+    line = lambda r: "  ".join(str(x).ljust(w) for x, w in zip(r, widths, strict=False))  # noqa: E731
     return "\n".join([line(header), line(["-" * w for w in widths]), *map(line, rows)])
 
 
@@ -60,7 +60,12 @@ def cmd_diff(lab: Lab, args) -> None:
     print(
         _table(
             [
-                [n["node"], n["a_status"] or "-", n["b_status"] or "-", "shared" if n["same_execution"] else "same" if n["same_outputs"] else "differs"]
+                [
+                    n["node"],
+                    n["a_status"] or "-",
+                    n["b_status"] or "-",
+                    "shared" if n["same_execution"] else "same" if n["same_outputs"] else "differs",
+                ]
                 for n in d["nodes"]
             ],
             ["node", "A", "B", "result"],
@@ -131,12 +136,19 @@ def cmd_check(lab: Lab, args) -> None:
         for d in shape["diagnostics"]:
             if d["code"] not in ignore:
                 line = (d["line"] or 1) + shape["first_line"] - 1
-                found.append((d["severity"], f"{shape['file'] or pipe.name}:{line}: {d['severity']} {d['code']}: {d['message']}"))
+                found.append(
+                    (d["severity"], f"{shape['file'] or pipe.name}:{line}: {d['severity']} {d['code']}: {d['message']}")
+                )
     for exp in lab.experiments():
         if exp.status in ("draft", "created") and exp.pipeline_name in _PIPELINES:
             for d in exp.check():
                 if d["code"] not in ignore:
-                    found.append((d["severity"], f"experiment {exp.name or exp.id} ({exp.id}): {d['severity']} {d['code']}: {d['message']}"))
+                    found.append(
+                        (
+                            d["severity"],
+                            f"experiment {exp.name or exp.id} ({exp.id}): {d['severity']} {d['code']}: {d['message']}",
+                        )
+                    )
     for _, text in found:
         print(text)
     errors = sum(sev == "error" for sev, _ in found)
@@ -182,15 +194,29 @@ def cmd_du(lab: Lab, args) -> None:
     )
     print()
     rows = [
-        [e["id"], e["name"] or "", e["status"], "keep" if e["keep"] else "", fmt_bytes(e["bytes"]), fmt_bytes(e["exclusive"]),
-         fmt_bytes(e["with_forks"]) if e["forks"] else ""]
+        [
+            e["id"],
+            e["name"] or "",
+            e["status"],
+            "keep" if e["keep"] else "",
+            fmt_bytes(e["bytes"]),
+            fmt_bytes(e["exclusive"]),
+            fmt_bytes(e["with_forks"]) if e["forks"] else "",
+        ]
         for e in sorted(inv["experiments"], key=lambda e: -e["exclusive"])
     ]
     print(_table(rows, ["id", "name", "status", "", "size", "only here", "with forks"]))
     print()
     rows = [
-        [c["execution_id"], c["node"], fmt_bytes(c["bytes"]), str(c["reused"]), _fmt_time(c["last_used"]),
-         "" if c["present"] else "evicted", "" if c["live"] else "unreferenced"]
+        [
+            c["execution_id"],
+            c["node"],
+            fmt_bytes(c["bytes"]),
+            str(c["reused"]),
+            _fmt_time(c["last_used"]),
+            "" if c["present"] else "evicted",
+            "" if c["live"] else "unreferenced",
+        ]
         for c in inv["cache"][: args.top]
     ]
     print(_table(rows, ["execution", "step", "size", "reused", "last used", "", ""]))
@@ -232,7 +258,9 @@ def cmd_rm(lab: Lab, args) -> None:
         )
     est = lab.deletion_estimate([exp.id], forks="delete" if args.forks else "keep")
     kept = f"; its forks become forks of {exp.parent_id or 'nothing'}" if below and args.keep_forks else ""
-    print(f"delete {', '.join(est['ids'])}; frees ~{fmt_bytes(est['bytes'])} after `dendrite gc` (lineage records stay){kept}")
+    print(
+        f"delete {', '.join(est['ids'])}; frees ~{fmt_bytes(est['bytes'])} after `dendrite gc` (lineage records stay){kept}"
+    )
     if not args.yes:
         print("re-run with --yes to delete")
         return
@@ -254,7 +282,9 @@ def cmd_gc(lab: Lab, args) -> None:
     older = args.older_than * 86400 if args.older_than is not None else None
     preview = _reclaim(lab.gc, older, force=args.force)
     if args.yes:  # delete exactly what was listed
-        report = _reclaim(lab.gc, older, dry_run=False, force=args.force, hashes=[d["hash"] for d in preview["deleted"]])
+        report = _reclaim(
+            lab.gc, older, dry_run=False, force=args.force, hashes=[d["hash"] for d in preview["deleted"]]
+        )
     else:
         report = preview
     _print_report(report, "delete", args.yes)
@@ -262,7 +292,9 @@ def cmd_gc(lab: Lab, args) -> None:
 
 def cmd_clean(lab: Lab, args) -> None:
     out = _reclaim(lab.clean, force=args.force)
-    print(f"removed {out['removed']} checkout/scratch entr{'y' if out['removed'] == 1 else 'ies'}, {fmt_bytes(out['bytes'])}")
+    print(
+        f"removed {out['removed']} checkout/scratch entr{'y' if out['removed'] == 1 else 'ies'}, {fmt_bytes(out['bytes'])}"
+    )
 
 
 def cmd_ui(lab: Lab, args) -> None:

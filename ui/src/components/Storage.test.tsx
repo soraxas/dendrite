@@ -1,10 +1,20 @@
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { api, ApiError } from "../api";
+import { ApiError, api } from "../api";
 import { fmtSize } from "../format";
 import { inventory, report, storageExp } from "../test/fixtures";
 import { renderWithQuery } from "../test/render";
-import { BulkDelete, CleanupPanel, countSkips, DeleteExperiment, descendantsOf, groupReport, oldExperiments, orphanedForks, StoragePage } from "./Storage";
+import {
+  BulkDelete,
+  CleanupPanel,
+  countSkips,
+  DeleteExperiment,
+  descendantsOf,
+  groupReport,
+  oldExperiments,
+  orphanedForks,
+  StoragePage,
+} from "./Storage";
 
 afterEach(() => {
   cleanup();
@@ -21,7 +31,9 @@ describe("report grouping", () => {
     expect(g[1]).toMatchObject({ count: 1, bytes: 3000, label: "Used only by deleted experiments or replaced runs" });
   });
   it("counts skipped items per reason", () => {
-    expect(countSkips(report())).toEqual([{ why: "grace", label: "written in the last hour (may still be uploading)", count: 1 }]);
+    expect(countSkips(report())).toEqual([
+      { why: "grace", label: "written in the last hour (may still be uploading)", count: 1 },
+    ]);
   });
   it("finds every fork below an experiment", () => {
     const rows = [
@@ -34,14 +46,21 @@ describe("report grouping", () => {
     expect(descendantsOf(rows, "e-c")).toEqual([]);
   });
   it("formats byte sizes by magnitude", () => {
-    expect([fmtSize(512), fmtSize(2048), fmtSize(5 << 20), fmtSize(3 * 2 ** 30)]).toEqual(["512 B", "2.0 KB", "5.0 MB", "3.00 GB"]);
+    expect([fmtSize(512), fmtSize(2048), fmtSize(5 << 20), fmtSize(3 * 2 ** 30)]).toEqual([
+      "512 B",
+      "2.0 KB",
+      "5.0 MB",
+      "3.00 GB",
+    ]);
   });
 });
 
 describe("DeleteExperiment", () => {
   it("asks first, says what it frees, and deletes on confirm", async () => {
     const est = vi.spyOn(api, "estimate").mockResolvedValue({ ids: ["e-base"], bytes: 2 << 20 });
-    const del = vi.spyOn(api, "deleteExperiment").mockResolvedValue({ deleted: "e-base", ids: ["e-base"], reparented: {}, parent_id: null });
+    const del = vi
+      .spyOn(api, "deleteExperiment")
+      .mockResolvedValue({ deleted: "e-base", ids: ["e-base"], reparented: {}, parent_id: null });
     const onDeleted = vi.fn();
     renderWithQuery(<DeleteExperiment exp={storageExp()} forks={[]} canEdit nameOf={nameOf} onDeleted={onDeleted} />);
     expect(est).not.toHaveBeenCalled(); // only asked once the dialog opens
@@ -58,8 +77,18 @@ describe("DeleteExperiment", () => {
 
   it("keeps forks by default, moving them to the parent", async () => {
     const est = vi.spyOn(api, "estimate").mockResolvedValue({ ids: ["e-base"], bytes: 1 << 20 });
-    const del = vi.spyOn(api, "deleteExperiment").mockResolvedValue({ deleted: "e-base", ids: ["e-base"], reparented: { "e-a": "e-root" }, parent_id: "e-root" });
-    renderWithQuery(<DeleteExperiment exp={storageExp({ parent_id: "e-root" })} forks={["e-a", "e-b"]} canEdit nameOf={(id) => (id === "e-root" ? "root" : nameOf(id))} onDeleted={vi.fn()} />);
+    const del = vi
+      .spyOn(api, "deleteExperiment")
+      .mockResolvedValue({ deleted: "e-base", ids: ["e-base"], reparented: { "e-a": "e-root" }, parent_id: "e-root" });
+    renderWithQuery(
+      <DeleteExperiment
+        exp={storageExp({ parent_id: "e-root" })}
+        forks={["e-a", "e-b"]}
+        canEdit
+        nameOf={(id) => (id === "e-root" ? "root" : nameOf(id))}
+        onDeleted={vi.fn()}
+      />,
+    );
     fireEvent.click(screen.getByText("Delete…"));
     const dialog = screen.getByRole("alertdialog");
     expect(dialog.textContent).toContain("lr-sweep, lr-sweep-2");
@@ -71,9 +100,15 @@ describe("DeleteExperiment", () => {
   });
 
   it("deletes forks too when chosen, with the estimate for all of them", async () => {
-    const est = vi.spyOn(api, "estimate").mockImplementation(async (_ids, forks) => ({ ids: [], bytes: forks === "delete" ? 7 << 20 : 1 << 20 }));
-    const del = vi.spyOn(api, "deleteExperiment").mockResolvedValue({ deleted: "e-base", ids: ["e-b", "e-a", "e-base"], reparented: {}, parent_id: null });
-    renderWithQuery(<DeleteExperiment exp={storageExp()} forks={["e-a", "e-b"]} canEdit nameOf={nameOf} onDeleted={vi.fn()} />);
+    const est = vi
+      .spyOn(api, "estimate")
+      .mockImplementation(async (_ids, forks) => ({ ids: [], bytes: forks === "delete" ? 7 << 20 : 1 << 20 }));
+    const del = vi
+      .spyOn(api, "deleteExperiment")
+      .mockResolvedValue({ deleted: "e-base", ids: ["e-b", "e-a", "e-base"], reparented: {}, parent_id: null });
+    renderWithQuery(
+      <DeleteExperiment exp={storageExp()} forks={["e-a", "e-b"]} canEdit nameOf={nameOf} onDeleted={vi.fn()} />,
+    );
     fireEvent.click(screen.getByText("Delete…"));
     fireEvent.click(screen.getByLabelText(/Delete them too/));
     await waitFor(() => expect(screen.getByRole("alertdialog").textContent).toContain("7.0 MB"));
@@ -83,10 +118,20 @@ describe("DeleteExperiment", () => {
   });
 
   it("is disabled when editing is off or the experiment runs", () => {
-    renderWithQuery(<DeleteExperiment exp={storageExp()} forks={[]} canEdit={false} nameOf={nameOf} onDeleted={vi.fn()} />);
+    renderWithQuery(
+      <DeleteExperiment exp={storageExp()} forks={[]} canEdit={false} nameOf={nameOf} onDeleted={vi.fn()} />,
+    );
     expect(disabled(screen.getByText("Delete…"))).toBe(true);
     cleanup();
-    renderWithQuery(<DeleteExperiment exp={storageExp({ status: "running" })} forks={[]} canEdit nameOf={nameOf} onDeleted={vi.fn()} />);
+    renderWithQuery(
+      <DeleteExperiment
+        exp={storageExp({ status: "running" })}
+        forks={[]}
+        canEdit
+        nameOf={nameOf}
+        onDeleted={vi.fn()}
+      />,
+    );
     expect(disabled(screen.getByText("Delete…"))).toBe(true);
   });
 });
@@ -111,9 +156,15 @@ describe("selection helpers", () => {
 
 describe("BulkDelete", () => {
   it("shows the combined estimate and deletes the selection, keeping forks", async () => {
-    const rows = [storageExp({ id: "e-a", name: "lr-sweep" }), storageExp({ id: "e-b", name: "lr-sweep-2" }), storageExp({ id: "e-c", name: "kid", parent_id: "e-a" })];
+    const rows = [
+      storageExp({ id: "e-a", name: "lr-sweep" }),
+      storageExp({ id: "e-b", name: "lr-sweep-2" }),
+      storageExp({ id: "e-c", name: "kid", parent_id: "e-a" }),
+    ];
     vi.spyOn(api, "estimate").mockResolvedValue({ ids: ["e-a", "e-b"], bytes: 9 << 20 });
-    const many = vi.spyOn(api, "deleteMany").mockResolvedValue({ deleted: ["e-a", "e-b"], reparented: { "e-c": null } });
+    const many = vi
+      .spyOn(api, "deleteMany")
+      .mockResolvedValue({ deleted: ["e-a", "e-b"], reparented: { "e-c": null } });
     const clear = vi.fn();
     renderWithQuery(<BulkDelete rows={rows} selected={new Set(["e-a", "e-b"])} clear={clear} nameOf={nameOf} />);
     await waitFor(() => expect(screen.getByRole("region").textContent).toContain("9.0 MB"));
@@ -128,7 +179,10 @@ describe("BulkDelete", () => {
 describe("CleanupPanel", () => {
   it("previews, then applies exactly the previewed hashes", async () => {
     const preview = report();
-    const gc = vi.spyOn(api, "gc").mockResolvedValueOnce(preview).mockResolvedValueOnce({ ...preview, dry_run: false });
+    const gc = vi
+      .spyOn(api, "gc")
+      .mockResolvedValueOnce(preview)
+      .mockResolvedValueOnce({ ...preview, dry_run: false });
     renderWithQuery(<CleanupPanel canEdit collectable={6000} />);
     fireEvent.click(screen.getByRole("checkbox"));
     fireEvent.change(screen.getByLabelText("days"), { target: { value: "14" } });
@@ -138,7 +192,11 @@ describe("CleanupPanel", () => {
     expect(screen.getByText(/Skipping 1/)).toBeTruthy();
     fireEvent.click(screen.getByText(/Delete 3 items/));
     await screen.findByText(/Deleted 3 items/);
-    expect(gc).toHaveBeenLastCalledWith({ older_than_days: 14, apply: true, hashes: preview.deleted.map((d) => d.hash) });
+    expect(gc).toHaveBeenLastCalledWith({
+      older_than_days: 14,
+      apply: true,
+      hashes: preview.deleted.map((d) => d.hash),
+    });
   });
 
   it("previews without editing, but can't apply", async () => {
@@ -150,7 +208,10 @@ describe("CleanupPanel", () => {
 
   it("needs an explicit override while something runs, then forces", async () => {
     const preview = report();
-    const gc = vi.spyOn(api, "gc").mockResolvedValueOnce(preview).mockResolvedValueOnce({ ...preview, dry_run: false });
+    const gc = vi
+      .spyOn(api, "gc")
+      .mockResolvedValueOnce(preview)
+      .mockResolvedValueOnce({ ...preview, dry_run: false });
     renderWithQuery(<CleanupPanel canEdit collectable={6000} busy={["experiment e-x is running"]} />);
     fireEvent.click(screen.getByText("Preview"));
     const go = await screen.findByText(/Delete 3 items/);
@@ -163,9 +224,18 @@ describe("CleanupPanel", () => {
   });
 
   it("re-previews with recently written data included, and applies with it", async () => {
-    const fresh = report({ deleted: [], bytes: 0, groups: {}, skipped: [{ hash: "a".repeat(64), size: 1000, why: "grace" }] });
+    const fresh = report({
+      deleted: [],
+      bytes: 0,
+      groups: {},
+      skipped: [{ hash: "a".repeat(64), size: 1000, why: "grace" }],
+    });
     const all = report();
-    const gc = vi.spyOn(api, "gc").mockResolvedValueOnce(fresh).mockResolvedValueOnce(all).mockResolvedValueOnce({ ...all, dry_run: false });
+    const gc = vi
+      .spyOn(api, "gc")
+      .mockResolvedValueOnce(fresh)
+      .mockResolvedValueOnce(all)
+      .mockResolvedValueOnce({ ...all, dry_run: false });
     renderWithQuery(<CleanupPanel canEdit collectable={6000} />);
     fireEvent.click(screen.getByText("Preview"));
     fireEvent.click(await screen.findByLabelText(/Include data written in the last hour/));
@@ -176,7 +246,9 @@ describe("CleanupPanel", () => {
   });
 
   it("shows why the server refused", async () => {
-    vi.spyOn(api, "gc").mockResolvedValueOnce(report()).mockRejectedValueOnce(new ApiError(409, "experiment e-x is running", "busy"));
+    vi.spyOn(api, "gc")
+      .mockResolvedValueOnce(report())
+      .mockRejectedValueOnce(new ApiError(409, "experiment e-x is running", "busy"));
     renderWithQuery(<CleanupPanel canEdit collectable={6000} />);
     fireEvent.click(screen.getByText("Preview"));
     fireEvent.click(await screen.findByText(/Delete 3 items/));
@@ -207,9 +279,26 @@ describe("StoragePage", () => {
   });
 
   it("evicts a cache entry after previewing it", async () => {
-    const entry = { execution_id: "x1", node: "train", experiment_id: "e-a", finished_at: 1, duration: 840, outputs: {}, bytes: 4096, present: true, uses: 2, reused: 1, last_used: 1, live: true };
+    const entry = {
+      execution_id: "x1",
+      node: "train",
+      experiment_id: "e-a",
+      finished_at: 1,
+      duration: 840,
+      outputs: {},
+      bytes: 4096,
+      present: true,
+      uses: 2,
+      reused: 1,
+      last_used: 1,
+      live: true,
+    };
     vi.spyOn(api, "storage").mockResolvedValue(inventory({ cache: [entry] }));
-    const evict = vi.spyOn(api, "evict").mockResolvedValueOnce(report({ deleted: [{ hash: "e".repeat(64), size: 4096, why: "evicted:x1" }], bytes: 4096, skipped: [] }))
+    const evict = vi
+      .spyOn(api, "evict")
+      .mockResolvedValueOnce(
+        report({ deleted: [{ hash: "e".repeat(64), size: 4096, why: "evicted:x1" }], bytes: 4096, skipped: [] }),
+      )
       .mockResolvedValueOnce(report({ dry_run: false }));
     renderWithQuery(<StoragePage tab="cache" canEdit {...props} />);
     fireEvent.click(await screen.findByText("Evict…"));
@@ -222,7 +311,10 @@ describe("StoragePage", () => {
 
   it("offers to mark a crashed run stopped", async () => {
     vi.spyOn(api, "storage").mockResolvedValue(
-      inventory({ busy: ["experiment e-run is running"], experiments: [storageExp({ id: "e-run", name: "stuck", status: "running" })] }),
+      inventory({
+        busy: ["experiment e-run is running"],
+        experiments: [storageExp({ id: "e-run", name: "stuck", status: "running" })],
+      }),
     );
     const stop = vi.spyOn(api, "stop").mockResolvedValue({} as never);
     renderWithQuery(<StoragePage tab="experiments" canEdit {...props} />);
@@ -234,10 +326,23 @@ describe("StoragePage", () => {
   });
 
   it("evicts a large artifact, but never an experiment input", async () => {
-    const big = { hash: "f".repeat(64), kind: "dir", filename: "frames", size: 9 << 20, producer_node: "extract", present: true, live: true, experiments: 2 };
+    const big = {
+      hash: "f".repeat(64),
+      kind: "dir",
+      filename: "frames",
+      size: 9 << 20,
+      producer_node: "extract",
+      present: true,
+      live: true,
+      experiments: 2,
+    };
     const input = { ...big, hash: "9".repeat(64), filename: "video.bin", producer_node: null };
     vi.spyOn(api, "storage").mockResolvedValue(inventory({ largest: [big, input] }));
-    const ev = vi.spyOn(api, "evictArtifact").mockResolvedValue(report({ deleted: [{ hash: big.hash, size: big.size, why: "evicted:f" }], bytes: big.size, skipped: [] }));
+    const ev = vi
+      .spyOn(api, "evictArtifact")
+      .mockResolvedValue(
+        report({ deleted: [{ hash: big.hash, size: big.size, why: "evicted:f" }], bytes: big.size, skipped: [] }),
+      );
     renderWithQuery(<StoragePage tab="largest" canEdit {...props} />);
     expect(await screen.findAllByText("Evict…")).toHaveLength(1);
     fireEvent.click(screen.getByText("Evict…"));

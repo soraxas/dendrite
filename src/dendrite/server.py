@@ -326,7 +326,10 @@ def create_app(lab: Lab | None = None, ui_dir: Path = UI_DIR, allow_edit: bool =
         if pipe is None:
             raise HTTPException(
                 404,
-                {"code": "pipeline_not_imported", "message": f"pipeline {name!r} is not loaded; restart with `dendrite ui --import <module that defines it>`"},
+                {
+                    "code": "pipeline_not_imported",
+                    "message": f"pipeline {name!r} is not loaded; restart with `dendrite ui --import <module that defines it>`",
+                },
             )
         return pipe
 

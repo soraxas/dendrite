@@ -1,6 +1,7 @@
 // Thin wrapper over ace-builds, loaded on demand so the main bundle stays small.
-import { useEffect, useRef } from "react";
+
 import type { Ace } from "ace-builds";
+import { useEffect, useRef } from "react";
 
 export interface Annotation {
   row: number; // 0-based, relative to `value`
@@ -28,6 +29,7 @@ export default function AceEditor({ value, readOnly, firstLine, onChange, annota
   const notes = useRef(annotations);
   notes.current = annotations;
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: mount once; later prop changes are applied by the effects below
   useEffect(() => {
     let disposed = false;
     let media: MediaQueryList | null = null;
@@ -66,7 +68,6 @@ export default function AceEditor({ value, readOnly, firstLine, onChange, annota
       editor.current?.destroy();
       editor.current = null;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {

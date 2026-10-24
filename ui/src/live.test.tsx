@@ -32,7 +32,11 @@ describe("live updates", () => {
     vi.stubGlobal("EventSource", FakeSource);
     const client = new QueryClient();
     const invalidate = vi.spyOn(client, "invalidateQueries");
-    const { unmount } = render(<QueryClientProvider client={client}><Live /></QueryClientProvider>);
+    const { unmount } = render(
+      <QueryClientProvider client={client}>
+        <Live />
+      </QueryClientProvider>,
+    );
     const es = FakeSource.last;
     expect(es.url).toBe("/api/events");
     act(() => es.onopen!());

@@ -30,7 +30,7 @@ def mermaid(dag: dict[str, Any]) -> str:
             exec_id = (n.get("execution_id") or "")[:8]
             lines.append(f'  {_mid(n["id"])}["{n["name"]}<br/><small>{n["status"]} {exec_id}</small>"]:::{n["status"]}')
     for e in dag["edges"]:
-        lines.append(f'  {_mid(e["from"])} -->|{e["label"]}| {_mid(e["to"])}')
+        lines.append(f"  {_mid(e['from'])} -->|{e['label']}| {_mid(e['to'])}")
     for cls, style in _CLASSES.items():
         lines.append(f"  classDef {cls} {style}")
     return "\n".join(lines)
@@ -44,7 +44,7 @@ def tree_mermaid(tree: list[dict[str, Any]]) -> str:
         lines.append(f'  {_mid(e["id"])}["{label}<br/><small>{e["id"]} · {e["status"]}<br/>{counts}</small>"]')
     for e in tree:
         if e["parent_id"]:
-            lines.append(f'  {_mid(e["parent_id"])} --> {_mid(e["id"])}')
+            lines.append(f"  {_mid(e['parent_id'])} --> {_mid(e['id'])}")
     return "\n".join(lines)
 
 
@@ -58,7 +58,7 @@ def lineage_mermaid(graph: dict[str, Any]) -> str:
     for x in graph["executions"]:
         lines.append(f'  {_mid(x["id"])}["{x["node"]}<br/><small>exec {x["id"][:8]}</small>"]:::computed')
     for e in graph["edges"]:
-        lines.append(f'  {_mid(e["from"])} -->|{e["label"]}| {_mid(e["to"])}')
+        lines.append(f"  {_mid(e['from'])} -->|{e['label']}| {_mid(e['to'])}")
     lines.append(f"  classDef computed {_CLASSES['computed']}")
     lines.append(f"  classDef pinned {_CLASSES['pinned']}")
     return "\n".join(lines)

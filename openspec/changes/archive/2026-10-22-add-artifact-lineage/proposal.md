@@ -28,6 +28,7 @@ Expensive pipelines (3D reconstruction, Gaussian splatting, ML training) are re-
 ## Capabilities
 
 ### New Capabilities
+
 - `artifact-store`: content-addressed, immutable storage of file, directory and value artifacts. Backends are filesystem and fsspec object stores.
 - `metadata-store`: a SQLAlchemy-backed relational store for experiments, executions, artifacts, lineage edges, metrics and leases. Supports SQLite and PostgreSQL.
 - `execution-cache`: execution signatures, global cross-experiment cache lookup with blob verification, and lease-based de-duplication of concurrent executions.
@@ -36,6 +37,7 @@ Expensive pipelines (3D reconstruction, Gaussian splatting, ML training) are re-
 - `lineage-ui`: an HTTP API plus a single-page app that tracks DAG progress live and traces outputs and lineage.
 
 ### Modified Capabilities
+
 <!-- none: greenfield project -->
 
 ## Impact

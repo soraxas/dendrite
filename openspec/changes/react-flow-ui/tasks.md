@@ -64,4 +64,3 @@
 ## 7. Follow-up
 
 - [x] 7.1 Remove the legacy single-file page (`legacy.html`), `role_labels` and the old `?forks=1` spellings: without a bundle the server now serves the API with a build hint
-

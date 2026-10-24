@@ -25,9 +25,10 @@ import traceback
 import typing
 import uuid
 import warnings
+from collections.abc import Callable, Iterable, Sequence
 from contextlib import nullcontext
 from pathlib import Path
-from typing import Any, Callable, Iterable, Sequence
+from typing import Any
 
 from prefect import get_run_logger, task
 from prefect.cache_policies import NO_CACHE
@@ -132,7 +133,15 @@ def placeholder(node: str, output: str) -> ArtifactRef:
     return ArtifactRef(f"plan:{node}.{output}", PENDING, 0)
 
 
-_JSON_TYPES = {bool: "boolean", int: "integer", float: "number", str: "string", list: "array", tuple: "array", dict: "object"}
+_JSON_TYPES = {
+    bool: "boolean",
+    int: "integer",
+    float: "number",
+    str: "string",
+    list: "array",
+    tuple: "array",
+    dict: "object",
+}
 
 
 def _json_type(annotation: Any, value: Any) -> str:
@@ -251,8 +260,11 @@ class ArtifactTask:
             self.diagnostics = analysis.check_step(self)
             for d in self.diagnostics:
                 warnings.warn_explicit(
-                    f"{self.name}: {d.message} [{d.code}]", analysis.StepDefinitionWarning,
-                    d.file or "<unknown>", d.file_line or 0, module=fn.__module__,
+                    f"{self.name}: {d.message} [{d.code}]",
+                    analysis.StepDefinitionWarning,
+                    d.file or "<unknown>",
+                    d.file_line or 0,
+                    module=fn.__module__,
                 )
 
         node = self
@@ -277,7 +289,7 @@ class ArtifactTask:
                 raise TypeError(f"{self.name} has no parameter {k!r}{analysis._suggest(k, known)}")
         return {f"{self.name}.{k}": v for k, v in params.items()}
 
-    def named(self, key: Any) -> "ArtifactTask":
+    def named(self, key: Any) -> ArtifactTask:
         """This step as node ``<name>[<key>]``, for calling it once per item in a loop.
 
         Copies share the step's cache identity: two items doing identical work (same code,
@@ -290,7 +302,7 @@ class ArtifactTask:
             copy = self._named[key] = self.with_options(name=f"{self.name}[{key}]", _copy=True)
         return copy
 
-    def with_options(self, **overrides: Any) -> "ArtifactTask":
+    def with_options(self, **overrides: Any) -> ArtifactTask:
         opts = dict(
             _op=self.op,
             outputs=self.outputs,
@@ -367,8 +379,16 @@ class ArtifactTask:
         bound = self.signature.bind_partial(*args, **kwargs)
         call = {k: _unwrap_plan(v) for k, v in bound.arguments.items()}
         state.claim(self.name)
-        entry: dict[str, Any] = {"node": self.name, "stage": self.stage_path(), "seq": len(state.planned), "signature": None, "reason": None,
-                                 "reuse_from": None, "estimate": None, "param_schema": []}
+        entry: dict[str, Any] = {
+            "node": self.name,
+            "stage": self.stage_path(),
+            "seq": len(state.planned),
+            "signature": None,
+            "reason": None,
+            "reuse_from": None,
+            "estimate": None,
+            "param_schema": [],
+        }
         state.planned.append(entry)
 
         pinned = exp.pins.get(self.name)
@@ -378,19 +398,31 @@ class ArtifactTask:
             known: dict[str, ArtifactRef] = {}
             for k, v in call.items():  # keep its incoming edges, as a real pinned run does
                 _flatten_refs(k, v, known)
-            entry.update(plan="frozen", inputs={k: r.hash for k, r in known.items()}, params={},
-                         outputs=dict(pinned), reuse_from=_origin(ex))
+            entry.update(
+                plan="frozen",
+                inputs={k: r.hash for k, r in known.items()},
+                params={},
+                outputs=dict(pinned),
+                reuse_from=_origin(ex),
+            )
             state.refs.update({r.hash: r for r in known.values()})
             return self._shape({o: db.artifact(pinned[o]) for o in self.outputs})
 
         structure, flat, params = self._split(call, exp.params.get(self.name, {}))
-        entry.update(inputs={k: r.hash for k, r in flat.items()}, params=params,
-                     param_schema=self._param_schema(call, params, state))
+        entry.update(
+            inputs={k: r.hash for k, r in flat.items()},
+            params=params,
+            param_schema=self._param_schema(call, params, state),
+        )
         parent_run = state.parent_runs.get(self.name)
         parent_ex = db.execution(parent_run["execution_id"]) if parent_run and parent_run.get("execution_id") else None
         if any(r.kind == PENDING for r in flat.values()):
             refs = {o: placeholder(self.name, o) for o in self.outputs}
-            entry.update(plan="run", reason="upstream", estimate=_duration(parent_ex) or _duration(db.latest_success_for_node(self.name)))
+            entry.update(
+                plan="run",
+                reason="upstream",
+                estimate=_duration(parent_ex) or _duration(db.latest_success_for_node(self.name)),
+            )
         else:
             spec = self.spec(structure, params)
             signature = sha256_json(spec)
@@ -409,8 +441,13 @@ class ArtifactTask:
                 else:
                     reason = _reason(spec, parent_ex["spec"] if parent_ex else None)
                 same = prior[0][0] if prior else None
-                entry.update(plan="run", reason=reason,
-                             estimate=_duration(same) or _duration(parent_ex) or _duration(db.latest_success_for_node(self.name)))
+                entry.update(
+                    plan="run",
+                    reason=reason,
+                    estimate=_duration(same)
+                    or _duration(parent_ex)
+                    or _duration(db.latest_success_for_node(self.name)),
+                )
         entry["outputs"] = {o: r.hash for o, r in refs.items()}
         state.refs.update({r.hash: r for r in list(flat.values()) + list(refs.values())})
         return self._shape(refs)
@@ -424,16 +461,18 @@ class ArtifactTask:
             default = None if p.default is inspect.Parameter.empty else p.default
             base = call.get(pname, default)  # what the value is without any experiment override
             inherited = inherited_over.get(pname, base)
-            out.append({
-                "name": pname,
-                "value": value,
-                "default": default,
-                "inherited": inherited,
-                "overridden": pname in overrides,
-                "changed": canonical_json(value) != canonical_json(inherited),
-                "annotation": _annotation_text(p.annotation),
-                "json_type": _json_type(p.annotation, default if default is not None else value),
-            })
+            out.append(
+                {
+                    "name": pname,
+                    "value": value,
+                    "default": default,
+                    "inherited": inherited,
+                    "overridden": pname in overrides,
+                    "changed": canonical_json(value) != canonical_json(inherited),
+                    "annotation": _annotation_text(p.annotation),
+                    "json_type": _json_type(p.annotation, default if default is not None else value),
+                }
+            )
         return out
 
     # -- execution -----------------------------------------------------------------
@@ -478,7 +517,7 @@ class ArtifactTask:
 
     def _normalise(self, result: Any) -> dict[str, Any]:
         if isinstance(result, tuple) and getattr(result, "_fields", None) == self.outputs:
-            return dict(zip(self.outputs, result))  # a NamedTuple return type declared the outputs
+            return dict(zip(self.outputs, result, strict=True))  # a NamedTuple return type declared the outputs
         if len(self.outputs) == 1 and not (isinstance(result, dict) and set(result) == set(self.outputs)):
             return {self.outputs[0]: result}
         if isinstance(result, dict):
@@ -486,7 +525,7 @@ class ArtifactTask:
                 raise ValueError(f"{self.name} returned keys {sorted(result)}, expected {list(self.outputs)}")
             return {o: result[o] for o in self.outputs}
         if isinstance(result, tuple) and len(result) == len(self.outputs):
-            return dict(zip(self.outputs, result))
+            return dict(zip(self.outputs, result, strict=True))
         raise ValueError(f"{self.name} must return a dict or {len(self.outputs)}-tuple for outputs {self.outputs}")
 
     def _valid_hit(self, lab, signature: str):
@@ -652,7 +691,7 @@ class ArtifactTask:
         return refs, ctx.metrics
 
 
-_STEPS: dict[tuple[str, str], "ArtifactTask"] = {}  # (module, name) -> latest definition
+_STEPS: dict[tuple[str, str], ArtifactTask] = {}  # (module, name) -> latest definition
 
 
 def _outputs_from_annotation(fn: Callable) -> tuple[str, ...]:
@@ -696,8 +735,12 @@ def _reason(spec: dict[str, Any], before: dict[str, Any] | None) -> str:
     def differs(*keys: str) -> bool:  # compared as hashed, so 20 and 20.0 differ
         return canonical_json([spec.get(k) for k in keys]) != canonical_json([before.get(k) for k in keys])
 
-    for reason, keys in (("code", ("op", "code", "version", "outputs")), ("params", ("params",)),
-                         ("inputs", ("inputs",)), ("env", ("env",))):
+    for reason, keys in (
+        ("code", ("op", "code", "version", "outputs")),
+        ("params", ("params",)),
+        ("inputs", ("inputs",)),
+        ("env", ("env",)),
+    ):
         if differs(*keys):
             return reason
     return "new"

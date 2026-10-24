@@ -4,19 +4,19 @@ import {
   BackgroundVariant,
   BaseEdge,
   Controls,
+  type Edge,
   EdgeLabelRenderer,
+  type EdgeProps,
   MarkerType,
   MiniMap,
+  type Node,
+  type NodeTypes,
   ReactFlow,
   ReactFlowProvider,
   useReactFlow,
-  type Edge,
-  type EdgeProps,
-  type Node,
-  type NodeTypes,
 } from "@xyflow/react";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { useElkLayout, type LayoutEdge, type Point } from "../layout";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { type LayoutEdge, type Point, useElkLayout } from "../layout";
 import { MOVE_MS, useTweenedPoints } from "../tween";
 
 export interface GraphNode<T extends Record<string, unknown> = Record<string, unknown>> {
@@ -41,14 +41,21 @@ export interface GraphEdge extends LayoutEdge {
   dashed?: boolean;
 }
 
-type ElkEdgeData = { points: Point[]; label?: string; labelBox?: { x: number; y: number; width: number; height: number }; hl: boolean; dashed?: boolean };
+type ElkEdgeData = {
+  points: Point[];
+  label?: string;
+  labelBox?: { x: number; y: number; width: number; height: number };
+  hl: boolean;
+  dashed?: boolean;
+};
 
 function roundedPath(pts: Point[], r = 8): string {
   if (pts.length < 2) return "";
   let d = `M${pts[0].x},${pts[0].y}`;
   for (let i = 1; i < pts.length - 1; i++) {
     const [a, b, c] = [pts[i - 1], pts[i], pts[i + 1]];
-    const d1 = Math.hypot(b.x - a.x, b.y - a.y), d2 = Math.hypot(c.x - b.x, c.y - b.y);
+    const d1 = Math.hypot(b.x - a.x, b.y - a.y),
+      d2 = Math.hypot(c.x - b.x, c.y - b.y);
     const rr = Math.min(r, d1 / 2, d2 / 2);
     const p1 = { x: b.x + ((a.x - b.x) * rr) / (d1 || 1), y: b.y + ((a.y - b.y) * rr) / (d1 || 1) };
     const p2 = { x: b.x + ((c.x - b.x) * rr) / (d2 || 1), y: b.y + ((c.y - b.y) * rr) / (d2 || 1) };
@@ -62,7 +69,9 @@ const NO_POINTS: Point[] = [];
 
 function ElkEdge({ id, data, markerEnd }: EdgeProps<Edge<ElkEdgeData>>) {
   const points = useTweenedPoints(data?.points ?? NO_POINTS);
-  const labelAt = useTweenedPoints(useMemo(() => (data?.labelBox ? [{ x: data.labelBox.x, y: data.labelBox.y }] : NO_POINTS), [data?.labelBox]));
+  const labelAt = useTweenedPoints(
+    useMemo(() => (data?.labelBox ? [{ x: data.labelBox.x, y: data.labelBox.y }] : NO_POINTS), [data?.labelBox]),
+  );
   if (!data) return null;
   const stroke = data.hl ? "var(--accent)" : "var(--edge)";
   return (
@@ -77,7 +86,9 @@ function ElkEdge({ id, data, markerEnd }: EdgeProps<Edge<ElkEdgeData>>) {
         <EdgeLabelRenderer>
           <div
             className={`elk-edge-label ${data.hl ? "hl" : ""} ${data.dashed ? "control" : ""}`}
-            style={{ transform: `translate(${labelAt[0]?.x ?? data.labelBox.x}px, ${labelAt[0]?.y ?? data.labelBox.y}px)` }}
+            style={{
+              transform: `translate(${labelAt[0]?.x ?? data.labelBox.x}px, ${labelAt[0]?.y ?? data.labelBox.y}px)`,
+            }}
           >
             {data.label}
           </div>
@@ -120,7 +131,10 @@ function Canvas({ nodes, edges, nodeTypes, selectedId, focusId, onSelect, legend
   const box = useRef<HTMLDivElement>(null);
   const size = useSize(box);
   const shapeKey = useMemo(
-    () => nodes.map((n) => (n.parent ? `${n.id}<${n.parent}` : n.id)).join("|") + "#" + edges.map((e) => `${e.from}>${e.to}`).join("|"),
+    () =>
+      nodes.map((n) => (n.parent ? `${n.id}<${n.parent}` : n.id)).join("|") +
+      "#" +
+      edges.map((e) => `${e.from}>${e.to}`).join("|"),
     [nodes, edges],
   );
   const layout = useElkLayout(nodes, edges, shapeKey, size);
@@ -134,7 +148,10 @@ function Canvas({ nodes, edges, nodeTypes, selectedId, focusId, onSelect, legend
     if (!layout) return;
     let inner = 0;
     const outer = requestAnimationFrame(() => (inner = requestAnimationFrame(() => setSettled(layout.key))));
-    return () => (cancelAnimationFrame(outer), cancelAnimationFrame(inner));
+    return () => {
+      cancelAnimationFrame(outer);
+      cancelAnimationFrame(inner);
+    };
   }, [layout]);
   useEffect(() => {
     if (layout && settled === layout.key) previous.current = layout.nodes;
@@ -144,7 +161,10 @@ function Canvas({ nodes, edges, nodeTypes, selectedId, focusId, onSelect, legend
     if (!layout || settled === layout.key || previous.current.has(n.id)) return undefined;
     const from = (n.origins ?? []).map((o) => previous.current.get(o)).filter((p): p is Point => !!p);
     if (!from.length) return undefined;
-    const abs = { x: from.reduce((s, p) => s + p.x, 0) / from.length, y: from.reduce((s, p) => s + p.y, 0) / from.length };
+    const abs = {
+      x: from.reduce((s, p) => s + p.x, 0) / from.length,
+      y: from.reduce((s, p) => s + p.y, 0) / from.length,
+    };
     const parent = n.parent ? layout.nodes.get(n.parent) : undefined;
     return parent ? { x: abs.x - parent.x, y: abs.y - parent.y } : abs;
   };
@@ -160,6 +180,7 @@ function Canvas({ nodes, edges, nodeTypes, selectedId, focusId, onSelect, legend
     if (selectedId) for (const e of edges) if (e.from === selectedId || e.to === selectedId) s.add(e.id);
     return s;
   }, [edges, selectedId]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: settled gates the enter animation; depth/startAt are derived from layout
   const rfNodes: Node[] = useMemo(() => {
     if (!layout) return [];
     return nodes
@@ -167,24 +188,27 @@ function Canvas({ nodes, edges, nodeTypes, selectedId, focusId, onSelect, legend
       .map((n) => ({ n, d: depth(n) }))
       .sort((a, b) => a.d - b.d)
       .map(({ n }) => {
-        const size = n.frame ? layout.sizes.get(n.id) ?? { width: n.width, height: n.height } : { width: n.width, height: n.height };
+        const size = n.frame
+          ? (layout.sizes.get(n.id) ?? { width: n.width, height: n.height })
+          : { width: n.width, height: n.height };
         return {
-        id: n.id,
-        type: n.type,
-        position: startAt(n) ?? (n.parent && layout.nodes.has(n.parent) ? layout.relative.get(n.id)! : layout.nodes.get(n.id)!),
-        ...(n.parent && layout.nodes.has(n.parent) ? { parentId: n.parent } : {}),
-        width: size.width,
-        height: size.height,
-        // Without `measured`, React Flow treats every updated node as new and drops its handle
-        // positions until it re-measures, so every edge unmounts for a frame on each update.
-        measured: size,
-        data: { ...n.data, dir: layout.dir, selected: n.id === selectedId },
-        className: [startAt(n) ? "from-origin" : "", n.frame ? "frame" : ""].join(" ").trim() || undefined,
-        draggable: false,
-        selectable: false,
+          id: n.id,
+          type: n.type,
+          position:
+            startAt(n) ??
+            (n.parent && layout.nodes.has(n.parent) ? layout.relative.get(n.id)! : layout.nodes.get(n.id)!),
+          ...(n.parent && layout.nodes.has(n.parent) ? { parentId: n.parent } : {}),
+          width: size.width,
+          height: size.height,
+          // Without `measured`, React Flow treats every updated node as new and drops its handle
+          // positions until it re-measures, so every edge unmounts for a frame on each update.
+          measured: size,
+          data: { ...n.data, dir: layout.dir, selected: n.id === selectedId },
+          className: [startAt(n) ? "from-origin" : "", n.frame ? "frame" : ""].join(" ").trim() || undefined,
+          draggable: false,
+          selectable: false,
         };
       });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layout, nodes, selectedId, settled]);
 
   const rfEdges: Edge<ElkEdgeData>[] = useMemo(() => {
@@ -199,7 +223,12 @@ function Canvas({ nodes, edges, nodeTypes, selectedId, focusId, onSelect, legend
           source: e.from,
           target: e.to,
           type: "elk",
-          markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16, color: hl ? "var(--accent)" : "var(--edge)" },
+          markerEnd: {
+            type: MarkerType.ArrowClosed,
+            width: 16,
+            height: 16,
+            color: hl ? "var(--accent)" : "var(--edge)",
+          },
           data: { points: r.points, label: e.label, labelBox: r.label, hl, dashed: e.dashed },
         };
       });
@@ -207,6 +236,7 @@ function Canvas({ nodes, edges, nodeTypes, selectedId, focusId, onSelect, legend
 
   // Re-fit only when the graph's shape changes, never on status polls. If fitting everything
   // would make text illegible, centre the focus node at a readable zoom instead.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-fit only when the graph's shape changes, never on status polls
   useEffect(() => {
     if (!layout) return;
     const first = !fitted.current;
@@ -215,15 +245,24 @@ function Canvas({ nodes, edges, nodeTypes, selectedId, focusId, onSelect, legend
       // Keep the view still while nodes move. Refit only if the new layout no longer fits, and
       // only once they have settled, so the two motions never fight.
       const { x, y, zoom } = getViewport();
-      const view = { left: -x / zoom, top: -y / zoom, right: (size.width - x) / zoom, bottom: (size.height - y) / zoom };
+      const view = {
+        left: -x / zoom,
+        top: -y / zoom,
+        right: (size.width - x) / zoom,
+        bottom: (size.height - y) / zoom,
+      };
       let fits = true;
       for (const n of nodes) {
         const p = layout.nodes.get(n.id);
         const s = layout.sizes.get(n.id) ?? n;
-        if (p && (p.x < view.left || p.y < view.top || p.x + s.width > view.right || p.y + s.height > view.bottom)) fits = false;
+        if (p && (p.x < view.left || p.y < view.top || p.x + s.width > view.right || p.y + s.height > view.bottom))
+          fits = false;
       }
       if (fits) return;
-      const t = setTimeout(() => fitView({ padding: 0.12, maxZoom: 1.2, minZoom: MIN_LEGIBLE_ZOOM, duration: 300 }), MOVE_MS);
+      const t = setTimeout(
+        () => fitView({ padding: 0.12, maxZoom: 1.2, minZoom: MIN_LEGIBLE_ZOOM, duration: 300 }),
+        MOVE_MS,
+      );
       return () => clearTimeout(t);
     }
     requestAnimationFrame(async () => {
@@ -236,11 +275,11 @@ function Canvas({ nodes, edges, nodeTypes, selectedId, focusId, onSelect, legend
         await fitView({ padding: 0.12, minZoom: MIN_LEGIBLE_ZOOM, maxZoom: MIN_LEGIBLE_ZOOM });
       }
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layout]);
 
   // Re-fit when the canvas is resized (e.g. the sidebar collapses), debounced.
   const fittedSize = useRef<{ width: number; height: number } | null>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-fit only on a resize
   useEffect(() => {
     if (!layout || !size.width) return;
     const prev = fittedSize.current;
@@ -248,7 +287,6 @@ function Canvas({ nodes, edges, nodeTypes, selectedId, focusId, onSelect, legend
     if (!prev || (Math.abs(prev.width - size.width) < 2 && Math.abs(prev.height - size.height) < 2)) return;
     const t = setTimeout(() => fitView({ padding: 0.12, maxZoom: 1.2, minZoom: MIN_LEGIBLE_ZOOM, duration: 150 }), 150);
     return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [size.width, size.height, layout]);
 
   return (
@@ -267,9 +305,21 @@ function Canvas({ nodes, edges, nodeTypes, selectedId, focusId, onSelect, legend
         proOptions={{ hideAttribution: true }}
       >
         {variant === "lineage" ? (
-          <Background variant={BackgroundVariant.Cross} gap={28} size={6} color="var(--lineage-grid)" bgColor="var(--lineage-bg)" />
+          <Background
+            variant={BackgroundVariant.Cross}
+            gap={28}
+            size={6}
+            color="var(--lineage-grid)"
+            bgColor="var(--lineage-bg)"
+          />
         ) : variant === "draft" ? (
-          <Background variant={BackgroundVariant.Lines} gap={28} size={1} color="var(--draft-grid)" bgColor="var(--draft-bg)" />
+          <Background
+            variant={BackgroundVariant.Lines}
+            gap={28}
+            size={1}
+            color="var(--draft-grid)"
+            bgColor="var(--draft-bg)"
+          />
         ) : (
           <Background variant={BackgroundVariant.Dots} gap={22} size={1.2} color="var(--line-strong)" />
         )}
@@ -286,7 +336,11 @@ function Canvas({ nodes, edges, nodeTypes, selectedId, focusId, onSelect, legend
         )}
       </ReactFlow>
       {legend}
-      {!layout && <div className="empty" style={{ position: "absolute", inset: 0 }}>Laying out…</div>}
+      {!layout && (
+        <div className="empty" style={{ position: "absolute", inset: 0 }}>
+          Laying out…
+        </div>
+      )}
     </div>
   );
 }
@@ -306,7 +360,8 @@ export function mergeEdges(edges: { from: string; to: string; label: string; das
     const id = `${e.from}${e.dashed ? "~>" : "->"}${e.to}`;
     const m = merged.get(id);
     if (!m) merged.set(id, { id, from: e.from, to: e.to, label: e.label, ...(e.dashed ? { dashed: true } : {}) });
-    else if (e.label && !(m.label ?? "").split(", ").includes(e.label)) m.label = m.label ? `${m.label}, ${e.label}` : e.label;
+    else if (e.label && !(m.label ?? "").split(", ").includes(e.label))
+      m.label = m.label ? `${m.label}, ${e.label}` : e.label;
   }
   return [...merged.values()];
 }

@@ -15,9 +15,7 @@ pytestmark = pytest.mark.skipif(shutil.which("uv") is None, reason="uv is requir
 def project_copy(dest: Path, with_bundle: bool) -> Path:
     for name in ("pyproject.toml", "hatch_build.py", "README.md"):
         shutil.copy(ROOT / name, dest / name)
-    shutil.copytree(
-        ROOT / "src", dest / "src", ignore=shutil.ignore_patterns("dist", "__pycache__", "*.pyc")
-    )
+    shutil.copytree(ROOT / "src", dest / "src", ignore=shutil.ignore_patterns("dist", "__pycache__", "*.pyc"))
     if with_bundle:
         dist = dest / "src" / "dendrite" / "ui" / "dist"
         (dist / "assets").mkdir(parents=True)
@@ -30,7 +28,10 @@ def build(project: Path, out: Path):
     env = {k: v for k, v in os.environ.items() if k != "DENDRITE_SKIP_UI_CHECK"}
     return subprocess.run(
         ["uv", "build", "--wheel", "--no-sources", "-o", str(out), str(project)],
-        capture_output=True, text=True, env=env, timeout=300,
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=300,
     )
 
 

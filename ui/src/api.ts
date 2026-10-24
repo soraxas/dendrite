@@ -346,7 +346,16 @@ export interface Inventory {
   };
   experiments: StorageExperiment[];
   cache: CacheEntry[];
-  largest: { hash: string; kind: string; filename: string | null; size: number; producer_node: string | null; present: boolean; live: boolean; experiments: number }[];
+  largest: {
+    hash: string;
+    kind: string;
+    filename: string | null;
+    size: number;
+    producer_node: string | null;
+    present: boolean;
+    live: boolean;
+    experiments: number;
+  }[];
   scratch: Record<string, number>;
   busy: string[];
 }
@@ -371,7 +380,11 @@ export interface GcRequest {
 }
 
 export class ApiError extends Error {
-  constructor(public status: number, message: string, public code?: string) {
+  constructor(
+    public status: number,
+    message: string,
+    public code?: string,
+  ) {
     super(message);
   }
 }
@@ -395,9 +408,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return r.json() as Promise<T>;
 }
 
-const get = <T,>(path: string) => request<T>(path);
-const send = <T,>(method: string, path: string, body?: unknown) =>
-  request<T>(path, { method, headers: { "Content-Type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
+const get = <T>(path: string) => request<T>(path);
+const send = <T>(method: string, path: string, body?: unknown) =>
+  request<T>(path, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
 const exp = (id: string) => `/api/experiments/${encodeURIComponent(id)}`;
 
 export const api = {
@@ -417,16 +434,25 @@ export const api = {
     }),
   plan: (id: string) => get<Plan>(`${exp(id)}/plan`),
   shape: (pipeline: string) => get<Shape>(`/api/pipelines/${encodeURIComponent(pipeline)}/shape`),
-  shapeOf: (pipeline: string, source: string) => send<Shape>("POST", `/api/pipelines/${encodeURIComponent(pipeline)}/shape`, { source }),
+  shapeOf: (pipeline: string, source: string) =>
+    send<Shape>("POST", `/api/pipelines/${encodeURIComponent(pipeline)}/shape`, { source }),
   check: (id: string) => get<Diagnostic[]>(`${exp(id)}/check`),
   fork: (id: string, name?: string) => send<ExperimentSummary>("POST", `${exp(id)}/fork`, { name: name ?? null }),
   editDraft: (id: string, edit: DraftEdit) => send<ExperimentSummary>("PATCH", exp(id), edit),
   discard: (id: string) => send<{ deleted: string }>("DELETE", exp(id)),
   deleteExperiment: (id: string, forks: ForkMode = "refuse") =>
-    send<{ deleted: string; ids: string[]; reparented: Record<string, string | null>; parent_id: string | null }>("DELETE", `${exp(id)}?forks=${forks}`),
+    send<{ deleted: string; ids: string[]; reparented: Record<string, string | null>; parent_id: string | null }>(
+      "DELETE",
+      `${exp(id)}?forks=${forks}`,
+    ),
   deleteMany: (ids: string[], forks: ForkMode = "refuse", force = false) =>
-    send<{ deleted: string[]; reparented: Record<string, string | null> }>("POST", "/api/experiments/delete", { ids, forks, force }),
-  estimate: (ids: string[], forks: ForkMode = "keep") => send<{ ids: string[]; bytes: number }>("POST", "/api/storage/estimate", { ids, forks }),
+    send<{ deleted: string[]; reparented: Record<string, string | null> }>("POST", "/api/experiments/delete", {
+      ids,
+      forks,
+      force,
+    }),
+  estimate: (ids: string[], forks: ForkMode = "keep") =>
+    send<{ ids: string[]; bytes: number }>("POST", "/api/storage/estimate", { ids, forks }),
   stop: (id: string) => send<ExperimentSummary>("POST", `${exp(id)}/stop`),
   evictArtifact: (hash: string, apply = false, force = false) =>
     send<ReclaimReport>("POST", `/api/artifacts/${encodeURIComponent(hash)}/evict`, { apply, force }),
@@ -437,7 +463,8 @@ export const api = {
   gc: (req: GcRequest) => send<ReclaimReport>("POST", "/api/gc", req),
   clean: (force = false) => send<{ removed: number; bytes: number }>("POST", "/api/storage/clean", { force }),
   view: (pipeline: string) => get<PipelineView>(`/api/pipelines/${encodeURIComponent(pipeline)}/view`),
-  saveView: (pipeline: string, view: PipelineView) => send<PipelineView>("PUT", `/api/pipelines/${encodeURIComponent(pipeline)}/view`, view),
+  saveView: (pipeline: string, view: PipelineView) =>
+    send<PipelineView>("PUT", `/api/pipelines/${encodeURIComponent(pipeline)}/view`, view),
   downloadUrl: (h: string, path?: string) =>
     `/api/artifacts/${encodeURIComponent(h)}/download${path === undefined ? "" : `?path=${encodeURIComponent(path)}`}`,
 };

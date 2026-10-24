@@ -8,7 +8,8 @@ export function DagLegend({ present, hasInputs }: { present: Set<string>; hasInp
     <div className="legend" aria-label="Legend">
       {hasInputs && (
         <span title="A file or folder this experiment started from.">
-          <i className="swatch pill" style={{ borderColor: "var(--input)", background: "var(--input-bg)" }} />Input
+          <i className="swatch pill" style={{ borderColor: "var(--input)", background: "var(--input-bg)" }} />
+          Input
         </span>
       )}
       {shown.map((s: RunStatus) => (
@@ -26,13 +27,16 @@ export function LineageLegend() {
   return (
     <div className="legend" aria-label="Legend">
       <span title="A stored result: a file, a folder or a value.">
-        <i className="swatch pill" style={{ borderColor: "var(--data)", background: "var(--data-bg)" }} />Data
+        <i className="swatch pill" style={{ borderColor: "var(--data)", background: "var(--data-bg)" }} />
+        Data
       </span>
       <span title="One actual run of a pipeline step.">
-        <i className="swatch" style={{ borderColor: "var(--exec)", background: "var(--exec-bg)" }} />Computation
+        <i className="swatch" style={{ borderColor: "var(--exec)", background: "var(--exec-bg)" }} />
+        Computation
       </span>
       <span title="The result you are tracing.">
-        <i className="swatch pill" style={{ borderColor: "var(--accent)", background: "var(--accent-bg)" }} />Traced result
+        <i className="swatch pill" style={{ borderColor: "var(--accent)", background: "var(--accent-bg)" }} />
+        Traced result
       </span>
     </div>
   );
@@ -43,7 +47,14 @@ export function PlanLegend({ present, hasInputs }: { present: Set<string>; hasIn
   const item = (key: string, tone: string, label: string, title: string, dashed = false) =>
     present.has(key) && (
       <span key={key} title={title}>
-        <i className="swatch" style={{ borderColor: `var(--${tone})`, background: `var(--${tone}-bg)`, borderStyle: dashed ? "dashed" : "solid" }} />
+        <i
+          className="swatch"
+          style={{
+            borderColor: `var(--${tone})`,
+            background: `var(--${tone}-bg)`,
+            borderStyle: dashed ? "dashed" : "solid",
+          }}
+        />
         {label}
       </span>
     );
@@ -51,7 +62,8 @@ export function PlanLegend({ present, hasInputs }: { present: Set<string>; hasIn
     <div className="legend" aria-label="Legend">
       {hasInputs && (
         <span title="A file or folder this experiment starts from.">
-          <i className="swatch pill" style={{ borderColor: "var(--input)", background: "var(--input-bg)" }} />Input
+          <i className="swatch pill" style={{ borderColor: "var(--input)", background: "var(--input-bg)" }} />
+          Input
         </span>
       )}
       {item("reuse", PLAN.reuse.tone, PLAN.reuse.label, PLAN.reuse.explain)}

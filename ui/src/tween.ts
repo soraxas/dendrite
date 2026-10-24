@@ -7,7 +7,7 @@ export const MOVE_MS = 350;
 const SAMPLES = 32;
 
 /** Material "standard" easing, matching the nodes' `cubic-bezier(.4, 0, .2, 1)` closely enough. */
-export const ease = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+export const ease = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2);
 
 /** ``n`` points evenly spaced along a polyline, so two routes with different bends can be blended. */
 export function resample(pts: Point[], n = SAMPLES): Point[] {
@@ -16,7 +16,8 @@ export function resample(pts: Point[], n = SAMPLES): Point[] {
   const seg = pts.slice(1).map((p, i) => Math.hypot(p.x - pts[i].x, p.y - pts[i].y));
   const total = seg.reduce((a, b) => a + b, 0) || 1;
   const out: Point[] = [];
-  let i = 0, walked = 0;
+  let i = 0,
+    walked = 0;
   for (let k = 0; k < n; k++) {
     const target = (total * k) / (n - 1);
     while (i < seg.length - 1 && walked + seg[i] < target) walked += seg[i++];
@@ -38,12 +39,16 @@ export function useTweenedPoints(target: Point[]): Point[] {
   const current = useRef(target); // what is on screen, so an interrupted move continues from there
   useEffect(() => {
     if (same(current.current, target)) return;
-    if (typeof requestAnimationFrame === "undefined" || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+    if (
+      typeof requestAnimationFrame === "undefined" ||
+      window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
+    ) {
       current.current = target;
       setShown(target);
       return;
     }
-    const from = resample(current.current), to = resample(target);
+    const from = resample(current.current),
+      to = resample(target);
     const t0 = performance.now();
     let raf = 0;
     const step = (now: number) => {

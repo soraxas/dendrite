@@ -41,12 +41,20 @@ scripts/build-ui.sh && uv build            # release: the build guard fails a wh
 ```
 
 Postgres for tests comes from the session fixture `pg_url` in `conftest.py`:
+
 - **Source.** `DENDRITE_TEST_PG_URL` if set, otherwise a throwaway `postgres:17-alpine` container (testcontainers, random port).
 - **Without Docker.** The tests skip, or fail with `DENDRITE_TEST_PG=require`, which CI sets.
 - **Isolation.** `pg_schema_url` gives each test its own schema and drops it afterwards.
 - **Whole suite.** `DENDRITE_TEST_DB=postgres` switches the shared `lab` fixture to Postgres. Tests that open a second `Lab` or call the CLI must pass `lab.settings.db_url` / `--db-url` along.
 
-CI is two path-filtered workflows, so a docs-only push runs nothing. `.github/workflows/python.yml` runs pytest on SQLite and on Postgres when `src/`, `tests/`, `examples/` or the packaging files change. `.github/workflows/ui.yml` runs the UI tests and build when `ui/` changes. It clones Prefect into `../prefect` at `PREFECT_SHA`, blobless rather than shallow because versioningit needs the tags; bump it together with your local `../prefect`. There is no linter or formatter configured.
+CI is two path-filtered workflows, so a docs-only push runs nothing. `.github/workflows/python.yml` runs pytest on SQLite and on Postgres when `src/`, `tests/`, `examples/` or the packaging files change. `.github/workflows/ui.yml` runs the UI tests and build when `ui/` changes. It clones Prefect into `../prefect` at `PREFECT_SHA`, blobless rather than shallow because versioningit needs the tags; bump it together with your local `../prefect`.
+
+Linting and formatting run through [prek](https://github.com/j178/prek) in workspace mode, with two projects:
+
+- **Root, `.pre-commit-config.yaml`.** File hygiene, `uv-lock`, ruff check and format (settings in `[tool.ruff]`), validate-pyproject, typos (report only; allowed words in `_typos.toml`), shellcheck, mdformat, zizmor and the GitHub workflow schema. actionlint is `manual`. Root hooks also see `ui/` files.
+- **`ui/.pre-commit-config.yaml`.** Biome (`ui/biome.json`; the a11y rules that don't fit the hash-link UI are off) and `tsc` through `npm run typecheck`. Child hooks run inside `ui/` with paths relative to it.
+
+`prek install` sets up the pre-commit and pre-push hooks. Run `prek run --all-files` to check everything, and `prek run actionlint --hook-stage manual` for the workflows. CI doesn't run prek yet.
 
 Configuration env vars:
 
@@ -61,104 +69,108 @@ Configuration env vars:
 
 The flow of a run spans several modules in `src/dendrite/`:
 
-1. **`experiment.py`:**
-   - `Lab` bundles `Metadata` (db) and an `ArtifactStore`.
-   - `Experiment.run()` registers a `RunState` in `runtime._RUNS` and calls the pipeline's Prefect flow with `(run_id, input refs)`.
-   - `Pipeline._body` sets the `_active_run` contextvar, calls the user function, waits on any `.submit()` futures, and publishes a Prefect markdown summary artifact.
-2. **`task.py`, `ArtifactTask`.** Calling a node inside a pipeline runs `_enqueue`, which writes a `queued` node_run. It then invokes a Prefect task (`cache_policy=NO_CACHE`), which runs `_execute`. That method does the following:
-   - **Pins:** pinned nodes short-circuit and are recorded as `pinned`.
-   - **Splitting arguments:** `_split` separates artifact inputs (any argument containing an `ArtifactRef`, including nested in lists or dicts) from params. Param precedence is experiment `params[node][arg]`, then the call-site value, then the function default.
-   - **Signature:** it is `sha256(canonical_json(spec(...)))`.
-   - **Resolving:** `_resolve` looks for a verified cache hit, then takes a lease, double-checks the cache, executes under a heartbeat, and calls `db.publish`.
-   - **Computing:** `_compute` materialises inputs (`store.load` returns a `Path` or an unpickled value). It then runs the function in a `workdir()`. Returned `Path`s are stored as file/dir artifacts and anything else is pickled as a `value` artifact.
-3. **`db.py`.** SQLAlchemy Core tables, with no ORM and no Alembic (`create_all` on connect).
-   - The key separation: `experiments` → `node_runs` (per experiment) → `executions` (physical computations shared across experiments) → `execution_inputs` / `execution_outputs` (lineage edges) → `artifacts`.
-   - `leases` holds one row per signature that is currently computing.
-   - `publish()` commits the execution's success, its edges, metrics, the node_run and the lease release in **one transaction**.
-   - SQLite uses two engines: a writer that issues `BEGIN IMMEDIATE`, and a reader. This avoids WAL lock-upgrade `SQLITE_BUSY`.
-   - Ancestor and descendant queries are recursive CTEs written in raw SQL that works on both SQLite and Postgres.
-4. **`store.py`.** A content-addressed blob store laid out as `objects/<h[:2]>/<h[2:]>`.
-   - A directory is a manifest blob, and the directory's hash is that manifest's hash.
-   - `LocalStore` uses atomic `os.replace` and hardlinked checkouts. `FsspecStore` handles S3, MinIO, GCS and `memory://`, with a local checkout cache.
-5. **`server.py` + `ui/`.**
-   - A FastAPI JSON API (`/api/experiments`, `/api/experiments/{id}/dag`, `/api/diff`, `/api/artifacts/{hash}[/lineage|/download]`, `/api/executions/{id}`, `/api/info`).
-   - **Shipping the UI:**
-     - `ui/` is a React + TS + Vite app (React Flow + elkjs + TanStack Query).
-     - It builds into `src/dendrite/ui/dist/`, which is git-ignored and packaged through `[tool.hatch.build] artifacts`.
-     - `hatch_build.py` refuses sdist or wheel builds without the bundle. Editable builds and `DENDRITE_SKIP_UI_CHECK=1` are exempt.
-     - `create_app` mounts `dist/` with `StaticFiles` *after* the API routes when the bundle exists. Without it, `/` is a short "UI isn't built" page and only the API is served (`/api/info` reports `ui: "missing"`).
-   - **Layout:**
-     - `ui/src/layout.ts` runs ELK in a web worker. It caches positions per graph shape (node ids plus edges), so status polls never re-lay-out.
-     - Edges are drawn from ELK's orthogonal routes by the custom `elk` edge in `Graph.tsx`.
-   - **Selection** lives in the hash URL (`?sel=node:|input:|artifact:|exec:<id>`). `App.tsx` derives both the graph highlight and the detail panel from it.
-   - **Labels:** lineage artifact labels (`label`, `producer_node`, `role`) and structured usage `roles` are computed in Python (`Lab.lineage`, `Metadata.experiments_using_artifact`), not in the UI.
-   - **Headless screenshots:** headless Chrome's `--virtual-time-budget` stalls the ELK worker. Use `uv run python scripts/screenshot.py OUT.png URL [wait_s]` instead, which captures in real time over CDP and prints console errors.
-6. **`viz.py` / `cli.py`.** Mermaid renderers and the argparse CLI.
-7. **Drafts and plans.**
-   - **Drafts.** `status='draft'` is the only editable experiment state.
-     - `Experiment.update()` / `discard()` and the draft→running transition in `run()` are compare-and-set updates (`Metadata.update_experiment_if`).
-     - There is no schema change: `draft` is just a status value.
-   - **Plans.** `Experiment.plan()` runs `pipe.fn` directly, without the Prefect flow or `_body`, under a `RunState(plan=True)`.
-     - `ArtifactTask.__call__`/`submit` branch to `_plan` *before* `_enqueue`, so nothing is written.
-     - `_plan` uses the same `_split`/`spec`/`sha256_json` as `_execute`, then stops at `_valid_hit`.
-     - A miss returns placeholder refs (`kind="pending"`, `hash="plan:<node>.<out>"`). Downstream steps become `run`/`upstream`.
-     - `store.load` on a placeholder raises `PlanIncomplete`, which the plan reports as `blocked_by`.
-   - **Freshness.** `runtime.refresh_modules()` reloads tracked pipeline/step modules whose mtime changed. Without it, a long-lived server would plan with stale code fingerprints.
-   - **API.** The draft and plan endpoints live in `server.py`. Planning needs the pipeline module imported (`--import`); otherwise `/plan` answers 409 `pipeline_not_imported`.
-   - **Float params.** JSON can't distinguish `1` from `1.0`, so `PATCH` takes a `floats` list. The UI's `components/Draft.tsx` sends float-typed keys in it.
-8. **`guard.py`.** The undeclared-read tripwire.
-   - It is one permanent `sys.addaudithook`, idle unless the `_active` contextvar is set.
-   - `task._compute` sets that contextvar around the step function only. It reports read-only opens of files under `Settings.project_root` (the cwd when the Lab is created), excluding the workdir, `DENDRITE_HOME`, store paths, interpreter prefixes and code files.
-   - In `error` mode a violation fails the execution even if the step swallowed the exception.
-9. **`analysis.py`.** Static checks over `ast`. The analysed code is never executed and never feeds a signature.
-   - **`check_step(task)`** runs from `ArtifactTask.__init__`.
-     - Findings are emitted with `warnings.warn_explicit` as `StepDefinitionWarning`, located at the offending file:line, and stored on `task.diagnostics`.
-     - `ignore=` filters codes.
-     - `task._STEPS` registers every step, for `dendrite check`.
-   - **`pipeline_shape(source, resolve)`** is a def-use walk of the pipeline body.
-     - `resolve` maps a name to a module global (`fn.__globals__`), looked up lazily, because steps may be defined below the pipeline.
-     - `if`/`else` frames mark nodes `conditional`. A step in exclusive arms merges into one node whose conditions are the shared prefix.
-     - Loops and comprehensions mark nodes `repeated`.
-     - Non-step calls that receive pipeline values become `dynamic` nodes, except builtins and logging.
-     - Same-module helpers are expanded one level.
-   - **`Pipeline.shape(source=None)`** works on loaded code or unsaved text. Lines are relative to the text; `first_line` locates it in the file.
-   - **`Experiment.check()`** compares params and pins against the shape. `unknown-step` drops to a warning when the shape has dynamic regions.
-   - **Server.**
-     - `/api/pipelines/{name}/shape` (GET for loaded code, POST for unsaved text) calls `runtime.refresh_modules()` first. GET also saves the pipeline's source as a snapshot, so the Code view reuses `GET`/`PUT /api/sources/{hash}` for viewing and saving.
-     - Unsaved Code-view edits register in `ui/src/unsaved.ts`, and `App.tsx`'s `navigate` asks before switching view or experiment.
+01. **`experiment.py`:**
+    - `Lab` bundles `Metadata` (db) and an `ArtifactStore`.
+    - `Experiment.run()` registers a `RunState` in `runtime._RUNS` and calls the pipeline's Prefect flow with `(run_id, input refs)`.
+    - `Pipeline._body` sets the `_active_run` contextvar, calls the user function, waits on any `.submit()` futures, and publishes a Prefect markdown summary artifact.
+02. **`task.py`, `ArtifactTask`.** Calling a node inside a pipeline runs `_enqueue`, which writes a `queued` node_run. It then invokes a Prefect task (`cache_policy=NO_CACHE`), which runs `_execute`. That method does the following:
+    - **Pins:** pinned nodes short-circuit and are recorded as `pinned`.
+    - **Splitting arguments:** `_split` separates artifact inputs (any argument containing an `ArtifactRef`, including nested in lists or dicts) from params. Param precedence is experiment `params[node][arg]`, then the call-site value, then the function default.
+    - **Signature:** it is `sha256(canonical_json(spec(...)))`.
+    - **Resolving:** `_resolve` looks for a verified cache hit, then takes a lease, double-checks the cache, executes under a heartbeat, and calls `db.publish`.
+    - **Computing:** `_compute` materialises inputs (`store.load` returns a `Path` or an unpickled value). It then runs the function in a `workdir()`. Returned `Path`s are stored as file/dir artifacts and anything else is pickled as a `value` artifact.
+03. **`db.py`.** SQLAlchemy Core tables, with no ORM and no Alembic (`create_all` on connect).
+    - The key separation: `experiments` → `node_runs` (per experiment) → `executions` (physical computations shared across experiments) → `execution_inputs` / `execution_outputs` (lineage edges) → `artifacts`.
+    - `leases` holds one row per signature that is currently computing.
+    - `publish()` commits the execution's success, its edges, metrics, the node_run and the lease release in **one transaction**.
+    - SQLite uses two engines: a writer that issues `BEGIN IMMEDIATE`, and a reader. This avoids WAL lock-upgrade `SQLITE_BUSY`.
+    - Ancestor and descendant queries are recursive CTEs written in raw SQL that works on both SQLite and Postgres.
+04. **`store.py`.** A content-addressed blob store laid out as `objects/<h[:2]>/<h[2:]>`.
+    - A directory is a manifest blob, and the directory's hash is that manifest's hash.
+    - `LocalStore` uses atomic `os.replace` and hardlinked checkouts. `FsspecStore` handles S3, MinIO, GCS and `memory://`, with a local checkout cache.
+05. **`server.py` + `ui/`.**
+    - A FastAPI JSON API (`/api/experiments`, `/api/experiments/{id}/dag`, `/api/diff`, `/api/artifacts/{hash}[/lineage|/download]`, `/api/executions/{id}`, `/api/info`).
+    - **Shipping the UI:**
+      - `ui/` is a React + TS + Vite app (React Flow + elkjs + TanStack Query).
+      - It builds into `src/dendrite/ui/dist/`, which is git-ignored and packaged through `[tool.hatch.build] artifacts`.
+      - `hatch_build.py` refuses sdist or wheel builds without the bundle. Editable builds and `DENDRITE_SKIP_UI_CHECK=1` are exempt.
+      - `create_app` mounts `dist/` with `StaticFiles` *after* the API routes when the bundle exists. Without it, `/` is a short "UI isn't built" page and only the API is served (`/api/info` reports `ui: "missing"`).
+    - **Layout:**
+      - `ui/src/layout.ts` runs ELK in a web worker. It caches positions per graph shape (node ids plus edges), so status polls never re-lay-out.
+      - Edges are drawn from ELK's orthogonal routes by the custom `elk` edge in `Graph.tsx`.
+    - **Selection** lives in the hash URL (`?sel=node:|input:|artifact:|exec:<id>`). `App.tsx` derives both the graph highlight and the detail panel from it.
+    - **Labels:** lineage artifact labels (`label`, `producer_node`, `role`) and structured usage `roles` are computed in Python (`Lab.lineage`, `Metadata.experiments_using_artifact`), not in the UI.
+    - **Headless screenshots:** headless Chrome's `--virtual-time-budget` stalls the ELK worker. Use `uv run python scripts/screenshot.py OUT.png URL [wait_s]` instead, which captures in real time over CDP and prints console errors.
+06. **`viz.py` / `cli.py`.** Mermaid renderers and the argparse CLI.
+07. **Drafts and plans.**
+    - **Drafts.** `status='draft'` is the only editable experiment state.
+      - `Experiment.update()` / `discard()` and the draft→running transition in `run()` are compare-and-set updates (`Metadata.update_experiment_if`).
+      - There is no schema change: `draft` is just a status value.
+    - **Plans.** `Experiment.plan()` runs `pipe.fn` directly, without the Prefect flow or `_body`, under a `RunState(plan=True)`.
+      - `ArtifactTask.__call__`/`submit` branch to `_plan` *before* `_enqueue`, so nothing is written.
+      - `_plan` uses the same `_split`/`spec`/`sha256_json` as `_execute`, then stops at `_valid_hit`.
+      - A miss returns placeholder refs (`kind="pending"`, `hash="plan:<node>.<out>"`). Downstream steps become `run`/`upstream`.
+      - `store.load` on a placeholder raises `PlanIncomplete`, which the plan reports as `blocked_by`.
+    - **Freshness.** `runtime.refresh_modules()` reloads tracked pipeline/step modules whose mtime changed. Without it, a long-lived server would plan with stale code fingerprints.
+    - **API.** The draft and plan endpoints live in `server.py`. Planning needs the pipeline module imported (`--import`); otherwise `/plan` answers 409 `pipeline_not_imported`.
+    - **Float params.** JSON can't distinguish `1` from `1.0`, so `PATCH` takes a `floats` list. The UI's `components/Draft.tsx` sends float-typed keys in it.
+08. **`guard.py`.** The undeclared-read tripwire.
+    - It is one permanent `sys.addaudithook`, idle unless the `_active` contextvar is set.
+    - `task._compute` sets that contextvar around the step function only. It reports read-only opens of files under `Settings.project_root` (the cwd when the Lab is created), excluding the workdir, `DENDRITE_HOME`, store paths, interpreter prefixes and code files.
+    - In `error` mode a violation fails the execution even if the step swallowed the exception.
+09. **`analysis.py`.** Static checks over `ast`. The analysed code is never executed and never feeds a signature.
+    - **`check_step(task)`** runs from `ArtifactTask.__init__`.
+      - Findings are emitted with `warnings.warn_explicit` as `StepDefinitionWarning`, located at the offending file:line, and stored on `task.diagnostics`.
+      - `ignore=` filters codes.
+      - `task._STEPS` registers every step, for `dendrite check`.
+    - **`pipeline_shape(source, resolve)`** is a def-use walk of the pipeline body.
+      - `resolve` maps a name to a module global (`fn.__globals__`), looked up lazily, because steps may be defined below the pipeline.
+      - `if`/`else` frames mark nodes `conditional`. A step in exclusive arms merges into one node whose conditions are the shared prefix.
+      - Loops and comprehensions mark nodes `repeated`.
+      - Non-step calls that receive pipeline values become `dynamic` nodes, except builtins and logging.
+      - Same-module helpers are expanded one level.
+    - **`Pipeline.shape(source=None)`** works on loaded code or unsaved text. Lines are relative to the text; `first_line` locates it in the file.
+    - **`Experiment.check()`** compares params and pins against the shape. `unknown-step` drops to a warning when the shape has dynamic regions.
+    - **Server.**
+      - `/api/pipelines/{name}/shape` (GET for loaded code, POST for unsaved text) calls `runtime.refresh_modules()` first. GET also saves the pipeline's source as a snapshot, so the Code view reuses `GET`/`PUT /api/sources/{hash}` for viewing and saving.
+      - Unsaved Code-view edits register in `ui/src/unsaved.ts`, and `App.tsx`'s `navigate` asks before switching view or experiment.
 10. **`sources.py`.** Source snapshots of step functions.
-   - They live in `code_snapshots` / `execution_sources`, outside the signature, so they never change cache keys.
-   - They are recorded when an execution starts.
-   - `disk_status` reports `same` only when the snapshot text occurs exactly once in the recorded file.
-   - `write_source` writes only to that recorded path. It checks the client's file hash (409 on mismatch) and replaces atomically.
-   - `PUT /api/sources/{hash}` is gated by `create_app(allow_edit=...)`. `dendrite ui` enables it on loopback hosts or with `--allow-edit`.
+
+- They live in `code_snapshots` / `execution_sources`, outside the signature, so they never change cache keys.
+- They are recorded when an execution starts.
+- `disk_status` reports `same` only when the snapshot text occurs exactly once in the recorded file.
+- `write_source` writes only to that recorded path. It checks the client's file hash (409 on mismatch) and replaces atomically.
+- `PUT /api/sources/{hash}` is gated by `create_app(allow_edit=...)`. `dendrite ui` enables it on loopback hosts or with `--allow-edit`.
 
 11. **`storage.py`.** Storage accounting and reclamation, exposed as `Lab.storage()/gc()/evict()/clean()` and `Experiment.delete()/keep()`.
-   - **Reachability defines what is kept.** Roots are each existing experiment's input hashes, pin hashes and node-run outputs, plus the members of directory manifests. Anything else in `objects/` is collectable. There is no reference counting.
-   - **Metadata is never deleted by reclamation.** `Lab.delete(ids, forks=…)` removes only `experiments`, their `node_runs` and `experiment_flags` rows (`Metadata.delete_experiments`, one transaction, children first). With `forks="keep"` it first re-parents surviving forks to the nearest surviving ancestor, in the same transaction. Executions keep their `experiment_id`, which the UI labels "deleted experiment".
-   - **Stuck runs.** `Experiment.mark_stopped()` turns a `running` experiment left by a crashed process into `failed`, which unblocks the busy guard.
-   - **Safety.** Blobs written within the grace period are skipped. Applying GC or evict, and `clean()`, refuse while an experiment is `running` or a lease is held (`StorageBusy`), unless forced. Eviction refuses pinned outputs (`EvictRefused`). `gc(hashes=…)` intersects a fresh report with the previewed hashes.
-   - **Checkouts.** Deleting blobs also drops their checkouts (`store.drop_checkouts`), because local checkouts are hardlinks that would keep the bytes alive.
-   - **Age-based GC.** `gc(older_than=…)` treats node-run outputs of executions last used before the cutoff as non-roots. It spares what kept experiments, any pin, or each pipeline's newest completed experiment reach.
-   - **Stores.** `ArtifactStore.iter_objects()` lists `(hash, size, mtime)`. `FsspecStore` caches dir manifests locally under `cache/manifests/`.
-   - **Server.** The server caches the inventory for 30 s (`?refresh=1`). Every mutation endpoint requires `allow_edit`; previews (`/api/gc`, `/evict` without `apply`) don't. The UI is `ui/src/components/Storage.tsx`, at `#/storage`.
+
+- **Reachability defines what is kept.** Roots are each existing experiment's input hashes, pin hashes and node-run outputs, plus the members of directory manifests. Anything else in `objects/` is collectable. There is no reference counting.
+- **Metadata is never deleted by reclamation.** `Lab.delete(ids, forks=…)` removes only `experiments`, their `node_runs` and `experiment_flags` rows (`Metadata.delete_experiments`, one transaction, children first). With `forks="keep"` it first re-parents surviving forks to the nearest surviving ancestor, in the same transaction. Executions keep their `experiment_id`, which the UI labels "deleted experiment".
+- **Stuck runs.** `Experiment.mark_stopped()` turns a `running` experiment left by a crashed process into `failed`, which unblocks the busy guard.
+- **Safety.** Blobs written within the grace period are skipped. Applying GC or evict, and `clean()`, refuse while an experiment is `running` or a lease is held (`StorageBusy`), unless forced. Eviction refuses pinned outputs (`EvictRefused`). `gc(hashes=…)` intersects a fresh report with the previewed hashes.
+- **Checkouts.** Deleting blobs also drops their checkouts (`store.drop_checkouts`), because local checkouts are hardlinks that would keep the bytes alive.
+- **Age-based GC.** `gc(older_than=…)` treats node-run outputs of executions last used before the cutoff as non-roots. It spares what kept experiments, any pin, or each pipeline's newest completed experiment reach.
+- **Stores.** `ArtifactStore.iter_objects()` lists `(hash, size, mtime)`. `FsspecStore` caches dir manifests locally under `cache/manifests/`.
+- **Server.** The server caches the inventory for 30 s (`?refresh=1`). Every mutation endpoint requires `allow_edit`; previews (`/api/gc`, `/evict` without `apply`) don't. The UI is `ui/src/components/Storage.tsx`, at `#/storage`.
 
 12. **Live graph.**
-   - **Progress.** `runtime.progress` writes `execution_progress` rows, throttled by `PROGRESS_INTERVAL`, through `ExecContext.db`. A running node run carries its `execution_id`, so `dag()` can attach `progress`.
-   - **Body reads.** `Lab.load` calls `runtime.note_read`, which records `pipeline_reads` when a run is active and no step is executing. Plans keep reads in `RunState.reads` only. `dag()`/`plan()` return them with each read's producer.
-   - **Push.** `GET /api/events` is Server-Sent Events. It compares `Metadata.change_tokens()` every `EVENT_INTERVAL`, because runs happen in other processes. `useLiveUpdates` in `ui/src/queries.ts` invalidates only the named experiments, and polling drops to a 15 s safety net while connected.
-   - **Grouping.** It is UI-only (`ui/src/fanout.ts`). Nodes named `step[key]` group by `step`, and groups of `COLLAPSE_AT` or more start collapsed.
+
+- **Progress.** `runtime.progress` writes `execution_progress` rows, throttled by `PROGRESS_INTERVAL`, through `ExecContext.db`. A running node run carries its `execution_id`, so `dag()` can attach `progress`.
+- **Body reads.** `Lab.load` calls `runtime.note_read`, which records `pipeline_reads` when a run is active and no step is executing. Plans keep reads in `RunState.reads` only. `dag()`/`plan()` return them with each read's producer.
+- **Push.** `GET /api/events` is Server-Sent Events. It compares `Metadata.change_tokens()` every `EVENT_INTERVAL`, because runs happen in other processes. `useLiveUpdates` in `ui/src/queries.ts` invalidates only the named experiments, and polling drops to a 15 s safety net while connected.
+- **Grouping.** It is UI-only (`ui/src/fanout.ts`). Nodes named `step[key]` group by `step`, and groups of `COLLAPSE_AT` or more start collapsed.
 
 13. **Stages.**
-   - **Context.** `runtime.stage` is a context manager and decorator over the `_stage` contextvar. `ArtifactTask.stage_path()` (enclosing stages, else `stage=`) is read at `_enqueue`, stored in `node_stages`, and in plan entries. `dag()`/`plan()` nodes carry `stage`.
-   - **Static shape.** `analysis.py` pushes `("stage", name)` frames for `with stage("…")` and for `@stage` helpers (expanded up to depth 3), so shape nodes carry `stage` names.
-   - **View.** `pipeline_views` stores the UI overlay (`assign` step→stage, `styles` stage→label/description/color) behind `GET`/`PUT /api/pipelines/{name}/view`.
-   - **UI.** `ui/src/stages.ts` combines code stages, the view and fan-out into one member map (outermost collapsed stage wins, then a collapsed fan-out group). Editing lives in `components/StageDetail.tsx`.
-   - **Sub flows.**
-     - `DagView.framed()` turns expanded stages and fan-outs into frame nodes (`frame`, `parent`).
-     - `layout.ts` lays them out with ELK's `INCLUDE_CHILDREN`. Edge sections are relative to their `container`; fan-out frames use `rectpacking`.
-     - Expanded fan-outs draw at most `SHOW_AT_MOST` items (`sampleItems`), and the rest map to `more:<step>`.
-     - Items' edges attach to their `fan:<step>` frame. Never draw every item of a fan-out.
+
+- **Context.** `runtime.stage` is a context manager and decorator over the `_stage` contextvar. `ArtifactTask.stage_path()` (enclosing stages, else `stage=`) is read at `_enqueue`, stored in `node_stages`, and in plan entries. `dag()`/`plan()` nodes carry `stage`.
+- **Static shape.** `analysis.py` pushes `("stage", name)` frames for `with stage("…")` and for `@stage` helpers (expanded up to depth 3), so shape nodes carry `stage` names.
+- **View.** `pipeline_views` stores the UI overlay (`assign` step→stage, `styles` stage→label/description/color) behind `GET`/`PUT /api/pipelines/{name}/view`.
+- **UI.** `ui/src/stages.ts` combines code stages, the view and fan-out into one member map (outermost collapsed stage wins, then a collapsed fan-out group). Editing lives in `components/StageDetail.tsx`.
+- **Sub flows.**
+  - `DagView.framed()` turns expanded stages and fan-outs into frame nodes (`frame`, `parent`).
+  - `layout.ts` lays them out with ELK's `INCLUDE_CHILDREN`. Edge sections are relative to their `container`; fan-out frames use `rectpacking`.
+  - Expanded fan-outs draw at most `SHOW_AT_MOST` items (`sampleItems`), and the rest map to `more:<step>`.
+  - Items' edges attach to their `fan:<step>` frame. Never draw every item of a fan-out.
 
 ## Invariants to preserve
 

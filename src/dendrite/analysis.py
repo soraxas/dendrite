@@ -19,8 +19,9 @@ import builtins
 import inspect
 import itertools
 import textwrap
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 from .hashing import canonical_json
 
@@ -93,9 +94,17 @@ def _dotted(node: ast.AST) -> str | None:
 
 # -- step checks ------------------------------------------------------------------------------
 _CLOCK = {
-    "time.time", "time.time_ns", "time.monotonic", "time.perf_counter",
-    "datetime.now", "datetime.utcnow", "datetime.today", "date.today",
-    "datetime.datetime.now", "datetime.datetime.utcnow", "datetime.date.today",
+    "time.time",
+    "time.time_ns",
+    "time.monotonic",
+    "time.perf_counter",
+    "datetime.now",
+    "datetime.utcnow",
+    "datetime.today",
+    "date.today",
+    "datetime.datetime.now",
+    "datetime.datetime.utcnow",
+    "datetime.date.today",
 }
 _RANDOM_PREFIXES = ("random.", "np.random.", "numpy.random.")
 _SEEDING = {"seed", "Random", "default_rng", "RandomState", "SystemRandom", "Generator"}
@@ -108,18 +117,23 @@ def check_step(task: Any) -> list[Diagnostic]:
     found: list[Diagnostic] = []
     for out in outputs:
         if not out.isidentifier():
-            found.append(Diagnostic("bad-output-name", "error", f"output name {out!r} is not a valid identifier", step=name))
+            found.append(
+                Diagnostic("bad-output-name", "error", f"output name {out!r} is not a valid identifier", step=name)
+            )
     for pname, p in task.signature.parameters.items():
         if p.default is not inspect.Parameter.empty:
             try:
                 canonical_json(p.default)
             except TypeError:
-                found.append(Diagnostic(
-                    "default-not-json", "error",
-                    f"default of {pname!r} ({type(p.default).__name__}) can't be part of a signature; "
-                    "use a JSON value, or pass the object in as an artifact",
-                    step=name,
-                ))
+                found.append(
+                    Diagnostic(
+                        "default-not-json",
+                        "error",
+                        f"default of {pname!r} ({type(p.default).__name__}) can't be part of a signature; "
+                        "use a JSON value, or pass the object in as an artifact",
+                        step=name,
+                    )
+                )
     src = function_source(fn)
     func = _parse_function(src[0]) if src else None
     if func is not None:
@@ -142,24 +156,43 @@ def _check_returns(func: ast.AST, outputs: list[str], step: str) -> list[Diagnos
     returns = [n for n in nodes if isinstance(n, ast.Return)]
     body = [s for s in func.body if not (isinstance(s, ast.Expr) and isinstance(s.value, ast.Constant))]
     trivial = all(isinstance(s, (ast.Pass, ast.Raise)) for s in body)
-    valued = [r for r in returns if r.value is not None and not (isinstance(r.value, ast.Constant) and r.value.value is None)]
+    valued = [
+        r for r in returns if r.value is not None and not (isinstance(r.value, ast.Constant) and r.value.value is None)
+    ]
     if not valued and not trivial:
-        out.append(Diagnostic(
-            "no-return", "error",
-            f"never returns a value, but declares output{'s' if len(outputs) > 1 else ''} {', '.join(outputs)}",
-            line=func.lineno, col=func.col_offset, step=step,
-        ))
+        out.append(
+            Diagnostic(
+                "no-return",
+                "error",
+                f"never returns a value, but declares output{'s' if len(outputs) > 1 else ''} {', '.join(outputs)}",
+                line=func.lineno,
+                col=func.col_offset,
+                step=step,
+            )
+        )
     n = len(outputs)
     for r in valued:
         v = r.value
         msg = None
-        if n > 1 and isinstance(v, ast.Tuple) and not any(isinstance(e, ast.Starred) for e in v.elts) and len(v.elts) != n:
+        if (
+            n > 1
+            and isinstance(v, ast.Tuple)
+            and not any(isinstance(e, ast.Starred) for e in v.elts)
+            and len(v.elts) != n
+        ):
             msg = f"returns {len(v.elts)} values, but declares {n} outputs ({', '.join(outputs)})"
-        elif n > 1 and isinstance(v, ast.Dict) and v.keys and all(isinstance(k, ast.Constant) and isinstance(k.value, str) for k in v.keys):
+        elif (
+            n > 1
+            and isinstance(v, ast.Dict)
+            and v.keys
+            and all(isinstance(k, ast.Constant) and isinstance(k.value, str) for k in v.keys)
+        ):
             keys = [k.value for k in v.keys]  # type: ignore[union-attr]
             if set(keys) != set(outputs):
                 missing, extra = sorted(set(outputs) - set(keys)), sorted(set(keys) - set(outputs))
-                parts = ([f"missing {', '.join(missing)}"] if missing else []) + ([f"unexpected {', '.join(extra)}"] if extra else [])
+                parts = ([f"missing {', '.join(missing)}"] if missing else []) + (
+                    [f"unexpected {', '.join(extra)}"] if extra else []
+                )
                 msg = f"returns a dict whose keys don't match the declared outputs: {'; '.join(parts)}"
         elif n > 1 and isinstance(v, (ast.Constant, ast.List, ast.Set, ast.ListComp, ast.SetComp, ast.JoinedStr)):
             msg = f"returns a single value, but declares {n} outputs ({', '.join(outputs)}); return a tuple or a dict"
@@ -181,26 +214,57 @@ def _check_hidden_inputs(func: ast.AST, params: set[str], step: str) -> list[Dia
     seeded = any(p == "seed" or p.endswith("_seed") for p in params)
     for node in _own_nodes(func):
         if isinstance(node, ast.Subscript) and _dotted(node.value) == "os.environ":
-            add("hidden-env", node, "reads an environment variable the cache can't see; make it a param, or put it in DENDRITE_ENV")
+            add(
+                "hidden-env",
+                node,
+                "reads an environment variable the cache can't see; make it a param, or put it in DENDRITE_ENV",
+            )
         if not isinstance(node, ast.Call):
             continue
         name = _dotted(node.func) or ""
         literal = bool(node.args) and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str)
         if name == "open" and literal:
-            mode = node.args[1] if len(node.args) > 1 else next((k.value for k in node.keywords if k.arg == "mode"), None)
+            mode = (
+                node.args[1] if len(node.args) > 1 else next((k.value for k in node.keywords if k.arg == "mode"), None)
+            )
             if not (isinstance(mode, ast.Constant) and any(c in str(mode.value) for c in "wax+")):
-                add("hidden-read", node, f"reads {node.args[0].value!r}, which is not a declared input; pass it in as an artifact")  # type: ignore[union-attr]
+                add(
+                    "hidden-read",
+                    node,
+                    f"reads {node.args[0].value!r}, which is not a declared input; pass it in as an artifact",
+                )  # type: ignore[union-attr]
         elif isinstance(node.func, ast.Attribute) and node.func.attr in _READ_METHODS:
             inner = node.func.value
-            if isinstance(inner, ast.Call) and (_dotted(inner.func) or "").split(".")[-1] in ("Path", "PurePath") and inner.args \
-                    and isinstance(inner.args[0], ast.Constant) and isinstance(inner.args[0].value, str):
-                add("hidden-read", node, f"reads {inner.args[0].value!r}, which is not a declared input; pass it in as an artifact")
+            if (
+                isinstance(inner, ast.Call)
+                and (_dotted(inner.func) or "").split(".")[-1] in ("Path", "PurePath")
+                and inner.args
+                and isinstance(inner.args[0], ast.Constant)
+                and isinstance(inner.args[0].value, str)
+            ):
+                add(
+                    "hidden-read",
+                    node,
+                    f"reads {inner.args[0].value!r}, which is not a declared input; pass it in as an artifact",
+                )
         if name in ("os.getenv", "os.environ.get", "getenv"):
-            add("hidden-env", node, "reads an environment variable the cache can't see; make it a param, or put it in DENDRITE_ENV")
+            add(
+                "hidden-env",
+                node,
+                "reads an environment variable the cache can't see; make it a param, or put it in DENDRITE_ENV",
+            )
         elif name in _CLOCK:
-            add("hidden-clock", node, f"{name}() makes the output depend on when it ran; the cache will reuse the first result")
+            add(
+                "hidden-clock",
+                node,
+                f"{name}() makes the output depend on when it ran; the cache will reuse the first result",
+            )
         elif name.startswith(_RANDOM_PREFIXES) and name.split(".")[-1] not in _SEEDING and not seeded:
-            add("unseeded-random", node, f"{name}() without a seed param: reruns won't reproduce, but the cache will reuse; add a `seed` param")
+            add(
+                "unseeded-random",
+                node,
+                f"{name}() without a seed param: reruns won't reproduce, but the cache will reuse; add a `seed` param",
+            )
     return out
 
 
@@ -210,20 +274,20 @@ class _Val:
     """What a variable may hold: producers (atoms) and, for tuples, per-element values."""
 
     atoms: list[tuple] = field(default_factory=list)  # ("input", name) | ("out", node_id, output)
-    elts: list["_Val"] | None = None
+    elts: list[_Val] | None = None
     origin: tuple[str, int] | None = None  # (step, number of outputs) for unpacking checks
 
     @staticmethod
-    def union(*vals: "_Val | None") -> "_Val":
+    def union(*vals: _Val | None) -> _Val:
         atoms: list[tuple] = []
         for v in vals:
-            for a in (v.atoms if v else []):
+            for a in v.atoms if v else []:
                 if a not in atoms:
                     atoms.append(a)
         tuples = [v.elts for v in vals if v and v.elts is not None]
         elts = None
         if tuples and len({len(t) for t in tuples}) == 1 and len(tuples) == len([v for v in vals if v]):
-            elts = [_Val.union(*col) for col in zip(*tuples)]
+            elts = [_Val.union(*col) for col in zip(*tuples, strict=True)]
         origins = {v.origin for v in vals if v and v.origin}
         return _Val(atoms, elts, origins.pop() if len(origins) == 1 else None)
 
@@ -254,7 +318,16 @@ class _ShapeBuilder:
         return (ast.get_source_segment(self.source, node) or "").strip()
 
     def diag(self, code: str, node: ast.AST, msg: str, severity: str = "error", step: str | None = None) -> None:
-        self.diags.append(Diagnostic(code, severity, msg, line=getattr(node, "lineno", None), col=getattr(node, "col_offset", None), step=step))
+        self.diags.append(
+            Diagnostic(
+                code,
+                severity,
+                msg,
+                line=getattr(node, "lineno", None),
+                col=getattr(node, "col_offset", None),
+                step=step,
+            )
+        )
 
     def edge(self, atom: tuple, to: str, input_name: str) -> None:
         if atom[0] == "input":
@@ -266,7 +339,12 @@ class _ShapeBuilder:
 
     def stage_name(self, e: ast.AST) -> str | None:
         """The literal name of a `stage("…")` / `dendrite.stage("…")` call, else None."""
-        if not (isinstance(e, ast.Call) and e.args and isinstance(e.args[0], ast.Constant) and isinstance(e.args[0].value, str)):
+        if not (
+            isinstance(e, ast.Call)
+            and e.args
+            and isinstance(e.args[0], ast.Constant)
+            and isinstance(e.args[0].value, str)
+        ):
             return None
         f = e.func
         if isinstance(f, ast.Attribute) and f.attr == "stage":
@@ -366,13 +444,20 @@ class _ShapeBuilder:
             if v.elts is not None and len(v.elts) != len(names):
                 if v.origin:
                     step, n = v.origin
-                    self.diag("unpack-mismatch", at, f"{step} produces {n} output{'s' if n != 1 else ''}, but {len(names)} names are unpacked", step=step)
+                    self.diag(
+                        "unpack-mismatch",
+                        at,
+                        f"{step} produces {n} output{'s' if n != 1 else ''}, but {len(names)} names are unpacked",
+                        step=step,
+                    )
                 for e in names:
                     self.assign(e, _Val(list(v.atoms)), env, at)
                 return
             if v.elts is None and v.origin and v.origin[1] == 1:
                 step, _ = v.origin
-                self.diag("unpack-mismatch", at, f"{step} produces 1 output, but {len(names)} names are unpacked", step=step)
+                self.diag(
+                    "unpack-mismatch", at, f"{step} produces 1 output, but {len(names)} names are unpacked", step=step
+                )
             for i, e in enumerate(names):
                 self.assign(e, v.elts[i] if v.elts is not None else _Val(list(v.atoms)), env, at)
 
@@ -390,7 +475,12 @@ class _ShapeBuilder:
         if isinstance(e, ast.Subscript):
             v = self.expr(e.value, env)
             self.expr(e.slice, env)
-            if v.elts is not None and isinstance(e.slice, ast.Constant) and isinstance(e.slice.value, int) and -len(v.elts) <= e.slice.value < len(v.elts):
+            if (
+                v.elts is not None
+                and isinstance(e.slice, ast.Constant)
+                and isinstance(e.slice.value, int)
+                and -len(v.elts) <= e.slice.value < len(v.elts)
+            ):
                 return v.elts[e.slice.value]
             return _Val(list(v.atoms))
         if isinstance(e, (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp)):
@@ -420,7 +510,9 @@ class _ShapeBuilder:
             return self.lookup(f.func.value), None, submit, True  # one node name per key, by construction
         if isinstance(f, ast.Call) and isinstance(f.func, ast.Attribute) and f.func.attr == "with_options":
             step = self.lookup(f.func.value)
-            name = next((k.value.value for k in f.keywords if k.arg == "name" and isinstance(k.value, ast.Constant)), None)
+            name = next(
+                (k.value.value for k in f.keywords if k.arg == "name" and isinstance(k.value, ast.Constant)), None
+            )
             return step, name, submit, name is not None
         return self.lookup(f), None, submit, False
 
@@ -441,7 +533,11 @@ class _ShapeBuilder:
         args = [self.expr(a.value if isinstance(a, ast.Starred) else a, env) for a in e.args]
         kwargs = {k.arg: self.expr(k.value, env) for k in e.keywords}
         staged = getattr(helper, "__dendrite_stage__", None)
-        if inspect.isfunction(helper) and helper.__module__ == self.module and (self.depth < 1 or (staged and self.depth < 3)):
+        if (
+            inspect.isfunction(helper)
+            and helper.__module__ == self.module
+            and (self.depth < 1 or (staged and self.depth < 3))
+        ):
             if staged:  # a `@dendrite.stage` function: its steps belong to that stage
                 self.ctx.append(("stage", staged["name"]))
             try:
@@ -457,8 +553,14 @@ class _ShapeBuilder:
         nid = f"dyn:{e.lineno}:{e.col_offset}"
         text = self.seg(e)
         self.nodes[nid] = {
-            "id": nid, "kind": "dynamic", "name": text if len(text) <= 48 else text[:45] + "…", "source": text,
-            "line": e.lineno, "conditional": self.conditions(), "repeated": self.in_loop(), "outputs": ["result"],
+            "id": nid,
+            "kind": "dynamic",
+            "name": text if len(text) <= 48 else text[:45] + "…",
+            "source": text,
+            "line": e.lineno,
+            "conditional": self.conditions(),
+            "repeated": self.in_loop(),
+            "outputs": ["result"],
         }
         for a in flowing.atoms:
             self.edge(a, nid, "")
@@ -492,7 +594,9 @@ class _ShapeBuilder:
                 del n["_helper_pending"]
         return _Val.union(*returned) if returned else _UNKNOWN
 
-    def step_call(self, e: ast.Call, step: Any, explicit: str | None, submit: bool, renamed: bool, env: dict[str, _Val]) -> _Val:
+    def step_call(
+        self, e: ast.Call, step: Any, explicit: str | None, submit: bool, renamed: bool, env: dict[str, _Val]
+    ) -> _Val:
         name = explicit or step.name
         self.steps[name] = step
         params = list(step.signature.parameters)
@@ -506,40 +610,77 @@ class _ShapeBuilder:
             if i < len(params):
                 bound[params[i]] = v
             else:
-                self.diag("unknown-arg", a, f"{name} takes {len(params)} argument{'s' if len(params) != 1 else ''}, but more are passed", step=name)
+                self.diag(
+                    "unknown-arg",
+                    a,
+                    f"{name} takes {len(params)} argument{'s' if len(params) != 1 else ''}, but more are passed",
+                    step=name,
+                )
         for k in e.keywords:
             v = self.expr(k.value, env)
             if k.arg is None:
                 continue
             if k.arg not in step.signature.parameters:
-                self.diag("unknown-arg", k.value, f"{name} has no parameter {k.arg!r}" + _suggest(k.arg, params), step=name)
+                self.diag(
+                    "unknown-arg", k.value, f"{name} has no parameter {k.arg!r}" + _suggest(k.arg, params), step=name
+                )
             else:
                 bound[k.arg] = v
         if not spread:
             for p, spec in step.signature.parameters.items():
                 if spec.default is inspect.Parameter.empty and p not in bound:
-                    self.diag("missing-arg", e, f"{name} needs {p!r}, which is not passed and has no default", step=name)
-        for arg, a in ((e.args[i], params[i]) for i in range(min(len(e.args), len(params)))):
-            if isinstance(arg, ast.Name) and arg.id not in env and self.resolve(arg.id) is None and not hasattr(builtins, arg.id):
+                    self.diag(
+                        "missing-arg", e, f"{name} needs {p!r}, which is not passed and has no default", step=name
+                    )
+        for arg, _param in ((e.args[i], params[i]) for i in range(min(len(e.args), len(params)))):
+            if (
+                isinstance(arg, ast.Name)
+                and arg.id not in env
+                and self.resolve(arg.id) is None
+                and not hasattr(builtins, arg.id)
+            ):
                 self.diag("undefined-name", arg, f"{arg.id!r} is not defined here", step=name)
         for k in e.keywords:
-            if isinstance(k.value, ast.Name) and k.value.id not in env and self.resolve(k.value.id) is None and not hasattr(builtins, k.value.id):
+            if (
+                isinstance(k.value, ast.Name)
+                and k.value.id not in env
+                and self.resolve(k.value.id) is None
+                and not hasattr(builtins, k.value.id)
+            ):
                 self.diag("undefined-name", k.value, f"{k.value.id!r} is not defined here", step=name)
 
         path = tuple((f[1], f[2]) for f in self.ctx if f[0] == "if")
         earlier = self.calls.setdefault(name, [])
         if self.in_loop() and not renamed:
-            self.diag("call-in-loop", e, f"{name} is called in a loop; each run may call a node once, so call {name}.named(key) with a key per item", step=name)
+            self.diag(
+                "call-in-loop",
+                e,
+                f"{name} is called in a loop; each run may call a node once, so call {name}.named(key) with a key per item",
+                step=name,
+            )
         elif not (renamed and explicit is None) and any(not _exclusive(path, p) for p in earlier):
-            self.diag("duplicate-call", e, f"{name} is called more than once in the same run; give each call its own node with {name}.named(key)", step=name)
+            self.diag(
+                "duplicate-call",
+                e,
+                f"{name} is called more than once in the same run; give each call its own node with {name}.named(key)",
+                step=name,
+            )
         earlier.append(path)
 
         node = self.nodes.get(name)
         if node is None:
             node = self.nodes[name] = {
-                "id": name, "kind": "node", "name": name, "step": step.name, "line": e.lineno,
-                "conditional": self.conditions(), "repeated": self.in_loop(), "submit": submit, "stage": self.stages(),
-                "outputs": list(step.outputs), "params": [p for p in params if p not in bound],
+                "id": name,
+                "kind": "node",
+                "name": name,
+                "step": step.name,
+                "line": e.lineno,
+                "conditional": self.conditions(),
+                "repeated": self.in_loop(),
+                "submit": submit,
+                "stage": self.stages(),
+                "outputs": list(step.outputs),
+                "params": [p for p in params if p not in bound],
             }
             if self.depth:
                 node["_helper_pending"] = True
@@ -547,7 +688,7 @@ class _ShapeBuilder:
             # The same step in exclusive branches: one node at run time, under whichever conditions
             # both calls share (an if/else pair shares none, so the step always runs).
             shared = []
-            for a, b in zip(node["conditional"], self.conditions()):
+            for a, b in zip(node["conditional"], self.conditions(), strict=False):
                 if a != b:
                     break
                 shared.append(a)

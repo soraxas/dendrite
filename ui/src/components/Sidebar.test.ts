@@ -3,7 +3,15 @@ import type { TreeEntry } from "../api";
 import { outcome } from "./Sidebar";
 
 const entry = (status: TreeEntry["status"], counts: TreeEntry["counts"] = {}): TreeEntry => ({
-  id: "e-1", name: "x", parent_id: null, pipeline: "toy", status, created_at: 0, started_at: null, finished_at: null, counts,
+  id: "e-1",
+  name: "x",
+  parent_id: null,
+  pipeline: "toy",
+  status,
+  created_at: 0,
+  started_at: null,
+  finished_at: null,
+  counts,
 });
 
 describe("sidebar outcome", () => {

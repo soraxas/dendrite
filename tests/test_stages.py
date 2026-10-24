@@ -7,12 +7,21 @@ from .test_api import no_bundle
 
 
 def paths(dag):
-    return {n["id"]: [s["name"] if isinstance(s, dict) else s for s in n["stage"]] for n in dag["nodes"] if n["kind"] == "node"}
+    return {
+        n["id"]: [s["name"] if isinstance(s, dict) else s for s in n["stage"]]
+        for n in dag["nodes"]
+        if n["kind"] == "node"
+    }
 
 
 def test_stages_are_recorded_nested_and_defaulted(lab, source):
     exp = lab.create(toy.toy_stages, inputs={"src": source}).run()
-    assert paths(exp.dag()) == {"extract": ["Prepare"], "featurize": ["Prepare"], "train": ["Model", "Train"], "tag": ["Fallback"]}
+    assert paths(exp.dag()) == {
+        "extract": ["Prepare"],
+        "featurize": ["Prepare"],
+        "train": ["Model", "Train"],
+        "tag": ["Fallback"],
+    }
     info = {n["id"]: n["stage"] for n in exp.dag()["nodes"] if n["kind"] == "node"}["extract"][0]
     assert info == {"name": "Prepare", "description": "Rows and features", "color": "teal"}
     exp.run()  # a rerun replaces, not appends
@@ -41,7 +50,10 @@ def test_pipeline_view_api(lab, tmp_path):
     ui = no_bundle(tmp_path)
     c = TestClient(create_app(lab, ui_dir=ui, allow_edit=True))
     assert c.get("/api/pipelines/toy/view").json() == {"assign": {}, "styles": {}}
-    view = {"assign": {"tag": "Audio"}, "styles": {"Audio": {"label": "Audio", "description": "Transcription", "color": "purple"}}}
+    view = {
+        "assign": {"tag": "Audio"},
+        "styles": {"Audio": {"label": "Audio", "description": "Transcription", "color": "purple"}},
+    }
     assert c.put("/api/pipelines/toy/view", json=view).status_code == 200
     assert c.get("/api/pipelines/toy/view").json() == view
     assert c.put("/api/pipelines/toy/view", json={"styles": {"X": {"color": "chartreuse"}}}).status_code == 400

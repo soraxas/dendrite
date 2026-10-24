@@ -1,21 +1,37 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ApiError, type Dag, type Lineage, type PlanNode } from "./api";
-import { ArtifactDetailPanel, ExecutionDetailPanel, ExperimentDetail, NodeDetail, type Nav } from "./components/DetailPanel";
 import { CodeView } from "./components/CodeView";
 import { DagView } from "./components/DagView";
+import {
+  ArtifactDetailPanel,
+  ExecutionDetailPanel,
+  ExperimentDetail,
+  GroupDetail,
+  type Nav,
+  NodeDetail,
+} from "./components/DetailPanel";
 import { DraftBar, DraftStepEditor } from "./components/Draft";
 import { LineageView } from "./components/LineageView";
 import { DiffPage, MetricsPage, ParamsPage } from "./components/Pages";
 import { Sidebar } from "./components/Sidebar";
+import { StageAssign, StageDetail } from "./components/StageDetail";
 import { StoragePage } from "./components/Storage";
 import { Toolbar } from "./components/Toolbar";
 import { collapsedSteps, fanoutGroups, groupId, nextSelection } from "./fanout";
-import { EMPTY_VIEW, grouping, stageId, stagePath } from "./stages";
 import { useFolds } from "./folds";
-import { StageAssign, StageDetail } from "./components/StageDetail";
-import { GroupDetail } from "./components/DetailPanel";
-import { useDag, useDiff, useExperiments, useInfo, useIsLive, useLineage, useLiveUpdates, usePlan, useView } from "./queries";
-import { parse, splitSel, useRoute, type Route } from "./router";
+import {
+  useDag,
+  useDiff,
+  useExperiments,
+  useInfo,
+  useIsLive,
+  useLineage,
+  useLiveUpdates,
+  usePlan,
+  useView,
+} from "./queries";
+import { parse, type Route, splitSel, useRoute } from "./router";
+import { EMPTY_VIEW, grouping, stageId, stagePath } from "./stages";
 import { confirmLeave } from "./unsaved";
 
 /** Best human label for an artifact hash within the current DAG: the output (or input) name. */
@@ -92,14 +108,18 @@ export function App() {
   const lineage = lineageQ.data;
 
   useEffect(() => {
-    if (route.view === "home" && tree.length) navigate({ view: "dag", exp: tree[tree.length - 1].id }, { replace: true });
+    if (route.view === "home" && tree.length)
+      navigate({ view: "dag", exp: tree[tree.length - 1].id }, { replace: true });
   }, [route.view, tree, navigate]);
 
   // Executions outlive deleted experiments, so a result can name an experiment that's gone.
-  const nameOf = useCallback((id: string) => {
-    const e = tree.find((x) => x.id === id);
-    return e ? e.name || e.id : tree.length ? `deleted experiment ${id}` : id;
-  }, [tree]);
+  const nameOf = useCallback(
+    (id: string) => {
+      const e = tree.find((x) => x.id === id);
+      return e ? e.name || e.id : tree.length ? `deleted experiment ${id}` : id;
+    },
+    [tree],
+  );
 
   const setSel = useCallback((sel?: string) => navigate({ ...route, sel }, { replace: true }), [navigate, route]);
   // Clicking the selected item again deselects it (closing its data chips).
@@ -107,14 +127,17 @@ export function App() {
   // How the graph is folded (stages, fan-outs, overview), remembered per pipeline across reloads.
   const { folds, toggleStage, toggleFan: toggleGroup, setShowSteps } = useFolds(dag?.experiment.pipeline);
   const showSteps = folds.showSteps;
-  const nav: Nav = useMemo(() => ({
-    openExp: (id) => navigate({ view: "dag", exp: id }),
-    openStep: (expId, node) => navigate({ view: "dag", exp: expId, sel: `node:${node}` }),
-    selectArtifact: (h) => setSel(`artifact:${h}`),
-    selectExec: (id) => setSel(`exec:${id}`),
-    trace: (h) => navigate({ view: "lineage", artifact: h, exp: route.exp, sel: `artifact:${h}` }),
-    nameOf,
-  }), [navigate, setSel, route.exp, nameOf]);
+  const nav: Nav = useMemo(
+    () => ({
+      openExp: (id) => navigate({ view: "dag", exp: id }),
+      openStep: (expId, node) => navigate({ view: "dag", exp: expId, sel: `node:${node}` }),
+      selectArtifact: (h) => setSel(`artifact:${h}`),
+      selectExec: (id) => setSel(`exec:${id}`),
+      trace: (h) => navigate({ view: "lineage", artifact: h, exp: route.exp, sel: `artifact:${h}` }),
+      nameOf,
+    }),
+    [navigate, setSel, route.exp, nameOf],
+  );
 
   const { kind, id } = splitSel(route.sel);
   const go = (r: Route) => navigate(r);
@@ -125,32 +148,49 @@ export function App() {
   const viewQ = useView(dag?.experiment.pipeline);
   const view = viewQ.data ?? EMPTY_VIEW;
   const cards = useMemo(
-    () => grouping(dag?.nodes ?? [], view, { collapsedFan: collapsedGroups, showSteps, stageToggled: new Set(folds.stages) }),
+    () =>
+      grouping(dag?.nodes ?? [], view, {
+        collapsedFan: collapsedGroups,
+        showSteps,
+        stageToggled: new Set(folds.stages),
+      }),
     [dag?.nodes, view, collapsedGroups, showSteps, folds.stages],
   );
   // Selecting a step inside a folded stage first unfolds the stages around it.
-  const reveal = useCallback((node: string) => {
-    const n = dag?.nodes.find((x) => x.id === node);
-    if (n) {
-      const path = stagePath(n, view).map((s) => s.name);
-      for (let i = 1; i <= path.length; i++) {
-        const sid = stageId(path.slice(0, i));
-        if (cards.collapsedStages.has(sid)) toggleStage(sid);
+  const reveal = useCallback(
+    (node: string) => {
+      const n = dag?.nodes.find((x) => x.id === node);
+      if (n) {
+        const path = stagePath(n, view).map((s) => s.name);
+        for (let i = 1; i <= path.length; i++) {
+          const sid = stageId(path.slice(0, i));
+          if (cards.collapsedStages.has(sid)) toggleStage(sid);
+        }
       }
-    }
-    setSel(`node:${node}`);
-  }, [dag?.nodes, view, cards.collapsedStages, toggleStage, setSel]);
+      setSel(`node:${node}`);
+    },
+    [dag?.nodes, view, cards.collapsedStages, toggleStage, setSel],
+  );
 
   // ---- main area
   let toolbar = null;
-  let body = <div className="empty">{tree.length ? "Loading…" : "No experiments yet — create and run one with dendrite.Lab()."}</div>;
+  let body = (
+    <div className="empty">
+      {tree.length ? "Loading…" : "No experiments yet — create and run one with dendrite.Lab()."}
+    </div>
+  );
   let graphSel: string | undefined;
   if (inStorage) {
     toolbar = (
       <div className="toolbar">
         <div className="tb-title">
-          <div className="tb-row"><span className="mode-chip">Storage</span><h2>Where the space goes</h2></div>
-          <div className="story">Delete old experiments, evict cache you can recompute, and clean up what nothing uses.</div>
+          <div className="tb-row">
+            <span className="mode-chip">Storage</span>
+            <h2>Where the space goes</h2>
+          </div>
+          <div className="story">
+            Delete old experiments, evict cache you can recompute, and clean up what nothing uses.
+          </div>
         </div>
       </div>
     );
@@ -176,8 +216,8 @@ export function App() {
           </div>
           {focus && (
             <div className="story">
-              {focus.producer_node ? `Produced by ${focus.producer_node}` : "Source input"} · {lineage.ancestors.length} computation{lineage.ancestors.length === 1 ? "" : "s"} upstream ·{" "}
-              {lineage.descendants.length} downstream
+              {focus.producer_node ? `Produced by ${focus.producer_node}` : "Source input"} · {lineage.ancestors.length}{" "}
+              computation{lineage.ancestors.length === 1 ? "" : "s"} upstream · {lineage.descendants.length} downstream
             </div>
           )}
         </div>
@@ -199,7 +239,16 @@ export function App() {
   } else if (dag) {
     toolbar = (
       <>
-        <Toolbar key={dag.experiment.id} dag={dag} tree={tree} route={route} go={go} nameOf={nameOf} canEdit={canEdit} plan={plan} />
+        <Toolbar
+          key={dag.experiment.id}
+          dag={dag}
+          tree={tree}
+          route={route}
+          go={go}
+          nameOf={nameOf}
+          canEdit={canEdit}
+          plan={plan}
+        />
         {isDraft && (
           <DraftBar
             key={`bar:${dag.experiment.id}`}
@@ -207,18 +256,30 @@ export function App() {
             plan={plan}
             planError={planQ.error}
             canEdit={canEdit}
-            onDiscarded={() => (dag.experiment.parent_id ? nav.openExp(dag.experiment.parent_id) : navigate({ view: "home" }))}
+            onDiscarded={() =>
+              dag.experiment.parent_id ? nav.openExp(dag.experiment.parent_id) : navigate({ view: "home" })
+            }
           />
         )}
       </>
     );
-    graphSel = kind === "node" ? id : kind === "input" ? `input:${id}` : kind === "group" ? groupId(id!) : kind === "artifact" && id ? ownerOf(dag, id) : undefined;
+    graphSel =
+      kind === "node"
+        ? id
+        : kind === "input"
+          ? `input:${id}`
+          : kind === "group"
+            ? groupId(id!)
+            : kind === "artifact" && id
+              ? ownerOf(dag, id)
+              : undefined;
     if (kind === "stage" && id) graphSel = `stage:${id}`;
     if (kind === "group" && id && !collapsedGroups.has(id)) graphSel = `fan:${id}`; // its frame, when expanded
     // A selected item inside a folded stage or group highlights that card.
     if (graphSel && cards.members.has(graphSel)) graphSel = cards.members.get(graphSel);
     if (route.view === "params") body = <ParamsPage dag={dag} onArtifact={nav.selectArtifact} />;
-    else if (route.view === "code") body = <CodeView key={dag.experiment.pipeline} pipeline={dag.experiment.pipeline} dag={dag} canEdit={canEdit} />;
+    else if (route.view === "code")
+      body = <CodeView key={dag.experiment.pipeline} pipeline={dag.experiment.pipeline} dag={dag} canEdit={canEdit} />;
     else if (route.view === "metrics") body = <MetricsPage dag={dag} />;
     else if (route.view === "diff") body = <DiffPage diff={diffQ.data} nameOf={nameOf} openExp={nav.openExp} />;
     else
@@ -250,8 +311,14 @@ export function App() {
       );
   } else if (dagQ.error) {
     body =
-      dagQ.error instanceof ApiError && dagQ.error.status === 404 && tree.length && !tree.some((e) => e.id === route.exp) ? (
-        <div className="empty">This experiment was deleted. Its results' lineage is still recorded, and other experiments keep using shared results.</div>
+      dagQ.error instanceof ApiError &&
+      dagQ.error.status === 404 &&
+      tree.length &&
+      !tree.some((e) => e.id === route.exp) ? (
+        <div className="empty">
+          This experiment was deleted. Its results' lineage is still recorded, and other experiments keep using shared
+          results.
+        </div>
       ) : (
         <div className="empty err">{String(dagQ.error)}</div>
       );
@@ -263,7 +330,10 @@ export function App() {
     detail = (
       <section className="muted storage-help">
         <h3>How space is counted</h3>
-        <p><b>Frees</b> is what deleting an experiment and then cleaning up gives back: data no other experiment uses. Results shared by forks are counted once and stay while anything uses them.</p>
+        <p>
+          <b>Frees</b> is what deleting an experiment and then cleaning up gives back: data no other experiment uses.
+          Results shared by forks are counted once and stay while anything uses them.
+        </p>
         <p>Evicted or cleaned-up results recompute the next time a run needs them. Lineage records always stay.</p>
       </section>
     );
@@ -297,7 +367,14 @@ export function App() {
   } else if (kind === "node" && dag) {
     const n = dag.nodes.find((x) => x.kind === "node" && x.id === id);
     detail = !n ? null : plan ? (
-      <DraftStepEditor key={n.id} n={n as PlanNode} plan={plan} canEdit={canEdit} nameOf={nameOf} openStep={nav.openStep} />
+      <DraftStepEditor
+        key={n.id}
+        n={n as PlanNode}
+        plan={plan}
+        canEdit={canEdit}
+        nameOf={nameOf}
+        openStep={nav.openStep}
+      />
     ) : (
       <>
         <NodeDetail n={n} dag={dag} nav={nav} />
@@ -317,11 +394,21 @@ export function App() {
     detail = n?.artifact ? <ArtifactDetailPanel hash={n.artifact.hash} label={n.name} nav={nav} canTrace /> : null;
   } else if (kind === "artifact" && id) {
     const label = inLineage ? lineageLabel(lineage, id) : dagLabel(dag, id);
-    detail = <ArtifactDetailPanel key={id} hash={id} label={label} nav={nav} canTrace={!inLineage || id !== lineage?.artifact.hash} />;
+    detail = (
+      <ArtifactDetailPanel
+        key={id}
+        hash={id}
+        label={label}
+        nav={nav}
+        canTrace={!inLineage || id !== lineage?.artifact.hash}
+      />
+    );
   } else if (kind === "exec" && id) {
     detail = <ExecutionDetailPanel key={id} id={id} nav={nav} />;
   } else if (inLineage && lineage) {
-    detail = <ArtifactDetailPanel hash={lineage.artifact.hash} label={lineage.artifact.label} nav={nav} canTrace={false} />;
+    detail = (
+      <ArtifactDetailPanel hash={lineage.artifact.hash} label={lineage.artifact.label} nav={nav} canTrace={false} />
+    );
   } else if (dag) {
     detail = (
       <ExperimentDetail
@@ -345,10 +432,21 @@ export function App() {
           </span>
         )}
         <span className="spacer" />
-        <span className="live" title={live ? "Live: the page updates as soon as something changes" : "Not connected for live updates; the page refreshes every few seconds"}>
+        <span
+          className="live"
+          title={
+            live
+              ? "Live: the page updates as soon as something changes"
+              : "Not connected for live updates; the page refreshes every few seconds"
+          }
+        >
           <i className={`live-dot ${live ? "" : "off"}`} /> {live ? "live" : "polling"}
         </span>
-        <button className={`top-link ${inStorage ? "active" : ""}`} title="Storage use, deleting experiments and cleaning up" onClick={() => navigate({ view: "storage" })}>
+        <button
+          className={`top-link ${inStorage ? "active" : ""}`}
+          title="Storage use, deleting experiments and cleaning up"
+          onClick={() => navigate({ view: "storage" })}
+        >
           Storage
         </button>
         {info && (
@@ -356,8 +454,10 @@ export function App() {
             <summary title="Where results are stored">Lab</summary>
             <div className="lab-pop">
               <dl className="kv">
-                <dt>metadata</dt><dd className="mono">{info.db}</dd>
-                <dt>artifacts</dt><dd className="mono">{info.store}</dd>
+                <dt>metadata</dt>
+                <dd className="mono">{info.db}</dd>
+                <dt>artifacts</dt>
+                <dd className="mono">{info.store}</dd>
               </dl>
             </div>
           </details>

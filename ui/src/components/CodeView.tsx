@@ -3,13 +3,13 @@
 // the run's statuses colour it in.
 import { useQueryClient } from "@tanstack/react-query";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
-import { api, ApiError, type Dag, type Diagnostic, type PlanNode, type Shape, type ShapeNode } from "../api";
+import { ApiError, api, type Dag, type Diagnostic, type PlanNode, type Shape, type ShapeNode } from "../api";
 import { PLAN } from "../copy";
 import { useShape, useSource } from "../queries";
 import { setUnsaved } from "../unsaved";
 import type { Annotation } from "./AceEditor";
-import { Graph, mergeEdges, type GraphNode } from "./Graph";
-import { nodeTypes, type HoverCard } from "./nodes";
+import { Graph, type GraphNode, mergeEdges } from "./Graph";
+import { type HoverCard, nodeTypes } from "./nodes";
 
 const AceEditor = lazy(() => import("./AceEditor"));
 
@@ -17,7 +17,12 @@ const AceEditor = lazy(() => import("./AceEditor"));
 export function toAnnotations(diags: Diagnostic[]): Annotation[] {
   return diags
     .filter((d) => d.line != null)
-    .map((d) => ({ row: d.line! - 1, column: d.col ?? 0, text: `${d.message} [${d.code}]`, type: d.severity === "error" ? "error" : "warning" }));
+    .map((d) => ({
+      row: d.line! - 1,
+      column: d.col ?? 0,
+      text: `${d.message} [${d.code}]`,
+      type: d.severity === "error" ? "error" : "warning",
+    }));
 }
 
 /** Tone per node id: the plan's outcome for a draft, otherwise the last run's status. */
@@ -35,16 +40,40 @@ export function shapeNodes(shape: Shape, tones: Record<string, string>): GraphNo
   return shape.nodes.map((n: ShapeNode) => {
     if (n.kind === "input") {
       return {
-        id: n.id, type: "inputNode", width: 180, height: 48, minimapColor: "var(--input)",
-        data: { name: n.name, sub: "pipeline input", hover: { title: `Input: ${n.name}`, body: "An argument of the pipeline function: a file or folder the experiment starts from.", facts: [] } },
+        id: n.id,
+        type: "inputNode",
+        width: 180,
+        height: 48,
+        minimapColor: "var(--input)",
+        data: {
+          name: n.name,
+          sub: "pipeline input",
+          hover: {
+            title: `Input: ${n.name}`,
+            body: "An argument of the pipeline function: a file or folder the experiment starts from.",
+            facts: [],
+          },
+        },
       };
     }
     if (n.kind === "dynamic") {
       return {
-        id: n.id, type: "pipelineNode", width: 250, height: 68, minimapColor: "var(--queued)",
+        id: n.id,
+        type: "pipelineNode",
+        width: 250,
+        height: 68,
+        minimapColor: "var(--queued)",
         data: {
-          name: n.name, status: "dynamic", variant: "dynamic", line2: "Can't see inside", line3: `line ${n.line}`,
-          hover: { title: "Not a step", body: "This call isn't a dendrite step, so parsing can't tell what it does with the data. The plan, which runs the code, can.", facts: [["call", n.source ?? n.name]] } as HoverCard,
+          name: n.name,
+          status: "dynamic",
+          variant: "dynamic",
+          line2: "Can't see inside",
+          line3: `line ${n.line}`,
+          hover: {
+            title: "Not a step",
+            body: "This call isn't a dendrite step, so parsing can't tell what it does with the data. The plan, which runs the code, can.",
+            facts: [["call", n.source ?? n.name]],
+          } as HoverCard,
         },
       };
     }
@@ -55,12 +84,22 @@ export function shapeNodes(shape: Shape, tones: Record<string, string>): GraphNo
     if (n.params?.length) facts.push(["parameters", n.params.join(", ")]);
     if (n.alternatives) facts.push(["called", `in ${n.alternatives} branches`]);
     return {
-      id: n.id, type: "pipelineNode", width: 250, height: 68, minimapColor: `var(--${tone})`,
+      id: n.id,
+      type: "pipelineNode",
+      width: 250,
+      height: 68,
+      minimapColor: `var(--${tone})`,
       data: {
         name: `${n.name}${n.repeated ? " ⟳" : ""}`,
         status: tone,
         variant: cond.length ? "upstream" : "",
-        line2: cond.length ? `if ${cond.join(" and ")}` : n.repeated ? "in a loop" : n.submit ? "submitted (runs in parallel)" : "always runs",
+        line2: cond.length
+          ? `if ${cond.join(" and ")}`
+          : n.repeated
+            ? "in a loop"
+            : n.submit
+              ? "submitted (runs in parallel)"
+              : "always runs",
         line3: n.outputs?.length ? `→ ${n.outputs.join(", ")}` : "",
         hover: {
           title: n.name,
@@ -77,21 +116,35 @@ export function shapeNodes(shape: Shape, tones: Record<string, string>): GraphNo
   });
 }
 
-function DiagnosticList({ diags, stepDiags, firstLine, onPick }: { diags: Diagnostic[]; stepDiags: Diagnostic[]; firstLine: number; onPick: (row: number) => void }) {
-  if (!diags.length && !stepDiags.length) return <div className="diag-empty">No problems found in this pipeline or its steps.</div>;
+function DiagnosticList({
+  diags,
+  stepDiags,
+  firstLine,
+  onPick,
+}: {
+  diags: Diagnostic[];
+  stepDiags: Diagnostic[];
+  firstLine: number;
+  onPick: (row: number) => void;
+}) {
+  if (!diags.length && !stepDiags.length)
+    return <div className="diag-empty">No problems found in this pipeline or its steps.</div>;
   return (
     <ul className="diags" aria-label="Problems">
       {diags.map((d, i) => (
         <li key={`p${i}`} className={d.severity}>
           <a onClick={() => d.line != null && onPick(d.line - 1)}>
-            <b>{d.severity === "error" ? "Error" : "Warning"}</b> line {(d.line ?? 1) + firstLine - 1}: {d.message} <span className="muted">[{d.code}]</span>
+            <b>{d.severity === "error" ? "Error" : "Warning"}</b> line {(d.line ?? 1) + firstLine - 1}: {d.message}{" "}
+            <span className="muted">[{d.code}]</span>
           </a>
         </li>
       ))}
       {stepDiags.map((d, i) => (
         <li key={`s${i}`} className={d.severity}>
           <b>{d.severity === "error" ? "Error" : "Warning"}</b> in step {d.step}: {d.message}{" "}
-          <span className="muted mono">{(d.file ?? "").split("/").pop()}:{d.file_line} [{d.code}]</span>
+          <span className="muted mono">
+            {(d.file ?? "").split("/").pop()}:{d.file_line} [{d.code}]
+          </span>
         </li>
       ))}
     </ul>
@@ -120,7 +173,10 @@ export function CodeView({ pipeline, dag, canEdit }: { pipeline: string; dag?: D
     if (draft === null) return void setLive(null);
     const mine = ++seq.current;
     const t = window.setTimeout(() => {
-      api.shapeOf(pipeline, draft).then((s) => mine === seq.current && setLive(s)).catch(() => {});
+      api
+        .shapeOf(pipeline, draft)
+        .then((s) => mine === seq.current && setLive(s))
+        .catch(() => {});
     }, 400);
     return () => window.clearTimeout(t);
   }, [draft, pipeline]);
@@ -166,7 +222,14 @@ export function CodeView({ pipeline, dag, canEdit }: { pipeline: string; dag?: D
     const notLoaded = shapeQ.error instanceof ApiError && shapeQ.error.code === "pipeline_not_imported";
     return (
       <div className="empty">
-        {notLoaded ? <>The UI server hasn't loaded <b>{pipeline}</b>'s code. Restart it with <code>dendrite ui --import &lt;module&gt;</code> to see and edit it.</> : String(shapeQ.error)}
+        {notLoaded ? (
+          <>
+            The UI server hasn't loaded <b>{pipeline}</b>'s code. Restart it with{" "}
+            <code>dendrite ui --import &lt;module&gt;</code> to see and edit it.
+          </>
+        ) : (
+          String(shapeQ.error)
+        )}
       </div>
     );
   }
@@ -183,23 +246,35 @@ export function CodeView({ pipeline, dag, canEdit }: { pipeline: string; dag?: D
     <div className="code-view">
       <div className="code-pane">
         <div className="code-head">
-          <span className="mono" title={shape.file ?? undefined}>{where}</span>
+          <span className="mono" title={shape.file ?? undefined}>
+            {where}
+          </span>
           <span className="spacer" />
           {editable && dirty && <button onClick={() => (setDraft(null), setLive(null))}>Revert</button>}
-          {editable && <button className="primary" disabled={!dirty} onClick={() => setPrompt("confirm-save")}>Save…</button>}
+          {editable && (
+            <button className="primary" disabled={!dirty} onClick={() => setPrompt("confirm-save")}>
+              Save…
+            </button>
+          )}
         </div>
         <div className={`code-note ${dirty ? "dirty" : ""}`}>{note}</div>
         {prompt === "confirm-save" && (
           <div className="confirm code-confirm">
-            <span>Write this to <b>{shape.display ?? shape.file}</b>? Drafts re-plan with the new code.</span>
+            <span>
+              Write this to <b>{shape.display ?? shape.file}</b>? Drafts re-plan with the new code.
+            </span>
             <button onClick={() => setPrompt(null)}>Cancel</button>
-            <button className="primary" disabled={saving} onClick={save}>{saving ? "Saving…" : "Save to file"}</button>
+            <button className="primary" disabled={saving} onClick={save}>
+              {saving ? "Saving…" : "Save to file"}
+            </button>
           </div>
         )}
         {prompt === "conflict" && (
           <div className="confirm code-confirm">
             <span className="err">The file changed on disk since it was loaded, so nothing was saved.</span>
-            <button onClick={() => (setPrompt(null), setDraft(null), setLive(null), refetchSource(), shapeQ.refetch())}>Reload (lose my edits)</button>
+            <button onClick={() => (setPrompt(null), setDraft(null), setLive(null), refetchSource(), shapeQ.refetch())}>
+              Reload (lose my edits)
+            </button>
           </div>
         )}
         {failure && <div className="code-note err">Could not save: {failure}</div>}
@@ -216,11 +291,17 @@ export function CodeView({ pipeline, dag, canEdit }: { pipeline: string; dag?: D
             />
           </Suspense>
         </div>
-        <DiagnosticList diags={shape.diagnostics} stepDiags={shape.step_diagnostics ?? []} firstLine={shape.first_line} onPick={(row) => setGoTo({ row, seq: Date.now() })} />
+        <DiagnosticList
+          diags={shape.diagnostics}
+          stepDiags={shape.step_diagnostics ?? []}
+          firstLine={shape.first_line}
+          onPick={(row) => setGoTo({ row, seq: Date.now() })}
+        />
       </div>
       <div className="shape-pane">
         <div className="shape-note">
-          Flow parsed from the source{shape.dynamic ? " · grey boxes are calls parsing can't see into" : ""}. {dag && "Colours: this experiment's " + (dag.experiment.status === "draft" ? "plan" : "last run") + "."}
+          Flow parsed from the source{shape.dynamic ? " · grey boxes are calls parsing can't see into" : ""}.{" "}
+          {dag && `Colours: this experiment's ${dag.experiment.status === "draft" ? "plan" : "last run"}.`}
         </div>
         <div className="shape-graph">
           {nodes.length ? (
@@ -235,7 +316,11 @@ export function CodeView({ pipeline, dag, canEdit }: { pipeline: string; dag?: D
               legend={null}
             />
           ) : (
-            <div className="empty">{shape.diagnostics.some((d) => d.code === "syntax") ? "Fix the syntax error to see the flow." : "No steps called yet."}</div>
+            <div className="empty">
+              {shape.diagnostics.some((d) => d.code === "syntax")
+                ? "Fix the syntax error to see the flow."
+                : "No steps called yet."}
+            </div>
           )}
         </div>
       </div>

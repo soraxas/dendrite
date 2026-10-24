@@ -30,7 +30,9 @@ function Glyph({ status }: { status: TreeEntry["status"] }) {
   // Only states that need attention get a mark; "done" is the quiet default. It sits in the
   // row's left padding so it never pushes the text (or the indentation) right.
   if (status === "completed") return null;
-  return <span className={`glyph ${status}`} title={EXPERIMENT_STATUS[status]} aria-label={EXPERIMENT_STATUS[status]} />;
+  return (
+    <span className={`glyph ${status}`} title={EXPERIMENT_STATUS[status]} aria-label={EXPERIMENT_STATUS[status]} />
+  );
 }
 
 /** Step outcomes at a glance, coloured like the graph legend; the tooltip spells it out. */
@@ -61,7 +63,9 @@ export function Sidebar({ tree, selected, onOpen, collapsed, onToggle }: Props) 
   if (collapsed) {
     return (
       <aside className="sidebar collapsed">
-        <button className="rail-toggle" onClick={onToggle} title="Show experiments" aria-label="Show experiments">»</button>
+        <button className="rail-toggle" onClick={onToggle} title="Show experiments" aria-label="Show experiments">
+          »
+        </button>
         <div className="rail-label">Experiments · {tree.length}</div>
       </aside>
     );
@@ -111,11 +115,20 @@ export function Sidebar({ tree, selected, onOpen, collapsed, onToggle }: Props) 
         <div className="side-title">
           <span>
             Experiments <span className="muted">{tree.length}</span>{" "}
-            <span className="info" title="Indented experiments are forks of the one above. Newest first.">ⓘ</span>
+            <span className="info" title="Indented experiments are forks of the one above. Newest first.">
+              ⓘ
+            </span>
           </span>
-          <button className="rail-toggle" onClick={onToggle} title="Hide experiments" aria-label="Hide experiments">«</button>
+          <button className="rail-toggle" onClick={onToggle} title="Hide experiments" aria-label="Hide experiments">
+            «
+          </button>
         </div>
-        <input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter…" aria-label="Filter experiments" />
+        <input
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          placeholder="Filter…"
+          aria-label="Filter experiments"
+        />
       </div>
       <ul className="tree">{roots.length ? roots.map(item) : <li className="empty">No experiments yet.</li>}</ul>
     </aside>

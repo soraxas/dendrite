@@ -23,9 +23,14 @@ export function fmtVal(v: unknown): string {
   return typeof v === "string" ? JSON.stringify(v) : JSON.stringify(v);
 }
 
-export function flatten(obj: Record<string, unknown> | null | undefined, prefix = "", out: Record<string, unknown> = {}) {
+export function flatten(
+  obj: Record<string, unknown> | null | undefined,
+  prefix = "",
+  out: Record<string, unknown> = {},
+) {
   for (const [k, v] of Object.entries(obj ?? {})) {
-    if (v && typeof v === "object" && !Array.isArray(v) && Object.keys(v).length) flatten(v as Record<string, unknown>, `${prefix}${k}.`, out);
+    if (v && typeof v === "object" && !Array.isArray(v) && Object.keys(v).length)
+      flatten(v as Record<string, unknown>, `${prefix}${k}.`, out);
     else out[`${prefix}${k}`] = v;
   }
   return out;
@@ -36,7 +41,10 @@ export function describeRoles(roles: { kind: string; node: string | null; name: 
   const parts: string[] = [];
   const inputs = roles.filter((r) => r.kind === "input").map((r) => r.name);
   if (inputs.length) parts.push(`input ${inputs.join(", ")}`);
-  for (const [kind, verb] of [["produced", "produced by"], ["read", "read by"]] as const) {
+  for (const [kind, verb] of [
+    ["produced", "produced by"],
+    ["read", "read by"],
+  ] as const) {
     const nodes = [...new Set(roles.filter((r) => r.kind === kind).map((r) => r.node))];
     if (nodes.length) parts.push(`${verb} ${nodes.join(", ")}`);
   }

@@ -1,6 +1,6 @@
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useSyncExternalStore } from "react";
-import { ACTIVE, api, ApiError, type Dag } from "./api";
+import { ACTIVE, ApiError, api, type Dag } from "./api";
 
 // Live updates: the server pushes "this changed" events (Server-Sent Events, /api/events), so
 // pages refetch only what changed. Polling remains as a slow safety net while connected.
@@ -9,10 +9,11 @@ const liveListeners = new Set<() => void>();
 function setLive(on: boolean) {
   if (on === liveConnected) return;
   liveConnected = on;
-  liveListeners.forEach((l) => l());
+  for (const l of liveListeners) l();
 }
 export const isLive = () => liveConnected;
-export const useIsLive = () => useSyncExternalStore((cb) => (liveListeners.add(cb), () => liveListeners.delete(cb)), isLive);
+export const useIsLive = () =>
+  useSyncExternalStore((cb) => (liveListeners.add(cb), () => liveListeners.delete(cb)), isLive);
 const SAFETY_NET = 15000;
 const REFETCH_GAP = 500; // at most two refetches a second per query, however busy a big fan-out gets
 
@@ -34,7 +35,13 @@ export function useLiveUpdates(): void {
         last.set(k, Date.now());
         qc.invalidateQueries({ queryKey });
       } else if (!pending.has(k)) {
-        pending.set(k, window.setTimeout(() => (pending.delete(k), last.set(k, Date.now()), qc.invalidateQueries({ queryKey })), wait));
+        pending.set(
+          k,
+          window.setTimeout(
+            () => (pending.delete(k), last.set(k, Date.now()), qc.invalidateQueries({ queryKey })),
+            wait,
+          ),
+        );
       }
     };
     es.onmessage = (m) => {
@@ -46,17 +53,19 @@ export function useLiveUpdates(): void {
         invalidate(["dag", id]);
         invalidate(["plan", id]);
       }
-      if (e.experiments?.length) for (const k of ["diff", "lineage", "artifact", "execution", "storage"]) invalidate([k]);
+      if (e.experiments?.length)
+        for (const k of ["diff", "lineage", "artifact", "execution", "storage"]) invalidate([k]);
     };
     return () => {
       es.close();
-      pending.forEach((t) => window.clearTimeout(t));
+      for (const t of pending.values()) window.clearTimeout(t);
       setLive(false);
     };
   }, [qc]);
 }
 
-export const isBusy = (d?: Dag) => !!d && (d.experiment.status === "running" || d.nodes.some((n) => ACTIVE.has(n.status)));
+export const isBusy = (d?: Dag) =>
+  !!d && (d.experiment.status === "running" || d.nodes.some((n) => ACTIVE.has(n.status)));
 
 export const useInfo = () => useQuery({ queryKey: ["info"], queryFn: api.info, staleTime: Infinity });
 
@@ -64,7 +73,8 @@ export const useExperiments = () =>
   useQuery({
     queryKey: ["experiments"],
     queryFn: api.experiments,
-    refetchInterval: (q) => (liveConnected ? SAFETY_NET : q.state.data?.some((e) => e.status === "running") ? 1000 : 4000),
+    refetchInterval: (q) =>
+      liveConnected ? SAFETY_NET : q.state.data?.some((e) => e.status === "running") ? 1000 : 4000,
   });
 
 export const useDag = (id?: string) =>
@@ -79,7 +89,12 @@ export const useLineage = (hash?: string) =>
   useQuery({ queryKey: ["lineage", hash], queryFn: () => api.lineage(hash!), enabled: !!hash, refetchInterval: 5000 });
 
 export const useArtifact = (hash?: string) =>
-  useQuery({ queryKey: ["artifact", hash], queryFn: () => api.artifact(hash!), enabled: !!hash, refetchInterval: 10000 });
+  useQuery({
+    queryKey: ["artifact", hash],
+    queryFn: () => api.artifact(hash!),
+    enabled: !!hash,
+    refetchInterval: 10000,
+  });
 
 export const useExecution = (id?: string | null) =>
   useQuery({ queryKey: ["execution", id], queryFn: () => api.execution(id!), enabled: !!id, staleTime: 30000 });

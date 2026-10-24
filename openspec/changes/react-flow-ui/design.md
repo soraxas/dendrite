@@ -11,12 +11,14 @@ Prefect, the orchestrator dendrite builds on, ships its own React UI by building
 ## Goals / Non-Goals
 
 **Goals:**
+
 - Readable, interactive graphs for the experiment DAG and artifact lineage.
 - A lineage view that makes data vs computation and the selected item obvious.
 - `pip install dendrite` and `dendrite ui` still work with no Node.js.
 - A fast local UI loop with hot reload against a real `dendrite ui` backend.
 
 **Non-Goals:**
+
 - Changing the Python lineage engine, caching or storage semantics.
 - Auth, multi-user features or server-side push (polling stays).
 - Publishing to PyPI or setting up CI. A local `scripts/build-ui.sh` mirrors what CI would do.
@@ -25,6 +27,7 @@ Prefect, the orchestrator dendrite builds on, ships its own React UI by building
 ## Decisions
 
 ### D1. React + TypeScript + Vite, source in `ui/`
+
 - The source lives at the repo root, outside the Python package, so npm tooling never leaks into the wheel.
 - Vite builds to `src/dendrite/ui/dist/` with `base: "./"`, so asset URLs work under any mount path.
 - *Alternatives:*
@@ -32,6 +35,7 @@ Prefect, the orchestrator dendrite builds on, ships its own React UI by building
   - Svelte or Vue: React Flow is the strongest maintained graph library, and it is React-only.
 
 ### D2. React Flow (`@xyflow/react`) + elkjs for layout
+
 - React Flow provides pan, zoom, a minimap, custom nodes, selection and incremental updates. Node positions are diffed instead of rebuilding the DOM.
 - elkjs `layered` handles direction, ports and edge routing for long edges far better than dagre.
 - Layout runs in a web worker build of elkjs (`elkjs/lib/elk-worker`), so large lineage graphs don't block the UI thread.
@@ -39,10 +43,12 @@ Prefect, the orchestrator dendrite builds on, ships its own React UI by building
 - *Alternative:* dagre. It is simpler, but its edge routing is the weakness we are trying to fix.
 
 ### D3. Data fetching with TanStack Query
+
 - The 1s poll while a run is active, and 4s when idle, uses `refetchInterval` as a function of the last result.
 - Responses are cached per route, with no manual timers.
 
 ### D4. Lineage model gains labels and structured roles (API is additive only)
+
 - Each entry in `lineage().artifacts` gains:
   - `label`: the producing execution's output name. Sources use the experiment input name, then fall back to the filename and then the kind.
   - `producer_node`
@@ -51,15 +57,18 @@ Prefect, the orchestrator dendrite builds on, ships its own React UI by building
 - Labels are derived in Python, not in the UI, so the CLI and Mermaid output benefit too.
 
 ### D5. Per-view legends and node vocabularies
+
 - **DAG view:** pipeline-node statuses (queued, running, waiting, computed, cached, pinned, failed) plus input nodes.
 - **Lineage view:** artifact nodes (data), execution nodes (computation), and the traced artifact (accent). Status colours are not reused there.
 
 ### D6. Selection is a single source of truth
+
 - Selection lives in the URL (`?sel=<kind>:<id>`), so it survives polling, reload and sharing links.
 - The graph highlights the selected node and its incident edges.
 - The detail panel renders from the same selection, with a header like "Selected · artifact report".
 
 ### D7. Packaging: hatchling with `artifacts` + build hook (mirrors Prefect)
+
 - `uv_build` has no build hooks and cannot guard against a missing bundle, so the backend switches to `hatchling`.
 - `[tool.hatch.build] artifacts = ["src/dendrite/ui/dist"]` includes the git-ignored bundle.
 - `hatch_build.py` raises when `dist/index.html` is missing for `sdist` or `wheel` targets. Editable builds are exempt, so `uv sync` keeps working without Node.
@@ -67,6 +76,7 @@ Prefect, the orchestrator dendrite builds on, ships its own React UI by building
 - *Alternative:* commit `dist/`. It works with `pip install git+…`, but it creates noisy diffs and stale bundles.
 
 ### D8. Serving and fallback
+
 - `create_app` mounts `dist/` with `StaticFiles` and serves `dist/index.html` for SPA routes when `dist/index.html` exists.
 - Otherwise it serves the legacy single-file page (`legacy.html`, the current UI moved).
 - `/api/info` reports `ui: "react" | "legacy"`.

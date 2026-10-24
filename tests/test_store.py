@@ -119,7 +119,11 @@ def test_s3_backend_with_moto(tmp_path, source):
         listed = list(lab.store.iter_objects())
         assert listed and all(abs(m - time.time()) < 300 for _, _, m in listed)
         orphan = lab.store.put_value("in flight").hash
-        assert {"hash": orphan, "size": dict((h, s) for h, s, _ in lab.store.iter_objects())[orphan], "why": "grace"} in lab.gc()["skipped"]
+        assert {
+            "hash": orphan,
+            "size": dict((h, s) for h, s, _ in lab.store.iter_objects())[orphan],
+            "why": "grace",
+        } in lab.gc()["skipped"]
         lab.store.delete(orphan)
         # Deleting the parent frees only its own step.
         inv = lab.storage()

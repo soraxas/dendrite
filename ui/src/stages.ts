@@ -1,7 +1,7 @@
 // Stages (`dendrite.stage` in code, or assigned in the UI's pipeline view) as collapsible cards:
 // the pipeline's high-level picture. Pure functions over the DAG, so they're testable.
 import type { DagNode, PipelineView, StageInfo } from "./api";
-import { fanoutGroups, groupId, moreId, sampleItems, type FanoutGroup } from "./fanout";
+import { type FanoutGroup, fanoutGroups, groupId, moreId, sampleItems } from "./fanout";
 
 export const STAGE_COLORS = ["teal", "blue", "purple", "orange", "green", "pink", "red", "gray"] as const;
 export const EMPTY_VIEW: PipelineView = { assign: {}, styles: {} };
@@ -81,10 +81,16 @@ export interface Grouping {
  * otherwise to its collapsed fan-out group. Stages start collapsed (the overview) unless
  * `showSteps`; `stageToggled` flips individual stages from that default.
  */
-export function grouping(nodes: DagNode[], view: PipelineView, opts: { collapsedFan: Set<string>; showSteps: boolean; stageToggled: Set<string> }): Grouping {
+export function grouping(
+  nodes: DagNode[],
+  view: PipelineView,
+  opts: { collapsedFan: Set<string>; showSteps: boolean; stageToggled: Set<string> },
+): Grouping {
   const fan = fanoutGroups(nodes);
   const stages = stageGroups(nodes, view);
-  const collapsedStages = new Set(stages.filter((s) => !opts.showSteps !== opts.stageToggled.has(s.id)).map((s) => s.id));
+  const collapsedStages = new Set(
+    stages.filter((s) => !opts.showSteps !== opts.stageToggled.has(s.id)).map((s) => s.id),
+  );
   const members = new Map<string, string>();
   for (const g of fan) {
     if (opts.collapsedFan.has(g.step)) for (const m of g.members) members.set(m.id, groupId(g.step));
@@ -113,7 +119,9 @@ export function viewAsCode(view: PipelineView): string {
   return [...byStage]
     .map(([s, steps]) => {
       const style = view.styles[s] ?? {};
-      const args = [py(s), style.description ? py(style.description) : null].filter(Boolean).join(", ") + (style.color ? `, color=${py(style.color)}` : "");
+      const args =
+        [py(s), style.description ? py(style.description) : null].filter(Boolean).join(", ") +
+        (style.color ? `, color=${py(style.color)}` : "");
       return `with dendrite.stage(${args}):\n${steps.map((st) => `    ...  # call ${st}(...) here`).join("\n")}`;
     })
     .join("\n\n");

@@ -24,7 +24,7 @@ class Settings:
         home: str | os.PathLike | None = None,
         db_url: str | None = None,
         store_url: str | None = None,
-    ) -> "Settings":
+    ) -> Settings:
         root = Path(home or os.environ.get("DENDRITE_HOME", ".dendrite")).expanduser().resolve()
         check = os.environ.get("DENDRITE_CHECK_READS", "warn").lower()
         if check not in ("warn", "error", "off"):

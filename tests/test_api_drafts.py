@@ -23,12 +23,21 @@ def test_draft_endpoints_round_trip(lab, source, tmp_path):
     assert c.patch(f"/api/experiments/{d['id']}", json={"params": same}).status_code == 200
     assert c.get(f"/api/experiments/{d['id']}/plan").json()["totals"]["run"] == 0
 
-    r = c.patch(f"/api/experiments/{d['id']}", json={"params": {"train.iterations": 20}, "pins": {"featurize": "parent"}})
+    r = c.patch(
+        f"/api/experiments/{d['id']}", json={"params": {"train.iterations": 20}, "pins": {"featurize": "parent"}}
+    )
     assert r.json()["pins"]["featurize"]
-    steps = {n["name"]: n["plan"] for n in c.get(f"/api/experiments/{d['id']}/plan").json()["nodes"] if n["kind"] == "node"}
+    steps = {
+        n["name"]: n["plan"] for n in c.get(f"/api/experiments/{d['id']}/plan").json()["nodes"] if n["kind"] == "node"
+    }
     assert steps == {"extract": "reuse", "featurize": "frozen", "train": "run"}
 
-    assert c.patch(f"/api/experiments/{d['id']}", json={"reset": ["train.iterations"], "pins": {"featurize": None}}).status_code == 200
+    assert (
+        c.patch(
+            f"/api/experiments/{d['id']}", json={"reset": ["train.iterations"], "pins": {"featurize": None}}
+        ).status_code
+        == 200
+    )
     assert c.get(f"/api/experiments/{d['id']}/plan").json()["totals"]["run"] == 0
 
     assert c.patch(f"/api/experiments/{a.id}", json={"params": {"train.iterations": 2}}).status_code == 409
@@ -92,4 +101,4 @@ def test_edit_errors_are_client_errors(lab, source, tmp_path):
     assert c.patch(f"/api/experiments/{root.id}", json={"pins": {"train": "parent"}}).status_code == 400  # no parent
     assert c.patch(f"/api/experiments/{d['id']}", json={"pins": {"train": "elsewhere"}}).status_code == 400
     assert c.patch(f"/api/experiments/{d['id']}", json={"params": {"nodot": 1}}).status_code == 400
-    assert c.patch(f"/api/experiments/nope", json={}).status_code == 404
+    assert c.patch("/api/experiments/nope", json={}).status_code == 404

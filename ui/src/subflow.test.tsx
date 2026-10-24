@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
 // React Flow doesn't run under jsdom; the DAG view's card building is what's under test.
-vi.mock("./components/Graph", async (actual) => ({ ...(await actual<typeof import("./components/Graph")>()), Graph: () => null }));
+vi.mock("./components/Graph", async (actual) => ({
+  ...(await actual<typeof import("./components/Graph")>()),
+  Graph: () => null,
+}));
+
 import type { DagNode } from "./api";
 import { framed } from "./components/DagView";
 import type { GraphNode } from "./components/Graph";
@@ -10,13 +14,25 @@ import { grouping } from "./stages";
 
 const node = (id: string, seq: number, stage: string[] = [], status = "computed"): DagNode => {
   const m = /^(.+)\[(.+)\]$/.exec(id);
-  return { id, kind: "node", name: id, status: status as DagNode["status"], seq, step: m ? m[1] : id, key: m ? m[2] : null, stage, duration: 1 };
+  return {
+    id,
+    kind: "node",
+    name: id,
+    status: status as DagNode["status"],
+    seq,
+    step: m ? m[1] : id,
+    key: m ? m[2] : null,
+    stage,
+    duration: 1,
+  };
 };
 const card = (n: DagNode): GraphNode => ({ id: n.id, type: "pipelineNode", width: 250, height: 68, data: {} });
 
 describe("big fan-outs", () => {
   it("draws failures and work in progress first, then the first finished items", () => {
-    const items = Array.from({ length: 50 }, (_, i) => node(`clip[${i}]`, i, [], i === 40 ? "failed" : i === 45 ? "running" : "computed"));
+    const items = Array.from({ length: 50 }, (_, i) =>
+      node(`clip[${i}]`, i, [], i === 40 ? "failed" : i === 45 ? "running" : "computed"),
+    );
     const { shown, hidden } = sampleItems(items);
     expect(shown).toHaveLength(SHOW_AT_MOST);
     expect(shown.map((m) => m.key)).toEqual(["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "40", "45"]); // call order kept
@@ -34,11 +50,21 @@ describe("big fan-outs", () => {
 });
 
 describe("sub flows", () => {
-  const nodes = [node("plan", 0, ["Plan"]), ...Array.from({ length: 30 }, (_, i) => node(`clip[${i}]`, i + 1, ["Clips"])), node("publish", 40)];
+  const nodes = [
+    node("plan", 0, ["Plan"]),
+    ...Array.from({ length: 30 }, (_, i) => node(`clip[${i}]`, i + 1, ["Clips"])),
+    node("publish", 40),
+  ];
   const build = (stageToggled: string[], collapsedFan: string[] = []) => {
-    const g = grouping(nodes, { assign: {}, styles: {} }, { collapsedFan: new Set(collapsedFan), showSteps: false, stageToggled: new Set(stageToggled) });
+    const g = grouping(
+      nodes,
+      { assign: {}, styles: {} },
+      { collapsedFan: new Set(collapsedFan), showSteps: false, stageToggled: new Set(stageToggled) },
+    );
     const cards = nodes.filter((n) => !g.members.has(n.id)).map(card);
-    for (const id of new Set(g.members.values())) if (id.startsWith("stage:") || id.startsWith("group:")) cards.push({ id, type: "pipelineNode", width: 250, height: 68, data: {} });
+    for (const id of new Set(g.members.values()))
+      if (id.startsWith("stage:") || id.startsWith("group:"))
+        cards.push({ id, type: "pipelineNode", width: 250, height: 68, data: {} });
     return framed(cards, nodes, g, false, vi.fn(), vi.fn());
   };
   it("draws an expanded stage as a frame around its steps, with a capped fan-out frame inside", () => {
@@ -59,9 +85,18 @@ describe("sub flows", () => {
     expect(folded.some((n) => n.id === "fan:clip")).toBe(false);
   });
   it("handles a 2000-item fan-out quickly, drawing only a few dozen nodes", () => {
-    const big = [node("plan", 0), ...Array.from({ length: 2000 }, (_, i) => node(`frame[${i}]`, i + 1, ["Frames"], i % 97 ? "computed" : "running"))];
+    const big = [
+      node("plan", 0),
+      ...Array.from({ length: 2000 }, (_, i) =>
+        node(`frame[${i}]`, i + 1, ["Frames"], i % 97 ? "computed" : "running"),
+      ),
+    ];
     const t0 = performance.now();
-    const g = grouping(big, { assign: {}, styles: {} }, { collapsedFan: new Set(), showSteps: true, stageToggled: new Set() });
+    const g = grouping(
+      big,
+      { assign: {}, styles: {} },
+      { collapsedFan: new Set(), showSteps: true, stageToggled: new Set() },
+    );
     const cards = big.filter((n) => !g.members.has(n.id)).map(card);
     const out = framed(cards, big, g, false, vi.fn(), vi.fn());
     const ms = performance.now() - t0;
@@ -74,7 +109,22 @@ describe("sub flows", () => {
     const { DagView } = await import("./components/DagView");
     const { exp } = await import("./test/fixtures");
     const items = Array.from({ length: 30 }, (_, i) => node(`clip[${i}]`, i));
-    const g = grouping(items, { assign: {}, styles: {} }, { collapsedFan: new Set(), showSteps: true, stageToggled: new Set() });
-    expect(() => render(<DagView dag={{ experiment: exp({ status: "completed" }), nodes: items, edges: [] }} nameOf={(x) => x} onSelect={vi.fn()} onArtifact={vi.fn()} onOpenSource={vi.fn()} grouping={g} />)).not.toThrow();
+    const g = grouping(
+      items,
+      { assign: {}, styles: {} },
+      { collapsedFan: new Set(), showSteps: true, stageToggled: new Set() },
+    );
+    expect(() =>
+      render(
+        <DagView
+          dag={{ experiment: exp({ status: "completed" }), nodes: items, edges: [] }}
+          nameOf={(x) => x}
+          onSelect={vi.fn()}
+          onArtifact={vi.fn()}
+          onOpenSource={vi.fn()}
+          grouping={g}
+        />,
+      ),
+    ).not.toThrow();
   });
 });

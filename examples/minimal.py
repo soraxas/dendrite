@@ -1,7 +1,7 @@
 """The smallest dendrite setup: two steps, one run, and a fork that reuses the first step.
 
-    uv run python examples/minimal.py
-    uv run dendrite ui --import examples.minimal
+uv run python examples/minimal.py
+uv run dendrite ui --import examples.minimal
 """
 
 import tempfile

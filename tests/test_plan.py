@@ -23,7 +23,9 @@ def outcomes(plan):
 
 def row_counts(lab):
     with lab.db.ro() as conn:
-        return {t.name: conn.execute(sa.select(sa.func.count()).select_from(t)).scalar_one() for t in meta.sorted_tables}
+        return {
+            t.name: conn.execute(sa.select(sa.func.count()).select_from(t)).scalar_one() for t in meta.sorted_tables
+        }
 
 
 def blobs(lab):
@@ -87,7 +89,11 @@ def test_unchanged_fork_plans_all_reuse(lab, source):
     assert p["complete"] and outcomes(p) == {n: ("reuse", None) for n in ("extract", "featurize", "train")}
     train = next(n for n in p["nodes"] if n["name"] == "train")
     assert train["reuse_from"]["experiment_id"] == a.id and train["estimate"] is not None
-    assert {(e["from"], e["to"]) for e in p["edges"]} == {("input:src", "extract"), ("extract", "featurize"), ("featurize", "train")}
+    assert {(e["from"], e["to"]) for e in p["edges"]} == {
+        ("input:src", "extract"),
+        ("extract", "featurize"),
+        ("featurize", "train"),
+    }
 
 
 def test_param_change_plans_run_and_upstream(lab, source):
@@ -134,7 +140,11 @@ def test_plan_writes_nothing(lab, source):
 
 def test_branch_on_contents_is_incomplete(lab, source):
     a = lab.create(toy.toy_branch, inputs={"src": source}).run()
-    assert outcomes(a.fork(draft=True).plan()) == {"extract": ("reuse", None), "featurize": ("reuse", None), "train": ("reuse", None)}
+    assert outcomes(a.fork(draft=True).plan()) == {
+        "extract": ("reuse", None),
+        "featurize": ("reuse", None),
+        "train": ("reuse", None),
+    }
     p = a.fork({"featurize.scale": 2}, draft=True).plan()
     assert (p["complete"], p["blocked_by"]) == (False, "featurize")
     assert set(outcomes(p)) == {"extract", "featurize"}
@@ -146,7 +156,11 @@ def test_param_schema_and_exact_round_trip(lab, source):
     train = next(n for n in d.plan()["nodes"] if n["name"] == "train")
     schema = {s["name"]: s for s in train["param_schema"]}
     assert set(schema) == {"iterations", "seed"}  # `features` is an artifact input
-    assert (schema["iterations"]["value"], schema["iterations"]["inherited"], schema["iterations"]["changed"]) == (20, 10, True)
+    assert (schema["iterations"]["value"], schema["iterations"]["inherited"], schema["iterations"]["changed"]) == (
+        20,
+        10,
+        True,
+    )
     assert (schema["seed"]["json_type"], schema["seed"]["changed"]) == ("integer", False)
     d.run()
     again = d.fork(draft=True)
@@ -160,7 +174,7 @@ def test_param_schema_and_exact_round_trip(lab, source):
 
 def test_plan_reloads_edited_step_module(lab, source, tmp_path, monkeypatch):
     mod = tmp_path / "edited_steps.py"
-    body = '''
+    body = """
         from dendrite import artifact_task, pipeline
 
         @artifact_task
@@ -170,7 +184,7 @@ def test_plan_reloads_edited_step_module(lab, source, tmp_path, monkeypatch):
         @pipeline(name="edited")
         def edited(src):
             return double(src)
-    '''
+    """
     mod.write_text(textwrap.dedent(body.format(n=2)))
     monkeypatch.syspath_prepend(str(tmp_path))
     importlib.import_module("edited_steps")
@@ -241,7 +255,8 @@ def test_starting_a_never_run_experiment_twice_fails(lab, source):
 
 def test_reload_failure_keeps_the_previous_code(lab, source, tmp_path, monkeypatch):
     mod = tmp_path / "broken_steps.py"
-    mod.write_text(textwrap.dedent('''
+    mod.write_text(
+        textwrap.dedent("""
         from dendrite import artifact_task, pipeline
 
         @artifact_task
@@ -251,7 +266,8 @@ def test_reload_failure_keeps_the_previous_code(lab, source, tmp_path, monkeypat
         @pipeline(name="breaks")
         def breaks(src):
             return echo(src)
-    '''))
+    """)
+    )
     monkeypatch.syspath_prepend(str(tmp_path))
     importlib.import_module("broken_steps")
     try:

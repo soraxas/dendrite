@@ -8,8 +8,9 @@ import re
 import time
 import uuid
 import warnings
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping
+from typing import Any
 
 from prefect import flow
 
@@ -18,7 +19,7 @@ from .config import Settings
 from .db import Metadata
 from .store import PENDING, ArtifactRef, PlanIncomplete, open_store
 
-_PIPELINES: dict[str, "Pipeline"] = {}
+_PIPELINES: dict[str, Pipeline] = {}
 _MISSING = object()
 
 
@@ -97,7 +98,7 @@ def pipeline(fn: Callable | None = None, *, name: str | None = None, **flow_opti
     return wrap(fn) if fn is not None else wrap
 
 
-def _publish_prefect_summary(exp: "Experiment") -> None:
+def _publish_prefect_summary(exp: Experiment) -> None:
     try:
         from prefect.artifacts import create_markdown_artifact
 
@@ -118,7 +119,7 @@ def _publish_prefect_summary(exp: "Experiment") -> None:
         )
         create_markdown_artifact(key=f"dendrite-{exp.id}", markdown=md, description="dendrite lineage")
     except Exception as e:  # visibility only; never fail a run over it
-        warnings.warn(f"could not publish Prefect summary artifact: {e}")
+        warnings.warn(f"could not publish Prefect summary artifact: {e}", stacklevel=2)
 
 
 def _flatten(d: Mapping[str, Any], prefix: str = "") -> dict[str, Any]:
@@ -269,16 +270,16 @@ class Lab:
     # -- experiments ---------------------------------------------------------------
     def create(
         self,
-        pipeline: "Pipeline | str",
+        pipeline: Pipeline | str,
         *,
         params: Mapping[str, Any] | None = None,
         inputs: Mapping[str, Any] | None = None,
         name: str | None = None,
         draft: bool = False,
-        parent: "Experiment | str | None" = None,
+        parent: Experiment | str | None = None,
         _parent: str | None = None,
         _pins: dict[str, dict[str, str]] | None = None,
-    ) -> "Experiment":
+    ) -> Experiment:
         """New experiment. ``draft=True`` keeps its config editable until it first runs.
 
         ``parent`` records it as a fork of that experiment (for the fork tree, diffs and plan
@@ -304,13 +305,13 @@ class Lab:
         )
         return self.get(exp_id)
 
-    def get(self, key: str) -> "Experiment":
+    def get(self, key: str) -> Experiment:
         row = self.db.experiment(key)
         if row is None:
             raise KeyError(f"no experiment {key!r}")
         return Experiment(self, row)
 
-    def experiments(self) -> list["Experiment"]:
+    def experiments(self) -> list[Experiment]:
         return [Experiment(self, r) for r in self.db.experiments()]
 
     # -- deleting ------------------------------------------------------------------
@@ -441,7 +442,7 @@ def analysis_suggest(name: str, options: list[str]) -> str:
     return _suggest(name, options)
 
 
-def _resolve_pipeline(p: "Pipeline | str") -> "Pipeline":
+def _resolve_pipeline(p: Pipeline | str) -> Pipeline:
     if isinstance(p, Pipeline):
         return p
     try:
@@ -504,15 +505,15 @@ class Experiment:
         return _resolve_pipeline(self.pipeline_name)
 
     @property
-    def parent(self) -> "Experiment | None":
+    def parent(self) -> Experiment | None:
         return self.lab.get(self.parent_id) if self.parent_id else None
 
-    def refresh(self) -> "Experiment":
+    def refresh(self) -> Experiment:
         self._row = self.lab.db.experiment(self.id)
         return self
 
     # -- running -------------------------------------------------------------------
-    def run(self) -> "Experiment":
+    def run(self) -> Experiment:
         db = self.lab.db
         pipe = self.pipeline
         start = dict(status="running", started_at=time.time(), finished_at=None, error=None)
@@ -538,7 +539,7 @@ class Experiment:
         ran = state.called
         for node in self.params:
             if node not in ran:
-                warnings.warn(f"params given for node {node!r}, which the pipeline did not run")
+                warnings.warn(f"params given for node {node!r}, which the pipeline did not run", stacklevel=2)
         return self.refresh()
 
     def fork(
@@ -548,9 +549,9 @@ class Experiment:
         pin: Mapping[str, Any] | None = None,
         inputs: Mapping[str, Any] | None = None,
         name: str | None = None,
-        pipeline: "Pipeline | str | None" = None,
+        pipeline: Pipeline | str | None = None,
         draft: bool = False,
-    ) -> "Experiment":
+    ) -> Experiment:
         """New experiment from this one's config (``draft=True``: editable until it runs).
 
         ``params`` overrides by ``"node.arg"`` or ``{"node": {...}}``. ``pin`` freezes node
@@ -593,7 +594,7 @@ class Experiment:
         inputs: Mapping[str, Any] | None = None,
         name: str | None = None,
         reset: Iterable[str] = (),
-    ) -> "Experiment":
+    ) -> Experiment:
         """Edit a draft in place, with the same override rules as :meth:`fork`.
 
         ``reset`` takes ``"node.arg"`` keys and returns them to the parent's value (or drops
@@ -626,7 +627,7 @@ class Experiment:
         except ValueError as e:
             raise NotADraft(str(e)) from None
 
-    def descendants(self) -> list["Experiment"]:
+    def descendants(self) -> list[Experiment]:
         """Every fork of this experiment, recursively, children before their parents."""
         rows = self.lab.db.experiments()
         kids: dict[str, list[dict]] = {}
@@ -654,16 +655,20 @@ class Experiment:
         mode = "delete" if forks else "keep" if keep_forks else "refuse"
         return self.lab.delete([self.id], forks=mode, force=force)["deleted"]
 
-    def mark_stopped(self) -> "Experiment":
+    def mark_stopped(self) -> Experiment:
         """Mark a ``running`` experiment whose process died as failed, so clean-up can proceed."""
         ok = self.lab.db.update_experiment_if(
-            self.id, "running", status="failed", finished_at=time.time(), error="marked as stopped (its run was no longer active)"
+            self.id,
+            "running",
+            status="failed",
+            finished_at=time.time(),
+            error="marked as stopped (its run was no longer active)",
         )
         if not ok:
             raise ValueError(f"experiment {self.id} is not running")
         return self.refresh()
 
-    def keep(self, flag: bool = True) -> "Experiment":
+    def keep(self, flag: bool = True) -> Experiment:
         """Protect everything this experiment reaches from age-based ``lab.gc(older_than=…)``."""
         self.lab.db.set_keep(self.id, flag)
         return self.refresh()
@@ -679,14 +684,26 @@ class Experiment:
             for node, values in config.items():
                 if node not in steps:
                     hint = analysis_suggest(node, list(steps))
-                    found.append({"code": "unknown-step", "severity": severity, "step": node,
-                                  "message": f"{kind} name step {node!r}, which the pipeline doesn't call{hint}"})
+                    found.append(
+                        {
+                            "code": "unknown-step",
+                            "severity": severity,
+                            "step": node,
+                            "message": f"{kind} name step {node!r}, which the pipeline doesn't call{hint}",
+                        }
+                    )
                 elif kind == "params":
                     sig = steps[node].signature.parameters
                     for arg in values:
                         if arg not in sig:
-                            found.append({"code": "unknown-param", "severity": "error", "step": node,
-                                          "message": f"{node} has no parameter {arg!r}{analysis_suggest(arg, list(sig))}"})
+                            found.append(
+                                {
+                                    "code": "unknown-param",
+                                    "severity": "error",
+                                    "step": node,
+                                    "message": f"{node} has no parameter {arg!r}{analysis_suggest(arg, list(sig))}",
+                                }
+                            )
         return found
 
     # -- planning ------------------------------------------------------------------
@@ -734,34 +751,44 @@ class Experiment:
         nodes: list[dict[str, Any]] = []
         for name, h in self.inputs.items():
             producers[h] = (f"input:{name}", name)
-            nodes.append({"id": f"input:{name}", "kind": "input", "name": name, "status": "input", "artifact": _ref_dict(refs.get(h))})
+            nodes.append(
+                {
+                    "id": f"input:{name}",
+                    "kind": "input",
+                    "name": name,
+                    "status": "input",
+                    "artifact": _ref_dict(refs.get(h)),
+                }
+            )
         for p in state.planned:
             for out, h in (p.get("outputs") or {}).items():
                 producers.setdefault(h, (p["node"], out))
         edges = []
         for p in state.planned:
             origin = p.get("reuse_from") or {}
-            nodes.append({
-                "id": p["node"],
-                "kind": "node",
-                "name": p["node"],
-                **_fanout(p["node"]),
-                "stage": p.get("stage") or [],
-                "seq": p["seq"],
-                "status": "planned",
-                "plan": p.get("plan", "run"),
-                "reason": p.get("reason"),
-                "estimate": p.get("estimate"),
-                "reuse_from": p.get("reuse_from"),
-                "execution_experiment": origin.get("experiment_id"),
-                "execution_id": origin.get("execution_id"),
-                "signature": p.get("signature"),
-                "params": p.get("params") or {},
-                "param_schema": p.get("param_schema") or [],
-                "inputs": {k: _ref_dict(refs.get(h)) for k, h in (p.get("inputs") or {}).items()},
-                "outputs": {k: _ref_dict(refs.get(h)) for k, h in (p.get("outputs") or {}).items()},
-                "duration": None,
-            })
+            nodes.append(
+                {
+                    "id": p["node"],
+                    "kind": "node",
+                    "name": p["node"],
+                    **_fanout(p["node"]),
+                    "stage": p.get("stage") or [],
+                    "seq": p["seq"],
+                    "status": "planned",
+                    "plan": p.get("plan", "run"),
+                    "reason": p.get("reason"),
+                    "estimate": p.get("estimate"),
+                    "reuse_from": p.get("reuse_from"),
+                    "execution_experiment": origin.get("experiment_id"),
+                    "execution_id": origin.get("execution_id"),
+                    "signature": p.get("signature"),
+                    "params": p.get("params") or {},
+                    "param_schema": p.get("param_schema") or [],
+                    "inputs": {k: _ref_dict(refs.get(h)) for k, h in (p.get("inputs") or {}).items()},
+                    "outputs": {k: _ref_dict(refs.get(h)) for k, h in (p.get("outputs") or {}).items()},
+                    "duration": None,
+                }
+            )
             for in_name, h in (p.get("inputs") or {}).items():
                 if h in producers:
                     src, out = producers[h]
@@ -850,7 +877,9 @@ class Experiment:
         for name, h in self.inputs.items():
             nid = f"input:{name}"
             producers[h] = (nid, name)
-            nodes.append({"id": nid, "kind": "input", "name": name, "status": "input", "artifact": _ref_dict(refs.get(h))})
+            nodes.append(
+                {"id": nid, "kind": "input", "name": name, "status": "input", "artifact": _ref_dict(refs.get(h))}
+            )
         per_exec = db.metrics_for(nr["execution_id"] for nr in nrs)
         live = db.progress_for(nr["execution_id"] for nr in nrs if nr["status"] == "running")
         stages = db.node_stages(self.id)
@@ -898,7 +927,12 @@ class Experiment:
                 if h in producers:
                     src, out = producers[h]
                     edges.append({"from": src, "to": nr["node"], "artifact": h, "label": out, "input": in_name})
-        return {"experiment": self.summary(), "nodes": nodes, "edges": edges, "reads": _reads(db.reads(self.id), producers)}
+        return {
+            "experiment": self.summary(),
+            "nodes": nodes,
+            "edges": edges,
+            "reads": _reads(db.reads(self.id), producers),
+        }
 
     def summary(self) -> dict[str, Any]:
         r = self._row
@@ -919,10 +953,15 @@ class Experiment:
             "keep": bool(r.get("keep")),
         }
 
-    def diff(self, other: "Experiment") -> dict[str, Any]:
+    def diff(self, other: Experiment) -> dict[str, Any]:
         fa, fb = _flatten(self.params), _flatten(other.params)
         params = [
-            {"key": k, "a": fa.get(k), "b": fb.get(k), "change": "added" if k not in fa else "removed" if k not in fb else "changed"}
+            {
+                "key": k,
+                "a": fa.get(k),
+                "b": fb.get(k),
+                "change": "added" if k not in fa else "removed" if k not in fb else "changed",
+            }
             for k in sorted(set(fa) | set(fb))
             if fa.get(k, _MISSING) != fb.get(k, _MISSING)
         ]

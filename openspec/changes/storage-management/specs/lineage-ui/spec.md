@@ -1,6 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Storage endpoints
+
 The HTTP API SHALL provide these endpoints:
 
 | Endpoint | Purpose |
@@ -19,5 +20,6 @@ The HTTP API SHALL provide these endpoints:
 Every endpoint that changes something SHALL require editing to be enabled.
 
 #### Scenario: Editing disabled
+
 - **WHEN** editing is disabled and a client posts to `/api/gc` with `apply`
 - **THEN** the response is 403 and nothing is deleted

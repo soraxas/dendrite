@@ -2,9 +2,25 @@ import { describe, expect, it } from "vitest";
 import type { DagNode, PipelineView } from "./api";
 import { EMPTY_VIEW, grouping, stageColor, stageGroups, stagePath, viewAsCode } from "./stages";
 
-const node = (id: string, seq: number, stage: (string | { name: string; description?: string; color?: string })[] = [], over: Partial<DagNode> = {}): DagNode => {
+const node = (
+  id: string,
+  seq: number,
+  stage: (string | { name: string; description?: string; color?: string })[] = [],
+  over: Partial<DagNode> = {},
+): DagNode => {
   const m = /^(.+)\[(.+)\]$/.exec(id);
-  return { id, kind: "node", name: id, status: "computed", seq, step: m ? m[1] : id, key: m ? m[2] : null, stage, duration: 1, ...over };
+  return {
+    id,
+    kind: "node",
+    name: id,
+    status: "computed",
+    seq,
+    step: m ? m[1] : id,
+    key: m ? m[2] : null,
+    stage,
+    duration: 1,
+    ...over,
+  };
 };
 const nodes = [
   node("extract", 0, [{ name: "Privacy", description: "Sanitised media", color: "teal" }]),
@@ -15,7 +31,10 @@ const nodes = [
   node("transcribe", 5),
   node("publish", 6),
 ];
-const view: PipelineView = { assign: { transcribe: "Audio" }, styles: { Audio: { description: "Transcription", color: "purple" }, Recon: { label: "Reconstruction" } } };
+const view: PipelineView = {
+  assign: { transcribe: "Audio" },
+  styles: { Audio: { description: "Transcription", color: "purple" }, Recon: { label: "Reconstruction" } },
+};
 
 describe("stages", () => {
   it("takes a node's stage from code, then from the view", () => {
@@ -41,12 +60,20 @@ describe("stages", () => {
     expect(stageColor("X", EMPTY_VIEW, "not-a-colour")).not.toBe("not-a-colour");
   });
   it("folds steps into the outermost collapsed stage, else their fan-out group", () => {
-    const overview = grouping(nodes, view, { collapsedFan: new Set(["blur"]), showSteps: false, stageToggled: new Set() });
+    const overview = grouping(nodes, view, {
+      collapsedFan: new Set(["blur"]),
+      showSteps: false,
+      stageToggled: new Set(),
+    });
     expect(overview.members.get("blur[0]")).toBe("stage:Privacy"); // stage beats fan-out
     expect(overview.members.get("colmap")).toBe("stage:Recon"); // outermost
     expect(overview.members.get("transcribe")).toBe("stage:Audio");
     expect(overview.members.has("publish")).toBe(false);
-    const open = grouping(nodes, view, { collapsedFan: new Set(["blur"]), showSteps: false, stageToggled: new Set(["stage:Privacy", "stage:Recon"]) });
+    const open = grouping(nodes, view, {
+      collapsedFan: new Set(["blur"]),
+      showSteps: false,
+      stageToggled: new Set(["stage:Privacy", "stage:Recon"]),
+    });
     expect(open.members.get("blur[0]")).toBe("group:blur"); // stage open: the fan-out group shows
     expect(open.members.get("colmap")).toBe("stage:Recon/SfM"); // the nested stage is still folded
     expect(open.members.has("train")).toBe(false);
@@ -54,6 +81,8 @@ describe("stages", () => {
     expect(steps.members.size).toBe(0);
   });
   it("offers UI-only stages as code", () => {
-    expect(viewAsCode(view)).toBe('with dendrite.stage("Audio", "Transcription", color="purple"):\n    ...  # call transcribe(...) here');
+    expect(viewAsCode(view)).toBe(
+      'with dendrite.stage("Audio", "Transcription", color="purple"):\n    ...  # call transcribe(...) here',
+    );
   });
 });

@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
-import { api, ApiError } from "../api";
+import { ApiError, api } from "../api";
 import { exp } from "../test/fixtures";
 import { renderWithQuery } from "../test/render";
 import { ForkButton } from "./Toolbar";
@@ -10,7 +10,11 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const dag = { experiment: exp({ id: "e-base", name: "baseline", status: "completed", parent_id: null }), nodes: [], edges: [] };
+const dag = {
+  experiment: exp({ id: "e-base", name: "baseline", status: "completed", parent_id: null }),
+  nodes: [],
+  edges: [],
+};
 
 it("forks into a named draft and opens it", async () => {
   const fork = vi.spyOn(api, "fork").mockResolvedValue(exp({ id: "e-new" }));

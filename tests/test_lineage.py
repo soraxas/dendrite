@@ -124,7 +124,12 @@ def test_submit_parallel_branches(lab, source):
     exp = lab.create(toy.toy_parallel, inputs={"src": source}).run()
     assert statuses(exp) == {"extract": "computed", "featurize": "computed", "sample": "computed", "train": "computed"}
     edges = {(e["from"], e["to"]) for e in exp.dag()["edges"]}
-    assert {("input:src", "extract"), ("extract", "featurize"), ("featurize", "sample"), ("featurize", "train")} <= edges
+    assert {
+        ("input:src", "extract"),
+        ("extract", "featurize"),
+        ("featurize", "sample"),
+        ("featurize", "train"),
+    } <= edges
 
 
 def test_concurrent_identical_runs_execute_once(lab, source):
@@ -162,7 +167,7 @@ def test_lease_steal_after_expiry(lab):
 def test_failure_records_lineage_and_releases_lease(lab, source):
     toy.FAIL["train"] = True
     exp = lab.create(toy.toy, inputs={"src": source})
-    with pytest.raises(Exception):
+    with pytest.raises(RuntimeError, match="boom"):
         exp.run()
     exp.refresh()
     assert exp.status == "failed"

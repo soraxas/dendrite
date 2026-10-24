@@ -35,4 +35,3 @@
 - [x] 5.2 Endpoints: bulk delete, estimate, stop, artifact evict, `include_recent` for GC, `force` for clean; `dendrite rm --keep-forks`
 - [x] 5.3 UI: fork choice (keep by default) with a server estimate; bulk selection and "select old"; Mark stopped; artifact evict; clean up anyway; include recent data
 - [x] 5.4 Tests (pytest, Vitest, mutation checks) and a CDP walk-through on a scratch lab
-

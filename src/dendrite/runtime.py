@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 @dataclass
 class RunState:
     run_id: str
-    experiment: "Experiment"
+    experiment: Experiment
     called: set[str] = field(default_factory=set)
     futures: list[Any] = field(default_factory=list)
     lock: threading.Lock = field(default_factory=threading.Lock)
@@ -37,7 +37,7 @@ class RunState:
     future_nodes: dict[int, tuple[str, tuple[str, ...]]] = field(default_factory=dict)
 
     @property
-    def lab(self) -> "Lab":
+    def lab(self) -> Lab:
         return self.experiment.lab
 
     def claim(self, node: str) -> None:
@@ -113,7 +113,7 @@ def _refresh() -> str | None:
     return None
 
 
-def register(experiment: "Experiment", plan: bool = False) -> RunState:
+def register(experiment: Experiment, plan: bool = False) -> RunState:
     state = RunState(run_id=uuid.uuid4().hex, experiment=experiment, plan=plan)
     _RUNS[state.run_id] = state
     return state
@@ -187,7 +187,7 @@ class stage:
         self.info = {"name": name, "description": description, "color": color}
         self._tokens: list[Any] = []
 
-    def __enter__(self) -> "stage":
+    def __enter__(self) -> stage:
         self._tokens.append(_stage.set(_stage.get() + (self.info,)))
         return self
 

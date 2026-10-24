@@ -1,5 +1,13 @@
 // Small builders for API-shaped test data.
-import type { ExperimentSummary, Inventory, ParamField, Plan, PlanNode, ReclaimReport, StorageExperiment } from "../api";
+import type {
+  ExperimentSummary,
+  Inventory,
+  ParamField,
+  Plan,
+  PlanNode,
+  ReclaimReport,
+  StorageExperiment,
+} from "../api";
 
 export const exp = (over: Partial<ExperimentSummary> = {}): ExperimentSummary => ({
   id: "e-draft",
@@ -101,6 +109,10 @@ export const report = (over: Partial<ReclaimReport> = {}): ReclaimReport => ({
   ],
   bytes: 6000,
   skipped: [{ hash: "d".repeat(64), size: 10, why: "grace" }],
-  groups: { "unused-since": { count: 1, bytes: 2000 }, unreferenced: { count: 1, bytes: 3000 }, orphan: { count: 1, bytes: 1000 } },
+  groups: {
+    "unused-since": { count: 1, bytes: 2000 },
+    unreferenced: { count: 1, bytes: 3000 },
+    orphan: { count: 1, bytes: 1000 },
+  },
   ...over,
 });

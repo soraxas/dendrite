@@ -46,7 +46,9 @@ def test_exclusive_bytes_count_shared_cache_once(lab, source):
     ea, eb = by_id(inv)[a.id], by_id(inv)[b.id]
     assert eb["exclusive"] == closure_bytes(lab, b.node_outputs("train").values())
     assert ea["exclusive"] == closure_bytes(lab, a.node_outputs("train").values())
-    shared = closure_bytes(lab, [*a.inputs.values(), *a.node_outputs("extract").values(), *a.node_outputs("featurize").values()])
+    shared = closure_bytes(
+        lab, [*a.inputs.values(), *a.node_outputs("extract").values(), *a.node_outputs("featurize").values()]
+    )
     assert inv["store"]["shared"]["bytes"] == shared
     assert ea["bytes"] == shared + ea["exclusive"]
     assert ea["with_forks"] == shared + ea["exclusive"] + eb["exclusive"]

@@ -55,7 +55,13 @@ async function run(nodes: LayoutNode[], edges: LayoutEdge[], dir: "RIGHT" | "DOW
       ? {
           id: n.id,
           layoutOptions: n.pack
-            ? { "elk.padding": FRAME_PADDING, "elk.hierarchyHandling": "SEPARATE_CHILDREN", "elk.algorithm": "rectpacking", "elk.aspectRatio": "1.8", "elk.spacing.nodeNode": "18" }
+            ? {
+                "elk.padding": FRAME_PADDING,
+                "elk.hierarchyHandling": "SEPARATE_CHILDREN",
+                "elk.algorithm": "rectpacking",
+                "elk.aspectRatio": "1.8",
+                "elk.spacing.nodeNode": "18",
+              }
             : { "elk.padding": FRAME_PADDING, "elk.direction": dir },
           children: nodes.filter((c) => c.parent === n.id).map(elkNode),
         }
@@ -86,6 +92,7 @@ async function run(nodes: LayoutNode[], edges: LayoutEdge[], dir: "RIGHT" | "DOW
         labels: e.label ? [{ text: e.label, width: e.label.length * LABEL_CHAR_W + 10, height: 15 }] : [],
       })),
   };
+  // biome-ignore lint/suspicious/noAssignInExpressions: the worker is created lazily, on first layout
   const out = await (elk ??= new ELK({ workerUrl })).layout(graph);
   const pos = new Map<string, Point>();
   const rel = new Map<string, Point>();
@@ -108,7 +115,7 @@ async function run(nodes: LayoutNode[], edges: LayoutEdge[], dir: "RIGHT" | "DOW
     const s = e.sections?.[0];
     if (!s) continue;
     const container = (e as { container?: string }).container;
-    const o = container && container !== "root" ? pos.get(container) ?? { x: 0, y: 0 } : { x: 0, y: 0 };
+    const o = container && container !== "root" ? (pos.get(container) ?? { x: 0, y: 0 }) : { x: 0, y: 0 };
     const at = (p: Point) => ({ x: p.x + o.x, y: p.y + o.y });
     const l = e.labels?.[0];
     routed.set(e.id, {
@@ -127,7 +134,10 @@ function fitScale(l: Layout, w: number, h: number) {
 const REFERENCE = { width: 1600, height: 1000 };
 
 /** Top-to-bottom when it fits the reference frame clearly better than left-to-right. */
-export function chooseDirection(lr: { width: number; height: number }, tb: { width: number; height: number }): "RIGHT" | "DOWN" {
+export function chooseDirection(
+  lr: { width: number; height: number },
+  tb: { width: number; height: number },
+): "RIGHT" | "DOWN" {
   const scale = (l: { width: number; height: number }) => fitScale(l as Layout, REFERENCE.width, REFERENCE.height);
   return scale(tb) > scale(lr) * 1.15 ? "DOWN" : "RIGHT";
 }
@@ -138,7 +148,12 @@ export function chooseDirection(lr: { width: number; height: number }, tb: { wid
  * nor steps appearing during a run flips it. While a new shape is being laid out the previous
  * layout keeps rendering, so live updates never flash.
  */
-export function useElkLayout(nodes: LayoutNode[], edges: LayoutEdge[], key: string, size: { width: number; height: number }) {
+export function useElkLayout(
+  nodes: LayoutNode[],
+  edges: LayoutEdge[],
+  key: string,
+  size: { width: number; height: number },
+) {
   const cache = useRef(new Map<string, Layout>());
   const dir = useRef<"RIGHT" | "DOWN" | null>(null);
   const [layout, setLayout] = useState<Layout | null>(null);

@@ -3,6 +3,7 @@
 The UI is a good read-only view of history, much like GitHub Actions' run graph. Starting a new experiment, though, still means writing `exp.fork(params={...})` in Python and only discovering what it costs after it runs. The most valuable thing dendrite knows is which steps a change will reuse, and the UI can't currently show that before anything runs. This is phase 1 of turning the UI into an editing frontend.
 
 It keeps the GitHub Actions split:
+
 - Python code defines the pipeline's steps and wiring.
 - The UI supplies the inputs to it: params and frozen results.
 
@@ -41,11 +42,13 @@ It keeps the GitHub Actions split:
 ## Capabilities
 
 ### New Capabilities
+
 - `draft-experiments`: the mutable draft state, its edit/discard operations, and freezing on run.
 - `run-plan`: a dry run of a pipeline that predicts each step's outcome, reason and cost without executing anything.
 - `experiment-editor-ui`: draft mode in the SPA: forking, param editing, freeze toggles, and plan display.
 
 ### Modified Capabilities
+
 - `experiment-lineage`: "Immutable experiment snapshot" now allows a pre-run draft state. Config is frozen when an experiment first runs, not when it is created.
 - `prefect-integration`: steps gain the undeclared-read guard, and the step contract is stated as a requirement.
 - `lineage-ui`: adds two requirements, draft and plan endpoints and a `dendrite run` CLI command. These are added as new requirements rather than edits, because the open `react-flow-ui` change already modifies the existing API requirement.

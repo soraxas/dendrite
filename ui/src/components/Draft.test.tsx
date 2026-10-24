@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { api, ApiError } from "../api";
+import { ApiError, api } from "../api";
 import { exp, field, plan, step } from "../test/fixtures";
 import { renderWithQuery } from "../test/render";
 import { DraftBar, DraftStepEditor, ParamRow, parseParam, planSummary, runCommand } from "./Draft";
@@ -133,7 +133,15 @@ describe("DraftStepEditor", () => {
   it("unfreezes a frozen step, and disables its params meanwhile", async () => {
     const edit = vi.spyOn(api, "editDraft").mockResolvedValue(exp());
     const frozen = plan({ experiment: exp({ pins: { train: { model: "ab" } } }), nodes: [n] });
-    renderWithQuery(<DraftStepEditor n={{ ...n, plan: "frozen", reason: null }} plan={frozen} canEdit nameOf={nameOf} openStep={vi.fn()} />);
+    renderWithQuery(
+      <DraftStepEditor
+        n={{ ...n, plan: "frozen", reason: null }}
+        plan={frozen}
+        canEdit
+        nameOf={nameOf}
+        openStep={vi.fn()}
+      />,
+    );
     expect((screen.getByLabelText(/iterations/) as HTMLInputElement).disabled).toBe(true);
     fireEvent.click(screen.getByLabelText("Freeze to baseline's result"));
     await waitFor(() => expect(edit).toHaveBeenCalledWith("e-draft", { pins: { train: null } }));
@@ -145,14 +153,18 @@ describe("DraftStepEditor", () => {
   });
 
   it("shows a server rejection next to the form", async () => {
-    vi.spyOn(api, "editDraft").mockRejectedValue(new ApiError(409, "experiment e-draft is running; fork it to make changes"));
+    vi.spyOn(api, "editDraft").mockRejectedValue(
+      new ApiError(409, "experiment e-draft is running; fork it to make changes"),
+    );
     renderWithQuery(<DraftStepEditor n={n} plan={plan({ nodes: [n] })} canEdit nameOf={nameOf} openStep={vi.fn()} />);
     fireEvent.click(screen.getByLabelText("Freeze to baseline's result"));
     expect(await screen.findByText(/fork it to make changes/)).toBeTruthy();
   });
 
   it("is read-only when editing is off", () => {
-    renderWithQuery(<DraftStepEditor n={n} plan={plan({ nodes: [n] })} canEdit={false} nameOf={nameOf} openStep={vi.fn()} />);
+    renderWithQuery(
+      <DraftStepEditor n={n} plan={plan({ nodes: [n] })} canEdit={false} nameOf={nameOf} openStep={vi.fn()} />,
+    );
     expect((screen.getByLabelText("Freeze to baseline's result") as HTMLInputElement).disabled).toBe(true);
     expect((screen.getByLabelText(/iterations/) as HTMLInputElement).disabled).toBe(true);
     expect(screen.getByText(/Editing is off/)).toBeTruthy();
@@ -172,7 +184,9 @@ describe("DraftBar", () => {
   });
 
   it("says where an incomplete preview stopped", () => {
-    renderWithQuery(<DraftBar exp={exp()} plan={plan({ complete: false, blocked_by: "featurize" })} canEdit onDiscarded={vi.fn()} />);
+    renderWithQuery(
+      <DraftBar exp={exp()} plan={plan({ complete: false, blocked_by: "featurize" })} canEdit onDiscarded={vi.fn()} />,
+    );
     expect(screen.getByText(/The preview stops at featurize/)).toBeTruthy();
   });
 

@@ -25,7 +25,12 @@ describe("planned step rendering", () => {
 
   it("links a reused step to the experiment whose result it takes", () => {
     const open = vi.fn();
-    const n = step({ plan: "reuse", reason: null, estimate: 2, reuse_from: { execution_id: "x", experiment_id: "e-base", duration: 2 } });
+    const n = step({
+      plan: "reuse",
+      reason: null,
+      estimate: 2,
+      reuse_from: { execution_id: "x", experiment_id: "e-base", duration: 2 },
+    });
     const d = planData(n, "e-draft", nameOf, open);
     expect(d.status).toBe("cached");
     expect(d.source?.label).toBe("baseline");
@@ -34,7 +39,11 @@ describe("planned step rendering", () => {
   });
 
   it("does not offer a link when the result came from this experiment", () => {
-    const n = step({ plan: "reuse", reason: null, reuse_from: { execution_id: "x", experiment_id: "e-draft", duration: 1 } });
+    const n = step({
+      plan: "reuse",
+      reason: null,
+      reuse_from: { execution_id: "x", experiment_id: "e-draft", duration: 1 },
+    });
     expect(planData(n, "e-draft", nameOf, vi.fn()).source).toBeUndefined();
   });
 

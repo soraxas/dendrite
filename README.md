@@ -110,6 +110,7 @@ An argument that receives an artifact is an **input**. Inside the step it arrive
 A step's **signature** hashes its code, the content of its inputs, the params it uses and its environment. Experiment ids are never part of it, so forks and brand-new experiments share work. Changing `train_splats.iterations` never invalidates `colmap`.
 
 Other details:
+
 - Outputs are named by a `NamedTuple` or `TypedDict` return type, or by `outputs=[...]`. A single output needs no name.
 - `colmap.override(matcher="exhaustive")` builds checked params for `fork()`: a typo raises with a suggestion.
 - A cache hit is only used after its output files are verified to exist, so a deleted blob means a recompute, never a wrong result.
@@ -132,13 +133,16 @@ Other details:
 Params must be JSON values and are hashed exactly, so `30000` and `30000.0` give different signatures. Put anything large in an artifact instead.
 
 Two safety nets catch mistakes:
+
 - **Static checks** parse steps and pipelines (never running them) and warn about:
+
   - returns that don't match the declared outputs
   - unknown arguments
   - a step called twice
   - likely hidden inputs
 
   `dendrite check` exits 1 on errors, for CI.
+
 - **A read guard** warns when a step reads a project file it didn't declare. Set `DENDRITE_CHECK_READS` to `warn` (the default), `error` or `off`.
 
 ### Fan-out, stages and what the pipeline reads
@@ -162,19 +166,27 @@ def clips(video, defects):
 `dendrite ui` serves the app. Pass `--import my_project.pipelines` so it can preview and edit drafts.
 
 - **Pipeline graph:**
+
   - live status and progress, pushed as runs happen, even from another process
   - stages and fan-outs that fold into single cards
   - "reused from" links to the experiment that computed a result
+
 - **Lineage:** trace any artifact back to its inputs and forward to what used it.
+
 - **Drafts:** "Fork…" makes an editable copy. Change params or freeze steps, and every step shows whether it would be reused or run, with a reason and a time estimate. Running it freezes its settings: `dendrite run <exp> --import …`.
+
 - **Code:** view each run's step source, edit the pipeline and watch its shape redraw as you type. You can save back to the file, on localhost only, with a conflict check.
+
 - **Diff:** parameters, which steps were shared, and metric deltas between experiments.
+
 - **Storage:**
+
   - what each experiment holds and what deleting it frees
   - delete experiments, keeping their forks if you like, or evict cache
   - clean up what nothing uses
 
   Every deletion previews first. Lineage records are always kept, and anything deleted recomputes when needed.
+
 - **Files:** preview documents, images, media, archives and 3D models with [File Viewer](https://github.com/flyfish-dev/file-viewer). Its CAD runtime is AGPL-3.0, and the PowerPoint runtime has its own license; see the [upstream licenses](https://github.com/flyfish-dev/file-viewer#license).
 
 The built UI ships inside the wheel, so using dendrite never needs Node.js.
@@ -224,6 +236,8 @@ DENDRITE_TEST_DB=postgres uv run pytest   # on Postgres, in a throwaway containe
 cd ui && npm install && npm run dev    # hot-reloading UI; /api proxied to :8454
 cd ui && npm test                      # UI tests (Vitest)
 scripts/build-ui.sh && uv build        # release: the build fails without the UI bundle
+prek install                           # lint/format hooks (ruff, Biome, typos, …) on commit and push
+prek run --all-files                   # run them all now
 ```
 
 Design and requirements live in `openspec/`. CI runs only what a change touches. `python.yml` runs the tests on SQLite and Postgres, and `ui.yml` runs the UI tests and build. Docs-only changes run neither. `CLAUDE.md` describes the architecture in detail.

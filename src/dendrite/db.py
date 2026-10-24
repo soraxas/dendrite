@@ -16,9 +16,10 @@ from __future__ import annotations
 
 import time
 import uuid
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterable, Iterator
+from typing import Any
 
 import sqlalchemy as sa
 from sqlalchemy.exc import IntegrityError
@@ -276,9 +277,7 @@ class Metadata:
 
     def resolve_artifact_prefix(self, prefix: str) -> ArtifactRef | None:
         with self.ro() as conn:
-            rows = conn.execute(
-                sa.select(artifacts.c.hash).where(artifacts.c.hash.like(f"{prefix}%")).limit(2)
-            ).all()
+            rows = conn.execute(sa.select(artifacts.c.hash).where(artifacts.c.hash.like(f"{prefix}%")).limit(2)).all()
         return self.artifact(rows[0][0]) if len(rows) == 1 else None
 
     def artifacts_by_hash(self, hashes: Iterable[str]) -> dict[str, ArtifactRef]:
@@ -312,7 +311,9 @@ class Metadata:
     def set_keep(self, exp_id: str, keep: bool) -> None:
         with self.tx() as conn:
             res = conn.execute(
-                experiment_flags.update().where(experiment_flags.c.experiment_id == exp_id).values(keep=keep, updated_at=time.time())
+                experiment_flags.update()
+                .where(experiment_flags.c.experiment_id == exp_id)
+                .values(keep=keep, updated_at=time.time())
             )
             if res.rowcount == 0:
                 conn.execute(experiment_flags.insert().values(experiment_id=exp_id, keep=keep, updated_at=time.time()))
@@ -331,7 +332,9 @@ class Metadata:
         with self.tx() as conn:
             for child, parent in (reparent or {}).items():
                 conn.execute(experiments.update().where(experiments.c.id == child).values(parent_id=parent))
-            rows = conn.execute(sa.select(experiments.c.id, experiments.c.status).where(experiments.c.id.in_(ids))).all()
+            rows = conn.execute(
+                sa.select(experiments.c.id, experiments.c.status).where(experiments.c.id.in_(ids))
+            ).all()
             if len(rows) != len(set(ids)):
                 raise ValueError("some experiments no longer exist")
             busy = [i for i, st in rows if st in set(refuse_status)]
@@ -367,9 +370,7 @@ class Metadata:
             if row is None:
                 row = (
                     conn.execute(
-                        _EXPERIMENT_ROW
-                        .where(experiments.c.name == key)
-                        .order_by(experiments.c.created_at.desc())
+                        _EXPERIMENT_ROW.where(experiments.c.name == key).order_by(experiments.c.created_at.desc())
                     )
                     .mappings()
                     .first()
@@ -391,13 +392,19 @@ class Metadata:
     # -- stages ----------------------------------------------------------------------
     def set_node_stage(self, exp_id: str, node: str, path: list[dict]) -> None:
         with self.tx() as conn:
-            res = conn.execute(node_stages.update().where(node_stages.c.experiment_id == exp_id, node_stages.c.node == node).values(path=path))
+            res = conn.execute(
+                node_stages.update()
+                .where(node_stages.c.experiment_id == exp_id, node_stages.c.node == node)
+                .values(path=path)
+            )
             if res.rowcount == 0:
                 conn.execute(node_stages.insert().values(experiment_id=exp_id, node=node, path=path))
 
     def node_stages(self, exp_id: str) -> dict[str, list[dict]]:
         with self.ro() as conn:
-            rows = conn.execute(sa.select(node_stages.c.node, node_stages.c.path).where(node_stages.c.experiment_id == exp_id)).all()
+            rows = conn.execute(
+                sa.select(node_stages.c.node, node_stages.c.path).where(node_stages.c.experiment_id == exp_id)
+            ).all()
         return {n: p for n, p in rows}
 
     def pipeline_view(self, pipeline: str) -> dict:
@@ -407,14 +414,20 @@ class Metadata:
 
     def set_pipeline_view(self, pipeline: str, view: dict) -> None:
         with self.tx() as conn:
-            res = conn.execute(pipeline_views.update().where(pipeline_views.c.pipeline == pipeline).values(view=view, updated_at=time.time()))
+            res = conn.execute(
+                pipeline_views.update()
+                .where(pipeline_views.c.pipeline == pipeline)
+                .values(view=view, updated_at=time.time())
+            )
             if res.rowcount == 0:
                 conn.execute(pipeline_views.insert().values(pipeline=pipeline, view=view, updated_at=time.time()))
 
     # -- pipeline reads and progress -------------------------------------------------
     def record_read(self, exp_id: str, seq: int, artifact_hash: str, after: int) -> None:
         with self.tx() as conn:
-            conn.execute(pipeline_reads.insert().values(experiment_id=exp_id, seq=seq, artifact_hash=artifact_hash, after=after))
+            conn.execute(
+                pipeline_reads.insert().values(experiment_id=exp_id, seq=seq, artifact_hash=artifact_hash, after=after)
+            )
 
     def reads(self, exp_id: str) -> list[dict]:
         with self.ro() as conn:
@@ -428,7 +441,9 @@ class Metadata:
     def set_progress(self, exec_id: str, done: float, total: float | None, unit: str | None) -> None:
         values = dict(done=done, total=total, unit=unit, updated_at=time.time())
         with self.tx() as conn:
-            res = conn.execute(execution_progress.update().where(execution_progress.c.execution_id == exec_id).values(**values))
+            res = conn.execute(
+                execution_progress.update().where(execution_progress.c.execution_id == exec_id).values(**values)
+            )
             if res.rowcount == 0:
                 conn.execute(execution_progress.insert().values(execution_id=exec_id, **values))
 
@@ -437,7 +452,11 @@ class Metadata:
         if not ids:
             return {}
         with self.ro() as conn:
-            rows = conn.execute(sa.select(execution_progress).where(execution_progress.c.execution_id.in_(ids))).mappings().all()
+            rows = (
+                conn.execute(sa.select(execution_progress).where(execution_progress.c.execution_id.in_(ids)))
+                .mappings()
+                .all()
+            )
         return {r["execution_id"]: {k: r[k] for k in ("done", "total", "unit", "updated_at")} for r in rows}
 
     def change_tokens(self) -> tuple[str, dict[str, str]]:
@@ -448,14 +467,25 @@ class Metadata:
         """
         with self.ro() as conn:
             exps = conn.execute(
-                sa.select(experiments.c.id, experiments.c.status, experiments.c.name, experiments.c.parent_id,
-                          experiments.c.started_at, experiments.c.finished_at)
+                sa.select(
+                    experiments.c.id,
+                    experiments.c.status,
+                    experiments.c.name,
+                    experiments.c.parent_id,
+                    experiments.c.started_at,
+                    experiments.c.finished_at,
+                )
             ).all()
             flags = conn.execute(sa.select(experiment_flags.c.experiment_id, experiment_flags.c.keep)).all()
             runs = conn.execute(
-                sa.select(node_runs.c.experiment_id, node_runs.c.status, sa.func.count(),
-                          sa.func.max(sa.func.coalesce(node_runs.c.finished_at, node_runs.c.started_at, node_runs.c.queued_at)))
-                .group_by(node_runs.c.experiment_id, node_runs.c.status)
+                sa.select(
+                    node_runs.c.experiment_id,
+                    node_runs.c.status,
+                    sa.func.count(),
+                    sa.func.max(
+                        sa.func.coalesce(node_runs.c.finished_at, node_runs.c.started_at, node_runs.c.queued_at)
+                    ),
+                ).group_by(node_runs.c.experiment_id, node_runs.c.status)
             ).all()
             prog = conn.execute(
                 sa.select(node_runs.c.experiment_id, sa.func.max(execution_progress.c.updated_at))
@@ -474,9 +504,7 @@ class Metadata:
 
     def _upsert_node_run(self, conn: sa.Connection, exp_id: str, node: str, **values: Any) -> None:
         res = conn.execute(
-            node_runs.update()
-            .where(node_runs.c.experiment_id == exp_id, node_runs.c.node == node)
-            .values(**values)
+            node_runs.update().where(node_runs.c.experiment_id == exp_id, node_runs.c.node == node).values(**values)
         )
         if res.rowcount == 0:
             seq = conn.execute(
@@ -519,19 +547,29 @@ class Metadata:
         """
         pat = f"%{h}%"  # hashes are unique hex, so a text match on the JSON is exact enough
         with self.ro() as conn:
-            exps = conn.execute(
-                sa.select(experiments.c.id, experiments.c.name, experiments.c.inputs).order_by(experiments.c.created_at)
-            ).mappings().all()
-            nrs = conn.execute(
-                sa.select(node_runs.c.experiment_id, node_runs.c.node, node_runs.c.inputs, node_runs.c.outputs)
-                .where(
-                    sa.or_(
-                        sa.cast(node_runs.c.outputs, sa.Text).like(pat),
-                        sa.cast(node_runs.c.inputs, sa.Text).like(pat),
+            exps = (
+                conn.execute(
+                    sa.select(experiments.c.id, experiments.c.name, experiments.c.inputs).order_by(
+                        experiments.c.created_at
                     )
                 )
-                .order_by(node_runs.c.seq)
-            ).mappings().all()
+                .mappings()
+                .all()
+            )
+            nrs = (
+                conn.execute(
+                    sa.select(node_runs.c.experiment_id, node_runs.c.node, node_runs.c.inputs, node_runs.c.outputs)
+                    .where(
+                        sa.or_(
+                            sa.cast(node_runs.c.outputs, sa.Text).like(pat),
+                            sa.cast(node_runs.c.inputs, sa.Text).like(pat),
+                        )
+                    )
+                    .order_by(node_runs.c.seq)
+                )
+                .mappings()
+                .all()
+            )
         roles: dict[str, list[dict]] = {}
         for e in exps:
             for name, v in (e["inputs"] or {}).items():
@@ -540,7 +578,9 @@ class Metadata:
         for nr in nrs:
             for name, v in (nr["outputs"] or {}).items():
                 if v == h:
-                    roles.setdefault(nr["experiment_id"], []).append({"kind": "produced", "node": nr["node"], "name": name})
+                    roles.setdefault(nr["experiment_id"], []).append(
+                        {"kind": "produced", "node": nr["node"], "name": name}
+                    )
             for name, v in (nr["inputs"] or {}).items():
                 if v == h:
                     roles.setdefault(nr["experiment_id"], []).append({"kind": "read", "node": nr["node"], "name": name})
@@ -555,12 +595,20 @@ class Metadata:
     # -- bulk reads for storage accounting -----------------------------------------
     def all_node_runs(self) -> list[dict]:
         with self.ro() as conn:
-            rows = conn.execute(
-                sa.select(
-                    node_runs.c.experiment_id, node_runs.c.node, node_runs.c.status, node_runs.c.execution_id,
-                    node_runs.c.outputs, node_runs.c.finished_at,
+            rows = (
+                conn.execute(
+                    sa.select(
+                        node_runs.c.experiment_id,
+                        node_runs.c.node,
+                        node_runs.c.status,
+                        node_runs.c.execution_id,
+                        node_runs.c.outputs,
+                        node_runs.c.finished_at,
+                    )
                 )
-            ).mappings().all()
+                .mappings()
+                .all()
+            )
         return [dict(r) for r in rows]
 
     def all_artifacts(self) -> dict[str, dict]:
@@ -571,10 +619,19 @@ class Metadata:
     def successful_executions(self) -> list[dict]:
         """Successful executions with their output hashes (``outputs``: name -> hash)."""
         with self.ro() as conn:
-            rows = conn.execute(
-                sa.select(executions.c.id, executions.c.node, executions.c.experiment_id, executions.c.started_at, executions.c.finished_at)
-                .where(executions.c.status == "success")
-            ).mappings().all()
+            rows = (
+                conn.execute(
+                    sa.select(
+                        executions.c.id,
+                        executions.c.node,
+                        executions.c.experiment_id,
+                        executions.c.started_at,
+                        executions.c.finished_at,
+                    ).where(executions.c.status == "success")
+                )
+                .mappings()
+                .all()
+            )
             outs = conn.execute(
                 sa.select(execution_outputs.c.execution_id, execution_outputs.c.name, execution_outputs.c.artifact_hash)
                 .join(executions, executions.c.id == execution_outputs.c.execution_id)
@@ -588,9 +645,15 @@ class Metadata:
 
     def running_executions(self) -> list[dict]:
         with self.ro() as conn:
-            rows = conn.execute(
-                sa.select(executions.c.id, executions.c.signature, executions.c.started_at).where(executions.c.status == "running")
-            ).mappings().all()
+            rows = (
+                conn.execute(
+                    sa.select(executions.c.id, executions.c.signature, executions.c.started_at).where(
+                        executions.c.status == "running"
+                    )
+                )
+                .mappings()
+                .all()
+            )
         return [dict(r) for r in rows]
 
     def active_leases(self) -> list[dict]:
@@ -687,9 +750,7 @@ class Metadata:
             for (key, step), value in latest.items():
                 conn.execute(metrics.insert().values(execution_id=exec_id, key=key, step=step, value=value))
             conn.execute(
-                executions.update()
-                .where(executions.c.id == exec_id)
-                .values(status="success", finished_at=time.time())
+                executions.update().where(executions.c.id == exec_id).values(status="success", finished_at=time.time())
             )
             self._upsert_node_run(conn, experiment_id, node, **node_run)
             if lease:
@@ -720,7 +781,13 @@ class Metadata:
         with self.ro() as conn:
             row = (
                 conn.execute(
-                    sa.select(code_snapshots.c.hash, code_snapshots.c.file, code_snapshots.c.line, code_snapshots.c.module, code_snapshots.c.qualname)
+                    sa.select(
+                        code_snapshots.c.hash,
+                        code_snapshots.c.file,
+                        code_snapshots.c.line,
+                        code_snapshots.c.module,
+                        code_snapshots.c.qualname,
+                    )
                     .join(execution_sources, execution_sources.c.source_hash == code_snapshots.c.hash)
                     .where(execution_sources.c.execution_id == exec_id)
                 )
@@ -769,9 +836,15 @@ class Metadata:
         if not ids:
             return {}
         with self.ro() as conn:
-            rows = conn.execute(
-                sa.select(executions.c.id, executions.c.started_at, executions.c.finished_at, executions.c.experiment_id).where(executions.c.id.in_(ids))
-            ).mappings().all()
+            rows = (
+                conn.execute(
+                    sa.select(
+                        executions.c.id, executions.c.started_at, executions.c.finished_at, executions.c.experiment_id
+                    ).where(executions.c.id.in_(ids))
+                )
+                .mappings()
+                .all()
+            )
         return {r["id"]: dict(r) for r in rows}
 
     def metrics_for(self, exec_ids: Iterable[str]) -> dict[str, dict[str, float]]:

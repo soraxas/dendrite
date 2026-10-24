@@ -14,9 +14,10 @@ import shutil
 import tempfile
 import uuid
 from abc import ABC, abstractmethod
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Iterator
+from typing import Any
 
 from .hashing import canonical_json, sha256_bytes, sha256_file
 
@@ -27,7 +28,7 @@ PENDING = "pending"  # kind of a plan-mode placeholder: an output that has not b
 class PlanIncomplete(RuntimeError):
     """A plan tried to read the contents of an output that would only exist after running."""
 
-    def __init__(self, ref: "ArtifactRef"):
+    def __init__(self, ref: ArtifactRef):
         self.ref = ref
         self.node = ref.hash.removeprefix("plan:").split(".", 1)[0]
         super().__init__(f"the plan depends on the output of {self.node!r}, which has not been computed")

@@ -22,9 +22,11 @@ A step's signature includes a hash of its function source, but the source itself
 ## Capabilities
 
 ### New Capabilities
+
 - `source-snapshots`: capturing, serving and safely editing the source code of pipeline steps.
 
 ### Modified Capabilities
+
 <!-- none: the lineage-ui and execution-cache behaviour is unchanged; this adds endpoints and a panel section -->
 
 ## Impact

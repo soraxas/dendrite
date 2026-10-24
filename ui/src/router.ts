@@ -39,7 +39,8 @@ export function href(r: Route): string {
   const enc = encodeURIComponent;
   let path = "#/";
   if (r.view === "storage") path = `#/storage${r.tab && r.tab !== "experiments" ? `/${r.tab}` : ""}`;
-  else if (r.view === "lineage" && r.artifact) path = `#/artifact/${enc(r.artifact)}${r.exp ? `/from/${enc(r.exp)}` : ""}`;
+  else if (r.view === "lineage" && r.artifact)
+    path = `#/artifact/${enc(r.artifact)}${r.exp ? `/from/${enc(r.exp)}` : ""}`;
   else if (r.exp) {
     path = `#/exp/${enc(r.exp)}`;
     if (r.view === "params" || r.view === "metrics" || r.view === "code") path += `/${r.view}`;

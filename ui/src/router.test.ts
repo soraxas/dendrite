@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { href, parse, splitSel, type Route } from "./router";
+import { href, parse, type Route, splitSel } from "./router";
 
 describe("hash routes", () => {
   const cases: Route[] = [

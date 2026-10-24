@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
-import { api, type ArtifactDetail } from "../api";
+import { type ArtifactDetail, api } from "../api";
 import { renderWithQuery } from "../test/render";
 import { ArtifactDetailPanel, type Nav } from "./DetailPanel";
 
@@ -14,12 +14,29 @@ vi.mock("./FileViewer", () => ({
   ),
 }));
 
-afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
-const nav: Nav = { openExp: vi.fn(), openStep: vi.fn(), selectArtifact: vi.fn(), selectExec: vi.fn(), trace: vi.fn(), nameOf: (id) => id };
+const nav: Nav = {
+  openExp: vi.fn(),
+  openStep: vi.fn(),
+  selectArtifact: vi.fn(),
+  selectExec: vi.fn(),
+  trace: vi.fn(),
+  nameOf: (id) => id,
+};
 const artifact = (over: Partial<ArtifactDetail> = {}): ArtifactDetail => ({
-  hash: "abc123", kind: "file", filename: "report.pdf", size: 100000, present: true,
-  producer: null, experiments: [], preview: { type: "too_large" }, ...over,
+  hash: "abc123",
+  kind: "file",
+  filename: "report.pdf",
+  size: 100000,
+  present: true,
+  producer: null,
+  experiments: [],
+  preview: { type: "too_large" },
+  ...over,
 });
 
 function setup(a: ArtifactDetail) {
@@ -34,7 +51,10 @@ it("previews files above the old text limit using their original filename", asyn
   expect(screen.queryByText("Too large to preview.")).toBeNull();
 });
 
-it.each(["clip.webm", "movie.mp4"])("streams %s directly instead of loading the entire file in the viewer", async (filename) => {
+it.each([
+  "clip.webm",
+  "movie.mp4",
+])("streams %s directly instead of loading the entire file in the viewer", async (filename) => {
   const { container } = setup(artifact({ filename, size: 4_340_000_000 }));
   await screen.findByRole("button", { name: "Expand preview" });
   const video = container.querySelector("video")!;
@@ -80,24 +100,37 @@ it("prioritizes preview and shows only two experiment usages until expanded", as
 });
 
 it("opens nested directory members without treating their hashes as registered artifacts", async () => {
-  setup(artifact({ kind: "dir", filename: "reports", preview: { type: "manifest", count: 2, entries: [
-    { path: "nested/a report.csv", hash: "member1", size: 20 },
-    { path: "plot.png", hash: "member2", size: 40 },
-  ] } }));
+  setup(
+    artifact({
+      kind: "dir",
+      filename: "reports",
+      preview: {
+        type: "manifest",
+        count: 2,
+        entries: [
+          { path: "nested/a report.csv", hash: "member1", size: 20 },
+          { path: "plot.png", hash: "member2", size: 40 },
+        ],
+      },
+    }),
+  );
   fireEvent.click(await screen.findByRole("button", { name: "nested/a report.csv" }));
-  expect((await screen.findByText("Viewing a report.csv")).getAttribute("href"))
-    .toBe("/api/artifacts/abc123/download?path=nested%2Fa%20report.csv");
+  expect((await screen.findByText("Viewing a report.csv")).getAttribute("href")).toBe(
+    "/api/artifacts/abc123/download?path=nested%2Fa%20report.csv",
+  );
   fireEvent.click(screen.getByRole("button", { name: "plot.png" }));
-  expect((await screen.findByText("Viewing plot.png")).getAttribute("href"))
-    .toBe("/api/artifacts/abc123/download?path=plot.png");
+  expect((await screen.findByText("Viewing plot.png")).getAttribute("href")).toBe(
+    "/api/artifacts/abc123/download?path=plot.png",
+  );
 });
 
 it("keeps a download available when the renderer cannot preview a file", async () => {
   setup(artifact({ filename: "damaged.pdf", preview: { type: "binary" } }));
   fireEvent.click(await screen.findByRole("button", { name: "Simulate renderer failure" }));
   expect(await screen.findByText(/Unable to preview this file/)).toBeTruthy();
-  expect(screen.getByRole("link", { name: "Download file" }).getAttribute("href"))
-    .toBe("/api/artifacts/abc123/download");
+  expect(screen.getByRole("link", { name: "Download file" }).getAttribute("href")).toBe(
+    "/api/artifacts/abc123/download",
+  );
 });
 
 it("preserves Python value previews", async () => {
@@ -120,7 +153,11 @@ it("does not fetch files missing from the store", async () => {
 });
 
 it("starts with ten directory files and reveals more in batches", async () => {
-  const entries = Array.from({ length: 84 }, (_, i) => ({ path: `frame_${String(i).padStart(6, "0")}.png`, hash: `frame${i}`, size: 100 }));
+  const entries = Array.from({ length: 84 }, (_, i) => ({
+    path: `frame_${String(i).padStart(6, "0")}.png`,
+    hash: `frame${i}`,
+    size: 100,
+  }));
   setup(artifact({ kind: "dir", filename: "frames", preview: { type: "manifest", count: 84, entries } }));
   await screen.findByRole("button", { name: "frame_000000.png" });
   expect(screen.getAllByRole("button", { name: /^frame_/ })).toHaveLength(10);

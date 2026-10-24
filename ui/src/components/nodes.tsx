@@ -1,7 +1,7 @@
 // Custom React Flow nodes. Pipeline nodes encode run status; lineage nodes encode data vs computation.
 // Every node can carry a hover card that says, in a sentence, what happened.
-import { Handle, NodeToolbar, Position, type NodeProps } from "@xyflow/react";
-import { useState, type CSSProperties, type ReactNode } from "react";
+import { Handle, type NodeProps, NodeToolbar, Position } from "@xyflow/react";
+import { type CSSProperties, type ReactNode, useState } from "react";
 import type { GridCell } from "../fanout";
 import { ArtifactIcon, type ArtifactType } from "./ArtifactIcon";
 
@@ -26,7 +26,14 @@ type Base = {
   ports?: { inputs: Port[]; outputs: Port[]; active?: string; onPick: (hash: string) => void };
 };
 
-function PortChips({ ports, active, onPick, side, isVisible, position }: {
+function PortChips({
+  ports,
+  active,
+  onPick,
+  side,
+  isVisible,
+  position,
+}: {
   ports: Port[];
   active?: string;
   onPick: (hash: string) => void;
@@ -49,7 +56,8 @@ function PortChips({ ports, active, onPick, side, isVisible, position }: {
               onPick(p.hash);
             }}
           >
-            <ArtifactIcon kind={p.kind} filename={p.filename} /><b>{p.name}</b> <span className="muted">{p.sub}</span>
+            <ArtifactIcon kind={p.kind} filename={p.filename} />
+            <b>{p.name}</b> <span className="muted">{p.sub}</span>
           </button>
         ))}
       </div>
@@ -67,7 +75,19 @@ function Handles({ dir }: { dir?: "RIGHT" | "DOWN" }) {
   );
 }
 
-function Shell({ data, className, style, children, label }: { data: Base; className: string; style: CSSProperties; children: ReactNode; label: string }) {
+function Shell({
+  data,
+  className,
+  style,
+  children,
+  label,
+}: {
+  data: Base;
+  className: string;
+  style: CSSProperties;
+  children: ReactNode;
+  label: string;
+}) {
   const [hovered, setHovered] = useState(false);
   const h = data.hover;
   return (
@@ -82,19 +102,40 @@ function Shell({ data, className, style, children, label }: { data: Base; classN
       {children}
       {data.ports && (
         <>
-          <PortChips ports={data.ports.inputs} active={data.ports.active} onPick={data.ports.onPick} side="in" isVisible={!!data.selected} position={data.dir === "DOWN" ? Position.Top : Position.Left} />
-          <PortChips ports={data.ports.outputs} active={data.ports.active} onPick={data.ports.onPick} side="out" isVisible={!!data.selected} position={data.dir === "DOWN" ? Position.Bottom : Position.Right} />
+          <PortChips
+            ports={data.ports.inputs}
+            active={data.ports.active}
+            onPick={data.ports.onPick}
+            side="in"
+            isVisible={!!data.selected}
+            position={data.dir === "DOWN" ? Position.Top : Position.Left}
+          />
+          <PortChips
+            ports={data.ports.outputs}
+            active={data.ports.active}
+            onPick={data.ports.onPick}
+            side="out"
+            isVisible={!!data.selected}
+            position={data.dir === "DOWN" ? Position.Bottom : Position.Right}
+          />
         </>
       )}
       {h && (
-        <NodeToolbar isVisible={hovered && !data.selected} position={data.dir === "DOWN" ? Position.Right : Position.Bottom} offset={12}>
+        <NodeToolbar
+          isVisible={hovered && !data.selected}
+          position={data.dir === "DOWN" ? Position.Right : Position.Bottom}
+          offset={12}
+        >
           <div className="hovercard" role="tooltip">
             <div className="hc-title">{h.title}</div>
             <div className="hc-body">{h.body}</div>
             {h.facts && h.facts.length > 0 && (
               <dl>
                 {h.facts.map(([k, v]) => (
-                  <div key={k}><dt>{k}</dt><dd>{v}</dd></div>
+                  <div key={k}>
+                    <dt>{k}</dt>
+                    <dd>{v}</dd>
+                  </div>
                 ))}
               </dl>
             )}
@@ -182,7 +223,11 @@ export function PipelineNode({ data }: NodeProps & { data: PipelineData }) {
       )}
       <div className="t1">
         {data.name}
-        {data.group && <span className="count-badge" title={`Called once for each of ${data.group.count} items`}>×{data.group.count}</span>}
+        {data.group && (
+          <span className="count-badge" title={`Called once for each of ${data.group.count} items`}>
+            ×{data.group.count}
+          </span>
+        )}
       </div>
       {src ? (
         <div className="t2">
@@ -205,7 +250,13 @@ export function PipelineNode({ data }: NodeProps & { data: PipelineData }) {
       <div className="t3">{data.line3}</div>
       {data.grid && <StatusGrid cells={data.grid} onPick={data.onPickItem} />}
       {data.progress != null && (
-        <div className="pbar" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(data.progress * 100)}>
+        <div
+          className="pbar"
+          role="progressbar"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(data.progress * 100)}
+        >
           <span style={{ width: `${Math.min(100, data.progress * 100)}%`, background: `var(--${data.status})` }} />
         </div>
       )}
@@ -224,7 +275,13 @@ export function PipelineNode({ data }: NodeProps & { data: PipelineData }) {
       {(data.group || data.member) && (
         <button
           className="group-toggle nodrag"
-          title={data.group ? (data.group.collapsed ? `Show all ${data.group.count}` : "Collapse into one card") : `Collapse into ${data.member!.of}`}
+          title={
+            data.group
+              ? data.group.collapsed
+                ? `Show all ${data.group.count}`
+                : "Collapse into one card"
+              : `Collapse into ${data.member!.of}`
+          }
           onClick={(e) => {
             e.stopPropagation();
             (data.group?.toggle ?? data.member!.collapse)();
@@ -251,11 +308,17 @@ export function FrameNode({ data }: NodeProps & { data: FrameData }) {
     <div
       className={`frame-node ${data.selected ? "sel" : ""}`}
       // A fan-out frame takes its items' edges (they are parallel siblings), so it needs handles.
-      style={{ borderColor: `var(--stage-${data.color})`, background: `color-mix(in srgb, var(--stage-${data.color}) 7%, transparent)` }}
+      style={{
+        borderColor: `var(--stage-${data.color})`,
+        background: `color-mix(in srgb, var(--stage-${data.color}) 7%, transparent)`,
+      }}
       aria-label={`${data.name}: ${data.sub}`}
     >
       <Handles dir={data.dir} />
-      <div className="frame-head" style={{ background: `color-mix(in srgb, var(--stage-${data.color}) 18%, var(--panel))` }}>
+      <div
+        className="frame-head"
+        style={{ background: `color-mix(in srgb, var(--stage-${data.color}) 18%, var(--panel))` }}
+      >
         <span className="frame-dot" style={{ background: `var(--stage-${data.color})` }} />
         <span className="frame-name">{data.name}</span>
         <span className="frame-sub">{data.sub}</span>
@@ -288,8 +351,16 @@ export function MoreNode({ data }: NodeProps & { data: MoreData }) {
 export type InputData = Base & ArtifactType & { name: string; sub: string; configures?: boolean };
 export function InputNode({ data }: NodeProps & { data: InputData }) {
   return (
-    <Shell data={data} className={`pill ${data.configures ? "configures" : ""}`} style={tone("input")} label={`input ${data.name}`}>
-      <div className="t1"><ArtifactIcon kind={data.kind} filename={data.filename} />{data.name}</div>
+    <Shell
+      data={data}
+      className={`pill ${data.configures ? "configures" : ""}`}
+      style={tone("input")}
+      label={`input ${data.name}`}
+    >
+      <div className="t1">
+        <ArtifactIcon kind={data.kind} filename={data.filename} />
+        {data.name}
+      </div>
       <div className="t3">{data.configures ? "configures this run" : data.sub}</div>
     </Shell>
   );
@@ -297,10 +368,15 @@ export function InputNode({ data }: NodeProps & { data: InputData }) {
 
 export type ArtifactData = Base & ArtifactType & { label: string; sub: string; focus: boolean };
 export function ArtifactNode({ data }: NodeProps & { data: ArtifactData }) {
-  const style = data.focus ? { background: "var(--accent-bg)", borderColor: "var(--accent)", borderWidth: 2.5 } : tone("data");
+  const style = data.focus
+    ? { background: "var(--accent-bg)", borderColor: "var(--accent)", borderWidth: 2.5 }
+    : tone("data");
   return (
     <Shell data={data} className="pill" style={style} label={`data ${data.label}`}>
-      <div className="t1"><ArtifactIcon kind={data.kind} filename={data.filename} />{data.label}</div>
+      <div className="t1">
+        <ArtifactIcon kind={data.kind} filename={data.filename} />
+        {data.label}
+      </div>
       <div className="t3">{data.sub}</div>
     </Shell>
   );

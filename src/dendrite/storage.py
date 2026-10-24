@@ -12,14 +12,16 @@ from __future__ import annotations
 
 import shutil
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Iterable
+from typing import TYPE_CHECKING, Any
 
 from .store import ArtifactRef
 
 if TYPE_CHECKING:
     from .experiment import Lab
+
 
 class StorageBusy(RuntimeError):
     """A reclaiming action was refused because work is in progress (pass ``force=True``)."""
@@ -49,7 +51,7 @@ def _pin_hashes(pins: dict | None) -> list[str]:
 
 
 class Storage:
-    def __init__(self, lab: "Lab"):
+    def __init__(self, lab: Lab):
         self.lab = lab
 
     # -- reading -----------------------------------------------------------------------
@@ -92,7 +94,9 @@ class Storage:
     def _roots(self, g: _Graph, skip_exec: Iterable[str] = ()) -> dict[str, set[str]]:
         """Root hashes per experiment id. ``skip_exec`` drops node-run outputs of those executions."""
         skip = set(skip_exec)
-        roots: dict[str, set[str]] = {e["id"]: set(e["inputs"].values()) | set(_pin_hashes(e["pins"])) for e in g.experiments}
+        roots: dict[str, set[str]] = {
+            e["id"]: set(e["inputs"].values()) | set(_pin_hashes(e["pins"])) for e in g.experiments
+        }
         for nr in g.node_runs:
             if nr["experiment_id"] in roots and nr["execution_id"] not in skip:
                 roots[nr["experiment_id"]].update((nr["outputs"] or {}).values())
@@ -111,7 +115,7 @@ class Storage:
     def busy(self) -> list[str]:
         """Why reclaiming is unsafe right now: running experiments and held leases."""
         why = [f"experiment {e['id']} is running" for e in self.lab.db.experiments() if e["status"] == "running"]
-        why += [f"a step is computing (lease {l['signature'][:12]})" for l in self.lab.db.active_leases()]
+        why += [f"a step is computing (lease {lease['signature'][:12]})" for lease in self.lab.db.active_leases()]
         return why
 
     def _guard(self, force: bool) -> None:
@@ -172,20 +176,22 @@ class Storage:
         experiments = []
         for e in g.experiments:
             mine = reach[e["id"]]
-            experiments.append({
-                "id": e["id"],
-                "name": e["name"],
-                "pipeline": e["pipeline"],
-                "status": e["status"],
-                "parent_id": e["parent_id"],
-                "keep": e["keep"],
-                "created_at": e["created_at"],
-                "finished_at": e["finished_at"],
-                "forks": children.get(e["id"], []),
-                "bytes": sum(g.size(h) for h in mine if h in g.objects),
-                "exclusive": sum(g.size(h) for h in mine if reachers.get(h) == {e["id"]}),
-                "with_forks": subtree.get(e["id"], 0),
-            })
+            experiments.append(
+                {
+                    "id": e["id"],
+                    "name": e["name"],
+                    "pipeline": e["pipeline"],
+                    "status": e["status"],
+                    "parent_id": e["parent_id"],
+                    "keep": e["keep"],
+                    "created_at": e["created_at"],
+                    "finished_at": e["finished_at"],
+                    "forks": children.get(e["id"], []),
+                    "bytes": sum(g.size(h) for h in mine if h in g.objects),
+                    "exclusive": sum(g.size(h) for h in mine if reachers.get(h) == {e["id"]}),
+                    "with_forks": subtree.get(e["id"], 0),
+                }
+            )
 
         last = self._last_use(g)
         uses: dict[str, list[dict]] = {}
@@ -196,20 +202,22 @@ class Storage:
         for ex in g.executions:
             blobs = self._closure(g, ex["outputs"].values())
             nrs = uses.get(ex["id"], [])
-            cache.append({
-                "execution_id": ex["id"],
-                "node": ex["node"],
-                "experiment_id": ex["experiment_id"],
-                "finished_at": ex["finished_at"],
-                "duration": (ex["finished_at"] - ex["started_at"]) if ex["finished_at"] else None,
-                "outputs": ex["outputs"],
-                "bytes": sum(g.size(h) for h in blobs),
-                "present": all(h in g.objects for h in blobs),
-                "uses": len(nrs),
-                "reused": sum(nr["status"] == "cached" for nr in nrs),
-                "last_used": last.get(ex["id"]),
-                "live": any(h in reached for h in blobs),  # some existing experiment uses it
-            })
+            cache.append(
+                {
+                    "execution_id": ex["id"],
+                    "node": ex["node"],
+                    "experiment_id": ex["experiment_id"],
+                    "finished_at": ex["finished_at"],
+                    "duration": (ex["finished_at"] - ex["started_at"]) if ex["finished_at"] else None,
+                    "outputs": ex["outputs"],
+                    "bytes": sum(g.size(h) for h in blobs),
+                    "present": all(h in g.objects for h in blobs),
+                    "uses": len(nrs),
+                    "reused": sum(nr["status"] == "cached" for nr in nrs),
+                    "last_used": last.get(ex["id"]),
+                    "live": any(h in reached for h in blobs),  # some existing experiment uses it
+                }
+            )
         cache.sort(key=lambda c: -c["bytes"])
 
         producer: dict[str, str] = {}
@@ -217,11 +225,20 @@ class Storage:
             for h in ex["outputs"].values():
                 producer.setdefault(h, ex["node"])
         top = sorted(g.artifacts.values(), key=lambda a: -self._artifact_bytes(g, a["hash"]))[:largest]
-        largest_rows = [{
-            "hash": a["hash"], "kind": a["kind"], "filename": a["filename"], "size": self._artifact_bytes(g, a["hash"]),
-            "producer_node": producer.get(a["hash"]), "present": a["hash"] in g.objects,
-            "live": a["hash"] in reached, "experiments": len(reachers.get(a["hash"], ())),
-        } for a in top if self._artifact_bytes(g, a["hash"])]
+        largest_rows = [
+            {
+                "hash": a["hash"],
+                "kind": a["kind"],
+                "filename": a["filename"],
+                "size": self._artifact_bytes(g, a["hash"]),
+                "producer_node": producer.get(a["hash"]),
+                "present": a["hash"] in g.objects,
+                "live": a["hash"] in reached,
+                "experiments": len(reachers.get(a["hash"], ())),
+            }
+            for a in top
+            if self._artifact_bytes(g, a["hash"])
+        ]
 
         total = sum(size for size, _ in g.objects.values())
         return {
@@ -288,7 +305,9 @@ class Storage:
         if old:
             newest: dict[str, dict] = {}
             for e in g.experiments:
-                if e["status"] == "completed" and (e["pipeline"] not in newest or (e["finished_at"] or 0) > (newest[e["pipeline"]]["finished_at"] or 0)):
+                if e["status"] == "completed" and (
+                    e["pipeline"] not in newest or (e["finished_at"] or 0) > (newest[e["pipeline"]]["finished_at"] or 0)
+                ):
                     newest[e["pipeline"]] = e
             full = self._roots(g)
             for e in g.experiments:
@@ -365,7 +384,9 @@ class Storage:
             tops = {art.hash}
         pinned = [e["id"] for e in g.experiments if tops & set(_pin_hashes(e["pins"]))]
         if pinned and not force:
-            raise EvictRefused(f"experiment {pinned[0]} pins these outputs, so it couldn't run without them (force=True to evict anyway)")
+            raise EvictRefused(
+                f"experiment {pinned[0]} pins these outputs, so it couldn't run without them (force=True to evict anyway)"
+            )
         # Everything else that stays reachable. Experiment inputs always stay (they're the
         # user's data, not cache); pins of these outputs only reach here with ``force``.
         inputs = {h for e in g.experiments for h in e["inputs"].values()}
@@ -403,7 +424,7 @@ class Storage:
                 removed.append(str(p))
         if tmp.is_dir():
             running = {e["id"]: e for e in self.lab.db.running_executions()}
-            leased = {l["signature"] for l in self.lab.db.active_leases()}
+            leased = {lease["signature"] for lease in self.lab.db.active_leases()}
             for p in tmp.iterdir():
                 ex = running.get(p.name)
                 if ex is not None and (ex["signature"] in leased or p.stat().st_mtime > now - grace):

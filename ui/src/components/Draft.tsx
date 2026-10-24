@@ -1,7 +1,15 @@
 // Draft mode: the bar above the graph, and the per-step editor in the detail panel.
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
-import { api, ApiError, type DraftEdit, type ExperimentSummary, type ParamField, type Plan, type PlanNode } from "../api";
+import {
+  ApiError,
+  api,
+  type DraftEdit,
+  type ExperimentSummary,
+  type ParamField,
+  type Plan,
+  type PlanNode,
+} from "../api";
 import { PLAN, REASON, UPSTREAM_NOTE } from "../copy";
 import { fmtDur, fmtVal } from "../format";
 
@@ -21,7 +29,8 @@ export function useEditDraft(id: string) {
 export function planSummary(plan: Plan): string {
   const t = plan.totals;
   if (!t.steps) return "No steps planned yet";
-  if (!t.run) return `Nothing to run — ${!t.frozen ? "every step is reused" : !t.reuse ? "every step is frozen" : `${t.reuse} reused, ${t.frozen} frozen`}`;
+  if (!t.run)
+    return `Nothing to run — ${!t.frozen ? "every step is reused" : !t.reuse ? "every step is frozen" : `${t.reuse} reused, ${t.frozen} frozen`}`;
   const est = t.estimate ? ` · about ${fmtDur(t.estimate)}${t.unestimated ? "+" : ""}` : "";
   return `Will run ${t.run} of ${t.steps} steps${est}`;
 }
@@ -30,7 +39,13 @@ export function runCommand(exp: ExperimentSummary, module: string | null | undef
   return `dendrite run ${exp.id}${module ? ` --import ${module}` : ""}`;
 }
 
-export function DraftBar({ exp, plan, planError, canEdit, onDiscarded }: {
+export function DraftBar({
+  exp,
+  plan,
+  planError,
+  canEdit,
+  onDiscarded,
+}: {
   exp: ExperimentSummary;
   plan?: Plan;
   planError?: unknown;
@@ -91,7 +106,8 @@ export function DraftBar({ exp, plan, planError, canEdit, onDiscarded }: {
       {edit.error && <span className="warn">{String((edit.error as Error).message)}</span>}
       {notImported && (
         <span className="warn" style={{ flexBasis: "100%" }}>
-          Can't preview this draft: the UI server hasn't loaded the pipeline code. Restart it with <code>dendrite ui --import &lt;module&gt;</code>.
+          Can't preview this draft: the UI server hasn't loaded the pipeline code. Restart it with{" "}
+          <code>dendrite ui --import &lt;module&gt;</code>.
         </span>
       )}
       {plan && !plan.complete && (
@@ -101,7 +117,11 @@ export function DraftBar({ exp, plan, planError, canEdit, onDiscarded }: {
             : `The preview failed: ${plan.error}`}
         </span>
       )}
-      {plan?.complete && plan.error && <span className="warn" style={{ flexBasis: "100%" }}>{plan.error}</span>}
+      {plan?.complete && plan.error && (
+        <span className="warn" style={{ flexBasis: "100%" }}>
+          {plan.error}
+        </span>
+      )}
     </div>
   );
 }
@@ -127,9 +147,20 @@ export function parseParam(p: ParamField, text: string): { value?: unknown; erro
   }
 }
 
-const show = (p: ParamField, v: unknown) => (p.json_type === "string" ? String(v ?? "") : p.json_type === "integer" || p.json_type === "number" ? String(v) : JSON.stringify(v));
+const show = (p: ParamField, v: unknown) =>
+  p.json_type === "string"
+    ? String(v ?? "")
+    : p.json_type === "integer" || p.json_type === "number"
+      ? String(v)
+      : JSON.stringify(v);
 
-export function ParamRow({ node, p, onSave, onReset, disabled }: {
+export function ParamRow({
+  node,
+  p,
+  onSave,
+  onReset,
+  disabled,
+}: {
   node: string;
   p: ParamField;
   onSave: (k: string, v: unknown, float: boolean) => void;
@@ -161,12 +192,22 @@ export function ParamRow({ node, p, onSave, onReset, disabled }: {
     <div className={`param-row ${p.changed ? "changed" : ""}`}>
       <label htmlFor={id}>
         {p.name}
-        {p.changed && <span className="changed-mark" title="Changed from the parent">✎</span>}
+        {p.changed && (
+          <span className="changed-mark" title="Changed from the parent">
+            ✎
+          </span>
+        )}
         {p.annotation && <span className="muted">{p.annotation}</span>}
       </label>
       <div className="ctl">
         {p.json_type === "boolean" ? (
-          <input id={id} type="checkbox" checked={!!p.value} disabled={disabled} onChange={(e) => onSave(k, e.target.checked, false)} />
+          <input
+            id={id}
+            type="checkbox"
+            checked={!!p.value}
+            disabled={disabled}
+            onChange={(e) => onSave(k, e.target.checked, false)}
+          />
         ) : p.json_type === "array" || p.json_type === "object" || p.json_type === "any" ? (
           <textarea
             id={id}
@@ -201,7 +242,14 @@ export function ParamRow({ node, p, onSave, onReset, disabled }: {
           />
         )}
         {p.changed && !disabled && (
-          <button className="reset" title={`Back to ${fmtVal(p.inherited)}`} aria-label={`Reset ${p.name}`} onClick={() => onReset(k)}>↺</button>
+          <button
+            className="reset"
+            title={`Back to ${fmtVal(p.inherited)}`}
+            aria-label={`Reset ${p.name}`}
+            onClick={() => onReset(k)}
+          >
+            ↺
+          </button>
         )}
       </div>
       {error ? (
@@ -217,7 +265,13 @@ export function ParamRow({ node, p, onSave, onReset, disabled }: {
 }
 
 /** Draft-mode step panel: planned outcome, parameter form and freeze toggle. */
-export function DraftStepEditor({ n, plan, canEdit, nameOf, openStep }: {
+export function DraftStepEditor({
+  n,
+  plan,
+  canEdit,
+  nameOf,
+  openStep,
+}: {
   n: PlanNode;
   plan: Plan;
   canEdit: boolean;
@@ -231,7 +285,8 @@ export function DraftStepEditor({ n, plan, canEdit, nameOf, openStep }: {
   const frozen = !!exp.pins?.[n.name];
   const origin = n.reuse_from?.experiment_id;
   const fields = n.param_schema ?? [];
-  const save = (k: string, v: unknown, float: boolean) => edit.mutate({ params: { [k]: v }, ...(float ? { floats: [k] } : {}) } as DraftEdit);
+  const save = (k: string, v: unknown, float: boolean) =>
+    edit.mutate({ params: { [k]: v }, ...(float ? { floats: [k] } : {}) } as DraftEdit);
   return (
     <>
       <div className="selected" aria-live="polite">
@@ -239,8 +294,17 @@ export function DraftStepEditor({ n, plan, canEdit, nameOf, openStep }: {
       </div>
       <section>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-          <span className="badge" style={{ color: `var(--${copy.tone})`, borderStyle: n.reason === "upstream" ? "dashed" : "solid" }}>{outcome === "run" ? "Will run" : copy.label}</span>
-          {n.estimate != null && <span className="muted">{outcome === "run" ? "about" : "took"} {fmtDur(n.estimate)}</span>}
+          <span
+            className="badge"
+            style={{ color: `var(--${copy.tone})`, borderStyle: n.reason === "upstream" ? "dashed" : "solid" }}
+          >
+            {outcome === "run" ? "Will run" : copy.label}
+          </span>
+          {n.estimate != null && (
+            <span className="muted">
+              {outcome === "run" ? "about" : "took"} {fmtDur(n.estimate)}
+            </span>
+          )}
           {edit.isPending && <span className="muted">saving…</span>}
         </div>
         <p className="explain">
@@ -264,7 +328,9 @@ export function DraftStepEditor({ n, plan, canEdit, nameOf, openStep }: {
             />
             Freeze to {nameOf(exp.parent_id)}'s result
           </label>
-          <div className="muted" style={{ fontSize: 12, marginTop: 3 }}>Skips this step and uses exactly what the parent produced, whatever its parameters say.</div>
+          <div className="muted" style={{ fontSize: 12, marginTop: 3 }}>
+            Skips this step and uses exactly what the parent produced, whatever its parameters say.
+          </div>
         </section>
       )}
       <section>
@@ -272,14 +338,31 @@ export function DraftStepEditor({ n, plan, canEdit, nameOf, openStep }: {
         {fields.length ? (
           <div className="param-form">
             {fields.map((p) => (
-              <ParamRow key={key(n.name, p)} node={n.name} p={p} disabled={!canEdit || frozen} onSave={save} onReset={(k) => edit.mutate({ reset: [k] })} />
+              <ParamRow
+                key={key(n.name, p)}
+                node={n.name}
+                p={p}
+                disabled={!canEdit || frozen}
+                onSave={save}
+                onReset={(k) => edit.mutate({ reset: [k] })}
+              />
             ))}
           </div>
         ) : (
-          <span className="muted">{frozen ? "Frozen steps don't use parameters." : "This step has no parameters."}</span>
+          <span className="muted">
+            {frozen ? "Frozen steps don't use parameters." : "This step has no parameters."}
+          </span>
         )}
-        {!canEdit && <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>Editing is off; start <code>dendrite ui</code> on localhost or with --allow-edit.</div>}
-        {edit.error && <div className="err" style={{ fontSize: 12, marginTop: 6 }}>{String((edit.error as Error).message)}</div>}
+        {!canEdit && (
+          <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+            Editing is off; start <code>dendrite ui</code> on localhost or with --allow-edit.
+          </div>
+        )}
+        {edit.error && (
+          <div className="err" style={{ fontSize: 12, marginTop: 6 }}>
+            {String((edit.error as Error).message)}
+          </div>
+        )}
       </section>
     </>
   );

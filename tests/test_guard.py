@@ -40,6 +40,7 @@ def test_error_mode_fails_even_if_swallowed(project, monkeypatch, source):
     assert lab.db.find_success("x") == []
     with lab.db.ro() as conn:
         from sqlalchemy import select
+
         from dendrite.db import executions
 
         assert [r.status for r in conn.execute(select(executions.c.status))] == ["failed"]

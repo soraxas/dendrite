@@ -5,17 +5,24 @@ Real pipelines have a dozen or more steps, and many more with fan-out, but peopl
 ## What Changes
 
 - **Stages in code.** `dendrite.stage(name, description=None, color=None)` works two ways:
+
   - as a decorator on an ordinary function, so calling the function puts every step it calls in that stage
   - as a context manager (`with stage(...)`) inside a pipeline body
 
   Stages nest. `@artifact_task(stage=...)` gives a default for steps called outside any stage. Stages are display-only and never enter a signature.
+
 - **Recorded and parsed.**
+
   - Each node run records its stage path, and DAG and plan nodes carry it.
   - The static shape recognises `with stage(...)` blocks and `@stage` helper functions, so drafts and the Code view group by stage before anything runs.
+
 - **Overview in the UI.** Each stage is one card with its name, description, colour, a combined status and progress, and its step count. Edges between stages are merged.
+
   - Stages start collapsed (the overview). Each one expands in place, and nested stages show as cards inside.
   - A toolbar switch flips between the overview and all steps.
+
 - **Managed in the UI.** A per-pipeline *view*, stored in the database and never in code, can:
+
   - assign ungrouped steps to a stage
   - rename, describe or recolour stages, whether code-defined or UI-only
 
@@ -24,6 +31,7 @@ Real pipelines have a dozen or more steps, and many more with fan-out, but peopl
 ## Capabilities
 
 ### New Capabilities
+
 - `pipeline-stages`: stage declaration, recording, view overlays and the stage overview.
 
 ## Impact

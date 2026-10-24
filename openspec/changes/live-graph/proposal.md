@@ -1,6 +1,7 @@
 ## Why
 
 Watching a run was coarse. The page polled every second, and a long step showed only "running" until it finished: a 12 s blur gave no sign of how far it had got. Real pipelines also fan out, for example one clip per defect across 110 defects, which floods the graph with near-identical cards. And two kinds of dependency had no arrow at all:
+
 - **A configuring input.** The pipeline body reads a settings file and passes its values into steps.
 - **A planning step.** The body reads a step's result (a segment plan) and uses it to decide which steps to create.
 
@@ -26,9 +27,11 @@ Both appeared as isolated nodes.
 ## Capabilities
 
 ### New Capabilities
+
 - `live-updates`: step progress and pushed change events.
 
 ### Modified Capabilities
+
 - `lineage-ui`: fan-out groups, pipeline-read edges, re-click deselection, live indicator.
 
 ## Impact

@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import type { Lineage } from "../api";
 import { fmtDur, fmtSize, short } from "../format";
-import { Graph, mergeEdges, type GraphNode } from "./Graph";
+import { Graph, type GraphNode, mergeEdges } from "./Graph";
 import { LineageLegend } from "./Legend";
 import { nodeTypes } from "./nodes";
 
@@ -25,7 +25,11 @@ export function LineageView({ lineage, selected, onSelect, nameOf, back }: Props
       ...lineage.artifacts.map((a) => {
         const isFocus = a.hash === focus;
         const where = a.producer_node ? `Produced by ${a.producer_node}.` : "A source input — nothing produced it.";
-        const rel = isFocus ? "This is the result you are tracing." : a.role === "descendant" ? "Built from the traced result." : "Went into the traced result.";
+        const rel = isFocus
+          ? "This is the result you are tracing."
+          : a.role === "descendant"
+            ? "Built from the traced result."
+            : "Went into the traced result.";
         return {
           id: a.hash,
           type: "artifactNode",
@@ -41,7 +45,11 @@ export function LineageView({ lineage, selected, onSelect, nameOf, back }: Props
             hover: {
               title: `Data: ${a.label}`,
               body: `${rel} ${where}`,
-              facts: [["type", a.kind + (a.filename && a.filename !== a.label ? ` (${a.filename})` : "")], ["size", fmtSize(a.size)], ["id", short(a.hash, 12)]],
+              facts: [
+                ["type", a.kind + (a.filename && a.filename !== a.label ? ` (${a.filename})` : "")],
+                ["size", fmtSize(a.size)],
+                ["id", short(a.hash, 12)],
+              ],
               hint: "Click to preview it and see which experiments use it",
             },
           },
@@ -62,7 +70,10 @@ export function LineageView({ lineage, selected, onSelect, nameOf, back }: Props
             hover: {
               title: `Computation: ${x.node}`,
               body: `One actual run of the ${x.node} step${by ? `, first run by ${by}` : ""}.${dup ? " Other runs of this step produced the same data, so they appear side by side." : ""}`,
-              facts: [["took", fmtDur(x.finished_at != null ? x.finished_at - x.started_at : null) || "—"], ["run id", short(x.id, 12)]],
+              facts: [
+                ["took", fmtDur(x.finished_at != null ? x.finished_at - x.started_at : null) || "—"],
+                ["run id", short(x.id, 12)],
+              ],
               hint: "Click for its exact inputs and parameters",
             },
           },
@@ -75,7 +86,8 @@ export function LineageView({ lineage, selected, onSelect, nameOf, back }: Props
   const banner = (
     <div className="canvas-banner lineage">
       <span>
-        Tracing <b>{lineage.artifact.label}</b>: what produced it, and what was built from it, across <b>all experiments</b>.
+        Tracing <b>{lineage.artifact.label}</b>: what produced it, and what was built from it, across{" "}
+        <b>all experiments</b>.
       </span>
       {back && <button onClick={back.go}>Back to {back.label}</button>}
     </div>
@@ -84,13 +96,24 @@ export function LineageView({ lineage, selected, onSelect, nameOf, back }: Props
     return (
       <div className="lineage-mode" style={{ position: "absolute", inset: 0 }}>
         {banner}
-        <div className="empty" style={{ paddingTop: 96 }}>Nothing produced or used this yet — it is a source input.</div>
+        <div className="empty" style={{ paddingTop: 96 }}>
+          Nothing produced or used this yet — it is a source input.
+        </div>
       </div>
     );
   }
   return (
     <div className="lineage-mode" style={{ position: "absolute", inset: 0 }}>
-      <Graph nodes={nodes} edges={edges} nodeTypes={nodeTypes} variant="lineage" selectedId={selected} focusId={selected ?? focus} onSelect={onSelect} legend={<LineageLegend />} />
+      <Graph
+        nodes={nodes}
+        edges={edges}
+        nodeTypes={nodeTypes}
+        variant="lineage"
+        selectedId={selected}
+        focusId={selected ?? focus}
+        onSelect={onSelect}
+        legend={<LineageLegend />}
+      />
       {banner}
     </div>
   );

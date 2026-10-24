@@ -9,7 +9,7 @@ from dendrite.server import create_app
 
 from . import toy
 
-MODULE = '''\
+MODULE = """\
 from dendrite import artifact_task, pipeline
 
 HEADER = "kept"
@@ -26,7 +26,7 @@ def pipe(src):
 
 
 FOOTER = "kept"
-'''
+"""
 
 
 def load_pipeline(tmp_path):
