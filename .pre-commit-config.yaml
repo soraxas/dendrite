@@ -1,0 +1,82 @@
+# prek (https://github.com/j178/prek) workspace: these hooks check the whole repository;
+# ui/.pre-commit-config.yaml adds the TypeScript checks for ui/. Install once with `prek install`.
+default_install_hook_types: [pre-commit, pre-push]
+default_stages: [pre-commit, pre-push]
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+      - id: check-added-large-files
+        priority: 0
+        exclude: ^(uv\.lock|ui/package-lock\.json)$
+      - id: check-toml
+        priority: 0
+      - id: check-yaml
+        priority: 0
+        args: [--unsafe]
+      - id: check-merge-conflict
+        priority: 0
+      - id: destroyed-symlinks
+        priority: 0
+
+  - repo: https://github.com/astral-sh/uv-pre-commit
+    rev: 0.11.25
+    hooks:
+      - id: uv-lock
+        priority: 0
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.20
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/abravalheri/validate-pyproject
+    rev: v0.25
+    hooks:
+      - id: validate-pyproject
+        priority: 0
+
+  - repo: https://github.com/crate-ci/typos
+    rev: v1.47.2
+    hooks:
+      - id: typos
+        args: [--force-exclude]  # report only; never rewrite code
+
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.11.0.1
+    hooks:
+      - id: shellcheck
+
+  - repo: https://github.com/executablebooks/mdformat
+    rev: 1.0.0
+    hooks:
+      - id: mdformat
+        args: [--number]
+        priority: 1
+        exclude: ^\.claude/
+
+  # zizmor finds security problems in GitHub Actions workflows.
+  - repo: https://github.com/woodruffw/zizmor-pre-commit
+    rev: v1.26.1
+    hooks:
+      - id: zizmor
+        priority: 0
+
+  - repo: https://github.com/python-jsonschema/check-jsonschema
+    rev: 0.37.4
+    hooks:
+      - id: check-github-workflows
+        priority: 0
+
+  # Slow, so manual only: `prek run -a --hook-stage manual actionlint`.
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.12
+    hooks:
+      - id: actionlint
+        priority: 0
+        stages: [manual]

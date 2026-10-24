@@ -1,0 +1,25 @@
+# The ui/ project of the prek workspace (see the root .pre-commit-config.yaml, whose hooks
+# also check these files). Hooks run in ui/, with paths relative to it.
+repos:
+  - repo: https://github.com/biomejs/pre-commit
+    rev: v2.5.1
+    hooks:
+      - id: biome-check
+
+  - repo: local
+    hooks:
+      # Install dependencies when the manifest changes, before the checks that need them.
+      - id: npm-ci
+        name: Install UI dependencies
+        priority: 0
+        entry: npm ci --no-audit --no-fund
+        language: system
+        files: ^package(-lock)?\.json$
+        pass_filenames: false
+      - id: typecheck
+        name: TypeScript typecheck
+        priority: 1
+        entry: npm run --silent typecheck
+        language: system
+        types_or: [ts, tsx]
+        pass_filenames: false

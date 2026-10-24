@@ -27,6 +27,9 @@ env:
   PREFECT_SHA: 7d1688ff034a89a47c900c0e2951c78ff1979f0d
   DO_NOT_TRACK: "1"
 
+permissions:
+  contents: read
+
 jobs:
   pytest:
     name: pytest (${{ matrix.db }})
@@ -36,13 +39,15 @@ jobs:
       matrix:
         db: [sqlite, postgres]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false
       - name: Check out Prefect at the pinned commit
         # Blobless rather than shallow: versioningit reads Prefect's version from its git tags.
         run: |
           git clone --filter=blob:none --no-checkout https://github.com/PrefectHQ/prefect ../prefect
           git -C ../prefect checkout --quiet "$PREFECT_SHA"
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e  # v6.8.0
         with:
           python-version: "3.12"
       - run: uv sync --locked

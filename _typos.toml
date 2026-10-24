@@ -1,0 +1,9 @@
+[default.extend-words]
+anc = "anc"              # ancestor
+reacher = "reacher"      # storage: an experiment that reaches a blob
+reachers = "reachers"
+trian = "trian"          # deliberate misspellings in tests of the typo checks
+iteratons = "iteratons"
+
+[files]
+extend-exclude = ["uv.lock", "ui/package-lock.json"]

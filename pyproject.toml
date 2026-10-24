@@ -60,3 +60,12 @@ analytics_enabled = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+# pycodestyle errors, pyflakes, import order, pyupgrade, bugbear
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"] # the formatter owns line length
