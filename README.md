@@ -240,4 +240,4 @@ prek install                           # lint/format hooks (ruff, Biome, typos, 
 prek run --all-files                   # run them all now
 ```
 
-Design and requirements live in `openspec/`. CI runs only what a change touches. `python.yml` runs the tests on SQLite and Postgres, and `ui.yml` runs the UI tests and build. Docs-only changes run neither. `CLAUDE.md` describes the architecture in detail.
+Design and requirements live in `openspec/`. CI runs only what a change touches. `python.yml` runs the tests on SQLite and Postgres, and `ui.yml` runs the UI tests and build. Docs-only changes run neither. `lint.yml` runs the prek hooks on every push. `CLAUDE.md` describes the architecture in detail.

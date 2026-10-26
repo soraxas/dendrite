@@ -47,14 +47,14 @@ Postgres for tests comes from the session fixture `pg_url` in `conftest.py`:
 - **Isolation.** `pg_schema_url` gives each test its own schema and drops it afterwards.
 - **Whole suite.** `DENDRITE_TEST_DB=postgres` switches the shared `lab` fixture to Postgres. Tests that open a second `Lab` or call the CLI must pass `lab.settings.db_url` / `--db-url` along.
 
-CI is two path-filtered workflows, so a docs-only push runs nothing. `.github/workflows/python.yml` runs pytest on SQLite and on Postgres when `src/`, `tests/`, `examples/` or the packaging files change. `.github/workflows/ui.yml` runs the UI tests and build when `ui/` changes. It clones Prefect into `../prefect` at `PREFECT_SHA`, blobless rather than shallow because versioningit needs the tags; bump it together with your local `../prefect`.
+CI has two path-filtered test workflows, so a docs-only push runs no tests. `.github/workflows/python.yml` runs pytest on SQLite and on Postgres when `src/`, `tests/`, `examples/` or the packaging files change. `.github/workflows/ui.yml` runs the UI tests and build when `ui/` changes. It clones Prefect into `../prefect` at `PREFECT_SHA`, blobless rather than shallow because versioningit needs the tags; bump it together with your local `../prefect`.
 
 Linting and formatting run through [prek](https://github.com/j178/prek) in workspace mode, with two projects:
 
 - **Root, `.pre-commit-config.yaml`.** File hygiene, `uv-lock`, ruff check and format (settings in `[tool.ruff]`), validate-pyproject, typos (report only; allowed words in `_typos.toml`), shellcheck, mdformat, zizmor and the GitHub workflow schema. actionlint is `manual`. Root hooks also see `ui/` files.
 - **`ui/.pre-commit-config.yaml`.** Biome (`ui/biome.json`; the a11y rules that don't fit the hash-link UI are off) and `tsc` through `npm run typecheck`. Child hooks run inside `ui/` with paths relative to it.
 
-`prek install` sets up the pre-commit and pre-push hooks. Run `prek run --all-files` to check everything, and `prek run actionlint --hook-stage manual` for the workflows. CI doesn't run prek yet.
+`prek install` sets up the pre-commit and pre-push hooks. Run `prek run --all-files` to check everything, and `prek run actionlint --hook-stage manual` for the workflows. `.github/workflows/lint.yml` runs prek, including actionlint, on every push, skipping `uv-lock`: it would resolve against `../prefect`, and `uv sync --locked` in `python.yml` already checks the lock.
 
 Configuration env vars:
 

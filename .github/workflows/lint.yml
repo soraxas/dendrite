@@ -1,0 +1,32 @@
+name: lint
+
+# Every push: the hooks cover docs too (mdformat, typos), and they're quick.
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  prek:
+    name: prek
+    runs-on: ubuntu-latest
+    env:
+      # uv-lock resolves against ../prefect; python.yml's `uv sync --locked` checks the lock instead.
+      SKIP: uv-lock
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false
+      # Node for the ui project's hooks; its npm-ci hook installs node_modules before typecheck.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - uses: j178/prek-action@1382ad72dea72f9d53832f2bcb65b3e87a947204  # v3.0.1
+        with:
+          prek-version: "0.4.4"
+      - name: actionlint
+        run: prek run actionlint --hook-stage manual --all-files --show-diff-on-failure
