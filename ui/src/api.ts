@@ -286,6 +286,8 @@ export interface ArtifactDetail extends ArtifactRef {
   producer: Execution | null;
   experiments: Usage[];
   preview: Preview;
+  /** Remote stores only: larger files wait for "Load preview", since previewing downloads them. */
+  auto_preview_bytes: number | null;
 }
 
 export interface Diff {
@@ -468,3 +470,6 @@ export const api = {
   downloadUrl: (h: string, path?: string) =>
     `/api/artifacts/${encodeURIComponent(h)}/download${path === undefined ? "" : `?path=${encodeURIComponent(path)}`}`,
 };
+
+/** For links and media elements: a remote store may redirect them straight to the object. */
+export const direct = (url: string) => `${url}${url.includes("?") ? "&" : "?"}redirect=1`;

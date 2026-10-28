@@ -187,7 +187,7 @@ def clips(video, defects):
 
   Every deletion previews first. Lineage records are always kept, and anything deleted recomputes when needed.
 
-- **Files:** preview documents, images, media, archives and 3D models with [File Viewer](https://github.com/flyfish-dev/file-viewer). Its CAD runtime is AGPL-3.0, and the PowerPoint runtime has its own license; see the [upstream licenses](https://github.com/flyfish-dev/file-viewer#license).
+- **Files:** preview documents, images, media, archives and 3D models with [File Viewer](https://github.com/flyfish-dev/file-viewer). With a remote store, files over 8 MB load only when you ask, and downloads and video come straight from S3. File Viewer's CAD runtime is AGPL-3.0, and the PowerPoint runtime has its own license; see the [upstream licenses](https://github.com/flyfish-dev/file-viewer#license).
 
 The built UI ships inside the wheel, so using dendrite never needs Node.js.
 
@@ -214,6 +214,7 @@ Each run also publishes a Prefect markdown artifact, `dendrite-<exp id>`, so lin
 | `DENDRITE_ENV` | — | an environment fingerprint mixed into every signature, e.g. an image digest |
 | `DENDRITE_CHECK_READS` | `warn` | the undeclared-read guard: `warn`, `error` or `off` |
 | `DENDRITE_GC_GRACE` | `3600` | seconds during which clean-up skips freshly written objects |
+| `DENDRITE_PRESIGN` | `1` | downloads from S3 redirect to a short-lived signed URL; set `0` when browsers can't reach the store |
 
 For MinIO, or any S3-compatible store, pass storage options:
 

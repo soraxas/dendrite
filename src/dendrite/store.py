@@ -17,7 +17,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 from .hashing import canonical_json, sha256_bytes, sha256_file
 
@@ -54,6 +54,8 @@ class ArtifactRef:
 class ArtifactStore(ABC):
     """Blob backend. Subclasses implement raw object IO; packing logic is shared."""
 
+    remote = False  # objects live off this machine, so reading one costs a download
+
     def __init__(self, cache_dir: Path):
         self.cache_dir = Path(cache_dir)
 
@@ -71,6 +73,24 @@ class ArtifactStore(ABC):
 
     @abstractmethod
     def read_bytes(self, h: str) -> bytes: ...
+
+    @abstractmethod
+    def open_object(self, h: str) -> BinaryIO:
+        """A seekable binary stream of object ``h``, read on demand."""
+
+    def local_path(self, h: str) -> Path | None:
+        """A local file holding object ``h`` if one exists already, without downloading it."""
+        checkouts = self.cache_dir / "checkouts"
+        p = checkouts / f"preview-{h}" / "data"
+        if p.is_file():
+            return p
+        # A step's checkout of a file artifact: checkouts/<hash>/<filename>.
+        files = list((checkouts / h).iterdir()) if (checkouts / h).is_dir() else []
+        return files[0] if len(files) == 1 and files[0].is_file() else None
+
+    def signed_url(self, h: str, filename: str, expires: int) -> str | None:
+        """A time-limited URL a browser can fetch object ``h`` from directly, if the backend can sign."""
+        return None
 
     @abstractmethod
     def delete(self, h: str) -> None: ...
@@ -131,10 +151,12 @@ class ArtifactStore(ABC):
     def _manifest_bytes(self, h: str) -> bytes:
         return self.read_bytes(h)
 
-    def verify(self, ref: ArtifactRef) -> bool:
+    def verify(self, ref: ArtifactRef, deep: bool = True) -> bool:
+        """Whether every blob of ``ref`` is present. ``deep=False`` checks only a directory's
+        manifest, not each member: a display hint, never enough for a cache hit."""
         if not self.has(ref.hash):
             return False
-        if ref.kind == "dir":
+        if ref.kind == "dir" and deep:
             return all(self.has(h) for _, h, _ in self.manifest(ref))
         return True
 
@@ -236,6 +258,13 @@ class LocalStore(ArtifactStore):
     def read_bytes(self, h: str) -> bytes:
         return self._obj(h).read_bytes()
 
+    def open_object(self, h: str) -> BinaryIO:
+        return open(self._obj(h), "rb")
+
+    def local_path(self, h: str) -> Path | None:
+        p = self._obj(h)
+        return p if p.is_file() else None
+
     def delete(self, h: str) -> None:
         p = self._obj(h)
         if p.exists():
@@ -268,6 +297,7 @@ class FsspecStore(ArtifactStore):
         self._url = url.rstrip("/")
         self.fs, self.base = fsspec.core.url_to_fs(self._url, **storage_options)
         self.base = self.base.rstrip("/")
+        self.remote = not ({"file", "local"} & _protocols(self.fs))
 
     @property
     def url(self) -> str:
@@ -288,6 +318,18 @@ class FsspecStore(ArtifactStore):
 
     def read_bytes(self, h: str) -> bytes:
         return self.fs.cat_file(self._obj(h))
+
+    def open_object(self, h: str) -> BinaryIO:
+        return self.fs.open(self._obj(h), "rb")
+
+    def signed_url(self, h: str, filename: str, expires: int) -> str | None:
+        kwargs: dict[str, Any] = {}
+        if "s3" in _protocols(self.fs):  # name the download; S3 passes these to GetObject
+            kwargs["ResponseContentDisposition"] = content_disposition(filename)
+        try:
+            return self.fs.sign(self._obj(h), expiration=expires, **kwargs)
+        except NotImplementedError:
+            return None
 
     def delete(self, h: str) -> None:
         if self.fs.exists(self._obj(h)):
@@ -324,6 +366,17 @@ class FsspecStore(ArtifactStore):
         tmp.write_bytes(data)
         os.replace(tmp, local)
         return data
+
+
+def _protocols(fs: Any) -> set[str]:
+    p = fs.protocol
+    return {p} if isinstance(p, str) else set(p)
+
+
+def content_disposition(filename: str, kind: str = "attachment") -> str:
+    from urllib.parse import quote
+
+    return f"{kind}; filename*=utf-8''{quote(filename)}"
 
 
 def _mtime(info: dict[str, Any]) -> float:

@@ -64,43 +64,51 @@ Configuration env vars:
 - `DENDRITE_ENV`, which is mixed into every signature (for example an image digest)
 - `DENDRITE_CHECK_READS`: `warn` (default), `error` or `off`, for the undeclared-read guard
 - `DENDRITE_GC_GRACE`: seconds (default 3600) during which GC skips freshly written objects
+- `DENDRITE_PRESIGN`: `0` stops downloads from a remote store redirecting to signed URLs (when browsers can't reach the store)
 
 ## Architecture
 
 The flow of a run spans several modules in `src/dendrite/`:
 
-01. **`experiment.py`:**
-    - `Lab` bundles `Metadata` (db) and an `ArtifactStore`.
-    - `Experiment.run()` registers a `RunState` in `runtime._RUNS` and calls the pipeline's Prefect flow with `(run_id, input refs)`.
-    - `Pipeline._body` sets the `_active_run` contextvar, calls the user function, waits on any `.submit()` futures, and publishes a Prefect markdown summary artifact.
-02. **`task.py`, `ArtifactTask`.** Calling a node inside a pipeline runs `_enqueue`, which writes a `queued` node_run. It then invokes a Prefect task (`cache_policy=NO_CACHE`), which runs `_execute`. That method does the following:
-    - **Pins:** pinned nodes short-circuit and are recorded as `pinned`.
-    - **Splitting arguments:** `_split` separates artifact inputs (any argument containing an `ArtifactRef`, including nested in lists or dicts) from params. Param precedence is experiment `params[node][arg]`, then the call-site value, then the function default.
-    - **Signature:** it is `sha256(canonical_json(spec(...)))`.
-    - **Resolving:** `_resolve` looks for a verified cache hit, then takes a lease, double-checks the cache, executes under a heartbeat, and calls `db.publish`.
-    - **Computing:** `_compute` materialises inputs (`store.load` returns a `Path` or an unpickled value). It then runs the function in a `workdir()`. Returned `Path`s are stored as file/dir artifacts and anything else is pickled as a `value` artifact.
-03. **`db.py`.** SQLAlchemy Core tables, with no ORM and no Alembic (`create_all` on connect).
-    - The key separation: `experiments` → `node_runs` (per experiment) → `executions` (physical computations shared across experiments) → `execution_inputs` / `execution_outputs` (lineage edges) → `artifacts`.
-    - `leases` holds one row per signature that is currently computing.
-    - `publish()` commits the execution's success, its edges, metrics, the node_run and the lease release in **one transaction**.
-    - SQLite uses two engines: a writer that issues `BEGIN IMMEDIATE`, and a reader. This avoids WAL lock-upgrade `SQLITE_BUSY`.
-    - Ancestor and descendant queries are recursive CTEs written in raw SQL that works on both SQLite and Postgres.
-04. **`store.py`.** A content-addressed blob store laid out as `objects/<h[:2]>/<h[2:]>`.
-    - A directory is a manifest blob, and the directory's hash is that manifest's hash.
-    - `LocalStore` uses atomic `os.replace` and hardlinked checkouts. `FsspecStore` handles S3, MinIO, GCS and `memory://`, with a local checkout cache.
-05. **`server.py` + `ui/`.**
-    - A FastAPI JSON API (`/api/experiments`, `/api/experiments/{id}/dag`, `/api/diff`, `/api/artifacts/{hash}[/lineage|/download]`, `/api/executions/{id}`, `/api/info`).
-    - **Shipping the UI:**
-      - `ui/` is a React + TS + Vite app (React Flow + elkjs + TanStack Query).
-      - It builds into `src/dendrite/ui/dist/`, which is git-ignored and packaged through `[tool.hatch.build] artifacts`.
-      - `hatch_build.py` refuses sdist or wheel builds without the bundle. Editable builds and `DENDRITE_SKIP_UI_CHECK=1` are exempt.
-      - `create_app` mounts `dist/` with `StaticFiles` *after* the API routes when the bundle exists. Without it, `/` is a short "UI isn't built" page and only the API is served (`/api/info` reports `ui: "missing"`).
-    - **Layout:**
-      - `ui/src/layout.ts` runs ELK in a web worker. It caches positions per graph shape (node ids plus edges), so status polls never re-lay-out.
-      - Edges are drawn from ELK's orthogonal routes by the custom `elk` edge in `Graph.tsx`.
-    - **Selection** lives in the hash URL (`?sel=node:|input:|artifact:|exec:<id>`). `App.tsx` derives both the graph highlight and the detail panel from it.
-    - **Labels:** lineage artifact labels (`label`, `producer_node`, `role`) and structured usage `roles` are computed in Python (`Lab.lineage`, `Metadata.experiments_using_artifact`), not in the UI.
-    - **Headless screenshots:** headless Chrome's `--virtual-time-budget` stalls the ELK worker. Use `uv run python scripts/screenshot.py OUT.png URL [wait_s]` instead, which captures in real time over CDP and prints console errors.
+1. **`experiment.py`:**
+   - `Lab` bundles `Metadata` (db) and an `ArtifactStore`.
+   - `Experiment.run()` registers a `RunState` in `runtime._RUNS` and calls the pipeline's Prefect flow with `(run_id, input refs)`.
+   - `Pipeline._body` sets the `_active_run` contextvar, calls the user function, waits on any `.submit()` futures, and publishes a Prefect markdown summary artifact.
+2. **`task.py`, `ArtifactTask`.** Calling a node inside a pipeline runs `_enqueue`, which writes a `queued` node_run. It then invokes a Prefect task (`cache_policy=NO_CACHE`), which runs `_execute`. That method does the following:
+   - **Pins:** pinned nodes short-circuit and are recorded as `pinned`.
+   - **Splitting arguments:** `_split` separates artifact inputs (any argument containing an `ArtifactRef`, including nested in lists or dicts) from params. Param precedence is experiment `params[node][arg]`, then the call-site value, then the function default.
+   - **Signature:** it is `sha256(canonical_json(spec(...)))`.
+   - **Resolving:** `_resolve` looks for a verified cache hit, then takes a lease, double-checks the cache, executes under a heartbeat, and calls `db.publish`.
+   - **Computing:** `_compute` materialises inputs (`store.load` returns a `Path` or an unpickled value). It then runs the function in a `workdir()`. Returned `Path`s are stored as file/dir artifacts and anything else is pickled as a `value` artifact.
+3. **`db.py`.** SQLAlchemy Core tables, with no ORM and no Alembic (`create_all` on connect).
+   - The key separation: `experiments` → `node_runs` (per experiment) → `executions` (physical computations shared across experiments) → `execution_inputs` / `execution_outputs` (lineage edges) → `artifacts`.
+   - `leases` holds one row per signature that is currently computing.
+   - `publish()` commits the execution's success, its edges, metrics, the node_run and the lease release in **one transaction**.
+   - SQLite uses two engines: a writer that issues `BEGIN IMMEDIATE`, and a reader. This avoids WAL lock-upgrade `SQLITE_BUSY`.
+   - Ancestor and descendant queries are recursive CTEs written in raw SQL that works on both SQLite and Postgres.
+4. **`store.py`.** A content-addressed blob store laid out as `objects/<h[:2]>/<h[2:]>`.
+   - A directory is a manifest blob, and the directory's hash is that manifest's hash.
+   - `LocalStore` uses atomic `os.replace` and hardlinked checkouts. `FsspecStore` handles S3, MinIO, GCS and `memory://`, with a local checkout cache.
+5. **`server.py` + `ui/`.**
+   - A FastAPI JSON API (`/api/experiments`, `/api/experiments/{id}/dag`, `/api/diff`, `/api/artifacts/{hash}[/lineage|/download]`, `/api/executions/{id}`, `/api/info`).
+   - **Shipping the UI:**
+     - `ui/` is a React + TS + Vite app (React Flow + elkjs + TanStack Query).
+     - It builds into `src/dendrite/ui/dist/`, which is git-ignored and packaged through `[tool.hatch.build] artifacts`.
+     - `hatch_build.py` refuses sdist or wheel builds without the bundle. Editable builds and `DENDRITE_SKIP_UI_CHECK=1` are exempt.
+     - `create_app` mounts `dist/` with `StaticFiles` *after* the API routes when the bundle exists. Without it, `/` is a short "UI isn't built" page and only the API is served (`/api/info` reports `ui: "missing"`).
+   - **Layout:**
+     - `ui/src/layout.ts` runs ELK in a web worker. It caches positions per graph shape (node ids plus edges), so status polls never re-lay-out.
+     - Edges are drawn from ELK's orthogonal routes by the custom `elk` edge in `Graph.tsx`.
+   - **Downloads and previews.** `/api/artifacts/{h}/download` never downloads a remote object whole before replying.
+   - It serves a local file if one exists: a `LocalStore` blob, or an existing checkout (`ArtifactStore.local_path`).
+   - Otherwise it streams `open_object` in chunks and honours a single `Range`.
+   - With `?redirect=1` and a store that can sign (S3), it answers 307 to a presigned URL. The UI adds it (`direct()` in `api.ts`) only for links and `<video>`/`<audio>`, which don't need CORS; the in-page viewer's fetch always goes through the server.
+   - On remote stores the detail view checks only a directory's manifest (`verify(deep=False)`) and sends `auto_preview_bytes`. Larger files wait for "Load preview". Cache hits still verify every member.
+
+- **Selection** lives in the hash URL (`?sel=node:|input:|artifact:|exec:<id>`). `App.tsx` derives both the graph highlight and the detail panel from it.
+  \- **Labels:** lineage artifact labels (`label`, `producer_node`, `role`) and structured usage `roles` are computed in Python (`Lab.lineage`, `Metadata.experiments_using_artifact`), not in the UI.
+  \- **Headless screenshots:** headless Chrome's `--virtual-time-budget` stalls the ELK worker. Use `uv run python scripts/screenshot.py OUT.png URL [wait_s]` instead, which captures in real time over CDP and prints console errors.
+
 06. **`viz.py` / `cli.py`.** Mermaid renderers and the argparse CLI.
 07. **Drafts and plans.**
     - **Drafts.** `status='draft'` is the only editable experiment state.

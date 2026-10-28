@@ -1,5 +1,5 @@
 import { Component, lazy, type ReactNode, Suspense, useEffect, useRef, useState } from "react";
-import { type ArtifactDetail, api } from "../api";
+import { type ArtifactDetail, api, direct } from "../api";
 import { fmtSize } from "../format";
 import { ArtifactIcon, artifactCategory } from "./ArtifactIcon";
 
@@ -7,6 +7,8 @@ const FileViewer = lazy(() => import("./FileViewer"));
 const DIRECTORY_PAGE_SIZE = 10;
 
 type PreviewSource = { url: string; filename: string; fallbackText?: string };
+/** A file preview; `deferred` waits for the user, because loading it downloads `size` bytes. */
+type FileSource = PreviewSource & { size?: number; deferred?: boolean };
 
 function Unavailable({ url, fallbackText }: { url: string; fallbackText?: string }) {
   return (
@@ -16,7 +18,7 @@ function Unavailable({ url, fallbackText }: { url: string; fallbackText?: string
       ) : (
         <p>Unable to preview this file. Its format may be unsupported or the file may be damaged.</p>
       )}
-      <a href={url}>Download file</a>
+      <a href={direct(url)}>Download file</a>
     </div>
   );
 }
@@ -68,12 +70,12 @@ function MediaPreview({ url, filename }: PreviewSource) {
     <div className="native-media">
       {audioOnly && (
         <div className="media-notice" role="status">
-          Video playback is unavailable in this browser. Audio may still play. <a href={url}>Download file</a>
+          Video playback is unavailable in this browser. Audio may still play. <a href={direct(url)}>Download file</a>
         </div>
       )}
       <video
         className="media-player"
-        src={url}
+        src={direct(url)}
         controls
         playsInline
         preload="metadata"
@@ -84,13 +86,20 @@ function MediaPreview({ url, filename }: PreviewSource) {
     </div>
   ) : (
     <div className="audio-preview">
-      <audio src={url} controls preload="metadata" aria-label={`Preview ${filename}`} onError={() => setFailed(true)} />
+      <audio
+        src={direct(url)}
+        controls
+        preload="metadata"
+        aria-label={`Preview ${filename}`}
+        onError={() => setFailed(true)}
+      />
     </div>
   );
 }
 
-function FilePreview({ url, filename, fallbackText }: PreviewSource) {
+function FilePreview({ url, filename, fallbackText, size, deferred = false }: FileSource) {
   const [expanded, setExpanded] = useState(false);
+  const [loaded, setLoaded] = useState(!deferred);
   const dialog = useRef<HTMLDialogElement>(null);
   const category = artifactCategory({ filename });
   const media = (category === "video" || category === "audio") && !/\.midi?$/i.test(filename);
@@ -109,9 +118,16 @@ function FilePreview({ url, filename, fallbackText }: PreviewSource) {
         <span className="mono" title={filename}>
           {filename}
         </span>
-        <button onClick={() => setExpanded(true)}>Expand preview</button>
+        {loaded && <button onClick={() => setExpanded(true)}>Expand preview</button>}
       </div>
-      <div className={`file-preview ${media ? `media-preview ${category}` : ""}`}>{!expanded && content()}</div>
+      {loaded ? (
+        <div className={`file-preview ${media ? `media-preview ${category}` : ""}`}>{!expanded && content()}</div>
+      ) : (
+        <div className="preview-unavailable preview-deferred" role="status">
+          <p>{size !== undefined && `${fmtSize(size)} in remote storage. `}Previewing it downloads the file.</p>
+          <button onClick={() => setLoaded(true)}>Load preview</button> <a href={direct(url)}>Download file</a>
+        </div>
+      )}
       {expanded && (
         <dialog
           ref={dialog}
@@ -121,7 +137,7 @@ function FilePreview({ url, filename, fallbackText }: PreviewSource) {
         >
           <div className="file-preview-heading">
             <span className="mono">{filename}</span>
-            <a href={url}>Download file</a>
+            <a href={direct(url)}>Download file</a>
             <button onClick={() => setExpanded(false)} autoFocus>
               Close preview
             </button>
@@ -138,6 +154,7 @@ function DirectoryPreview({ artifact }: { artifact: ArtifactDetail }) {
   const [limit, setLimit] = useState(DIRECTORY_PAGE_SIZE);
   const preview = artifact.preview;
   if (preview.type !== "manifest") return null;
+  const selected = path === null ? undefined : preview.entries.find((e) => e.path === path);
   return (
     <>
       <table>
@@ -179,10 +196,21 @@ function DirectoryPreview({ artifact }: { artifact: ArtifactDetail }) {
           Showing the first {preview.entries.length} of {preview.count} files.
         </p>
       )}
-      {path && <FilePreview key={path} url={api.downloadUrl(artifact.hash, path)} filename={path.split("/").at(-1)!} />}
+      {selected && (
+        <FilePreview
+          key={selected.path}
+          url={api.downloadUrl(artifact.hash, selected.path)}
+          filename={selected.path.split("/").at(-1)!}
+          size={selected.size}
+          deferred={deferPreview(artifact, selected.size)}
+        />
+      )}
     </>
   );
 }
+
+const deferPreview = (a: ArtifactDetail, size: number | undefined) =>
+  a.auto_preview_bytes != null && (size ?? Number.POSITIVE_INFINITY) > a.auto_preview_bytes;
 
 export function ArtifactPreview({ artifact: a }: { artifact: ArtifactDetail }) {
   if (!a.present || a.preview.type === "missing") return <span className="err">Blob missing from store!</span>;
@@ -192,6 +220,8 @@ export function ArtifactPreview({ artifact: a }: { artifact: ArtifactDetail }) {
         key={a.hash}
         url={api.downloadUrl(a.hash)}
         filename={a.filename ?? a.hash}
+        size={a.size}
+        deferred={deferPreview(a, a.size)}
         fallbackText={a.preview.type === "text" ? a.preview.text : undefined}
       />
     );

@@ -66,12 +66,12 @@ def test_directory_preview_loads_only_the_selected_blob(lab, tmp_path, monkeypat
     client = TestClient(create_app(lab))
     response = client.get(f"/api/artifacts/{ref.hash}/download", params={"path": "small.txt"})
     assert response.status_code == 200 and response.text == "small"
-    assert loaded == [members["small.txt"]]
-    # A missing sibling must not prevent previewing this file or trigger extra checkouts.
+    assert loaded == []  # a local blob is served in place: no checkout of it or its siblings
+    # A missing sibling must not prevent previewing this file or trigger checkouts.
     lab.store.delete(members["large.bin"])
     response = client.get(f"/api/artifacts/{ref.hash}/download", params={"path": "small.txt"})
     assert response.status_code == 200 and response.text == "small"
-    assert loaded == [members["small.txt"]]
+    assert loaded == []
 
 
 def test_deleted_member_cannot_be_served_from_preview_cache(lab, tmp_path):

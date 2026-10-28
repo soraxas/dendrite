@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import mimetypes
+import os
 import pickle
+import re
 import threading
 import time
 from importlib import resources
@@ -13,7 +16,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -21,10 +24,14 @@ from . import runtime
 from .experiment import _PIPELINES, Experiment, Lab, NotADraft, _ref_dict
 from .sources import SourceConflict, disk_status, write_source
 from .storage import EvictRefused, StorageBusy
-from .store import ArtifactRef
+from .store import ArtifactRef, ArtifactStore, content_disposition
 from .viz import lineage_mermaid, mermaid, tree_mermaid
 
 PREVIEW_BYTES = 64 * 1024
+# Remote stores: files above this wait for "Load preview", because previewing downloads them.
+AUTO_PREVIEW_BYTES = 8 * 1024 * 1024
+SIGNED_URL_SECONDS = 15 * 60
+STREAM_CHUNK = 1024 * 1024
 UI_DIR = Path(str(resources.files("dendrite") / "ui"))
 
 
@@ -57,9 +64,9 @@ def _artifact(lab: Lab, key: str) -> ArtifactRef:
         raise HTTPException(404, f"no artifact {key!r}") from None
 
 
-def _preview(lab: Lab, ref: ArtifactRef) -> dict[str, Any]:
+def _preview(lab: Lab, ref: ArtifactRef, present: bool) -> dict[str, Any]:
     store = lab.store
-    if not store.verify(ref):
+    if not present:
         return {"type": "missing"}
     if ref.kind == "dir":
         entries = store.manifest(ref)
@@ -78,6 +85,38 @@ def _preview(lab: Lab, ref: ArtifactRef) -> dict[str, Any]:
         return {"type": "text", "text": data.decode("utf-8")}
     except UnicodeDecodeError:
         return {"type": "binary"}
+
+
+def _stream(store: ArtifactStore, h: str, size: int, name: str, media_type: str, range_header: str | None):
+    """Stream object ``h`` from the store, or the single byte range a media player asked for."""
+    start, end, status = 0, size - 1, 200
+    if m := re.fullmatch(r"bytes=(\d*)-(\d*)", (range_header or "").strip()):
+        first, last = m.groups()
+        if first:
+            start, end = int(first), min(int(last), size - 1) if last else size - 1
+        elif last:
+            start = max(0, size - int(last))
+        if (first or last) and start <= end:
+            status = 206
+        elif first or last:
+            return Response(status_code=416, headers={"Content-Range": f"bytes */{size}"})
+
+    def body():
+        with store.open_object(h) as f:
+            f.seek(start)
+            left = end - start + 1
+            while left > 0 and (chunk := f.read(min(STREAM_CHUNK, left))):
+                left -= len(chunk)
+                yield chunk
+
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Content-Length": str(max(0, end - start + 1)),
+        "Content-Disposition": content_disposition(name),
+    }
+    if status == 206:
+        headers["Content-Range"] = f"bytes {start}-{end}/{size}"
+    return StreamingResponse(body(), status_code=status, headers=headers, media_type=media_type)
 
 
 class SourceEdit(BaseModel):
@@ -172,9 +211,17 @@ def _display_path(file: str | None) -> str | None:
         return file
 
 
-def create_app(lab: Lab | None = None, ui_dir: Path = UI_DIR, allow_edit: bool = False) -> FastAPI:
-    """``allow_edit`` lets the UI write edited step source back to its file (see sources.py)."""
+def create_app(
+    lab: Lab | None = None, ui_dir: Path = UI_DIR, allow_edit: bool = False, presign: bool | None = None
+) -> FastAPI:
+    """``allow_edit`` lets the UI write edited step source back to its file (see sources.py).
+
+    ``presign`` (default: ``DENDRITE_PRESIGN``, on unless ``0``) lets downloads from a remote
+    store redirect to a signed URL. Turn it off when browsers can't reach the store's endpoint.
+    """
     lab = lab or Lab()
+    if presign is None:
+        presign = os.environ.get("DENDRITE_PRESIGN", "1") != "0"
     mode = ui_mode(ui_dir)
     app = FastAPI(title="dendrite", version="0.1.0")
     app.state.lab = lab
@@ -460,12 +507,15 @@ def create_app(lab: Lab | None = None, ui_dir: Path = UI_DIR, allow_edit: bool =
     def artifact(key: str) -> dict[str, Any]:
         ref = _artifact(lab, key)
         producer = lab.db.producer_of(ref.hash)
+        # One request per member is too slow on S3 for a page view; downloads still 410 a missing one.
+        present = lab.store.verify(ref, deep=not lab.store.remote)
         return {
             **_ref_dict(ref),
-            "present": lab.store.verify(ref),
+            "present": present,
             "producer": lab.db.execution(producer) if producer else None,
             "experiments": lab.db.experiments_using_artifact(ref.hash),
-            "preview": _preview(lab, ref),
+            "preview": _preview(lab, ref, present),
+            "auto_preview_bytes": AUTO_PREVIEW_BYTES if lab.store.remote else None,
         }
 
     @app.get("/api/artifacts/{key}/lineage")
@@ -475,23 +525,35 @@ def create_app(lab: Lab | None = None, ui_dir: Path = UI_DIR, allow_edit: bool =
         return g
 
     @app.get("/api/artifacts/{key}/download")
-    def download(key: str, path: str | None = None):
+    def download(request: Request, key: str, path: str | None = None, redirect: bool = False):
+        """Serve a file artifact or a directory member.
+
+        Local blobs are served from disk. Remote ones stream as they're read, honouring byte
+        ranges, so nothing is downloaded whole first. With ``redirect`` (links and media, which
+        don't need CORS) a store that can sign sends the browser straight to the object.
+        """
         ref = _artifact(lab, key)
         if ref.kind == "dir" and path is not None:
             if not lab.store.has(ref.hash):
                 raise HTTPException(410, "artifact blob is missing from the store")
             # Match the manifest before touching the filesystem; arbitrary paths are never served.
-            member = next((h for p, h, _ in lab.store.manifest(ref) if p == path), None)
+            member = next(((h, s) for p, h, s in lab.store.manifest(ref) if p == path), None)
             if member is None:
                 raise HTTPException(404, "no such file in the directory artifact")
-            if not lab.store.has(member):
-                raise HTTPException(410, "artifact blob is missing from the store")
-            return FileResponse(lab.store.materialize_file(member), filename=Path(path).name)
-        if ref.kind != "file":
+            h, size, name = member[0], member[1], Path(path).name
+        elif ref.kind == "file":
+            h, size, name = ref.hash, ref.size, ref.filename or ref.hash
+        else:
             raise HTTPException(400, "only file artifacts can be downloaded")
-        if not lab.store.verify(ref):
+        if not lab.store.has(h):
             raise HTTPException(410, "artifact blob is missing from the store")
-        return FileResponse(lab.store.load(ref), filename=ref.filename or ref.hash)
+        media_type = mimetypes.guess_type(name)[0] or "application/octet-stream"
+        local = lab.store.local_path(h)
+        if local is not None:
+            return FileResponse(local, filename=name, media_type=media_type)
+        if redirect and presign and (url := lab.store.signed_url(h, name, SIGNED_URL_SECONDS)):
+            return RedirectResponse(url, status_code=307)
+        return _stream(lab.store, h, size, name, media_type, request.headers.get("range"))
 
     @app.get("/api/executions/{exec_id}")
     def execution(exec_id: str) -> dict[str, Any]:

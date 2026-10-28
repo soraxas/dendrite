@@ -6,6 +6,7 @@ import {
 } from "@file-viewer/core";
 import Viewer, { fileViewerFullPreset, type ViewerOptions } from "@file-viewer/react-full";
 import { useMemo } from "react";
+import { direct } from "../api";
 
 const registry = createRendererRegistry(
   collectFileViewerRendererPlugins(fileViewerFullPreset).flatMap((plugin) => plugin.definitions ?? []),
@@ -28,7 +29,7 @@ export default function FileViewer({
     return (
       <div className="preview-unavailable">
         <pre>{fallbackText}</pre>
-        <a href={url}>Download file</a>
+        <a href={direct(url)}>Download file</a>
       </div>
     );
   }

@@ -36,6 +36,7 @@ const artifact = (over: Partial<ArtifactDetail> = {}): ArtifactDetail => ({
   producer: null,
   experiments: [],
   preview: { type: "too_large" },
+  auto_preview_bytes: null,
   ...over,
 });
 
@@ -59,7 +60,7 @@ it.each([
   await screen.findByRole("button", { name: "Expand preview" });
   const video = container.querySelector("video")!;
   expect(video).toBeTruthy();
-  expect(video.getAttribute("src")).toBe("/api/artifacts/abc123/download");
+  expect(video.getAttribute("src")).toBe("/api/artifacts/abc123/download?redirect=1");
   expect(video.preload).toBe("metadata");
   expect(video.controls).toBe(true);
   expect(screen.queryByText(`Viewing ${filename}`)).toBeNull();
@@ -129,7 +130,7 @@ it("keeps a download available when the renderer cannot preview a file", async (
   fireEvent.click(await screen.findByRole("button", { name: "Simulate renderer failure" }));
   expect(await screen.findByText(/Unable to preview this file/)).toBeTruthy();
   expect(screen.getByRole("link", { name: "Download file" }).getAttribute("href")).toBe(
-    "/api/artifacts/abc123/download",
+    "/api/artifacts/abc123/download?redirect=1",
   );
 });
 
@@ -169,4 +170,45 @@ it("starts with ten directory files and reveals more in batches", async () => {
   expect(screen.getAllByRole("button", { name: /^frame_/ })).toHaveLength(10);
   fireEvent.click(screen.getByRole("button", { name: "frame_000000.png" }));
   expect(await screen.findByText("Viewing frame_000000.png")).toBeTruthy();
+});
+
+it("waits for a click before previewing a large file from a remote store", async () => {
+  setup(artifact({ filename: "splats.ply", size: 2 * 1024 ** 3, auto_preview_bytes: 8_000_000 }));
+  const load = await screen.findByRole("button", { name: "Load preview" });
+  expect(screen.getByText(/2\.00 GB in remote storage/)).toBeTruthy();
+  expect(screen.queryByText("Viewing splats.ply")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Expand preview" })).toBeNull();
+  expect(screen.getByRole("link", { name: "Download file" }).getAttribute("href")).toBe(
+    "/api/artifacts/abc123/download?redirect=1",
+  );
+  fireEvent.click(load);
+  expect(await screen.findByText("Viewing splats.ply")).toBeTruthy();
+});
+
+it("previews small remote files straight away", async () => {
+  setup(artifact({ size: 1000, auto_preview_bytes: 8_000_000 }));
+  expect(await screen.findByText("Viewing report.pdf")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Load preview" })).toBeNull();
+});
+
+it("defers large directory members from a remote store by their own size", async () => {
+  setup(
+    artifact({
+      kind: "dir",
+      filename: "out",
+      auto_preview_bytes: 8_000_000,
+      preview: {
+        type: "manifest",
+        count: 2,
+        entries: [
+          { path: "small.txt", hash: "m1", size: 20 },
+          { path: "big.mp4", hash: "m2", size: 900_000_000 },
+        ],
+      },
+    }),
+  );
+  fireEvent.click(await screen.findByRole("button", { name: "small.txt" }));
+  expect(await screen.findByText("Viewing small.txt")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "big.mp4" }));
+  expect(await screen.findByRole("button", { name: "Load preview" })).toBeTruthy();
 });

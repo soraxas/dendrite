@@ -1,6 +1,6 @@
 // Detail panel: always describes exactly the selected graph item (selection lives in the URL).
 import { type ReactNode, useState } from "react";
-import { type ArtifactRef, api, type Dag, type DagNode, type PlanNode, type Usage } from "../api";
+import { type ArtifactRef, api, type Dag, type DagNode, direct, type PlanNode, type Usage } from "../api";
 import { EXPERIMENT_STATUS, PLAN, STATUS, statusLabel } from "../copy";
 import { type FanoutGroup, summarize, summarizePlan } from "../fanout";
 import { describeRoles, flatten, fmtDur, fmtSize, fmtTime, fmtVal, short } from "../format";
@@ -581,7 +581,7 @@ export function ArtifactDetailPanel({
             </button>
           )}
           {a.kind === "file" && a.present && (
-            <a href={api.downloadUrl(a.hash)}>
+            <a href={direct(api.downloadUrl(a.hash))}>
               <button>Download</button>
             </a>
           )}
