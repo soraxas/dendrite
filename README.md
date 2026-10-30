@@ -204,6 +204,24 @@ The built UI ships inside the wheel, so using dendrite never needs Node.js.
 
 Each run also publishes a Prefect markdown artifact, `dendrite-<exp id>`, so lineage shows in the Prefect UI too.
 
+## Sharing results with a team
+
+Run a dendrite server, and everyone in a project shares one cache: what one person computed, the next person reuses, downloading only what their steps read. The server owns Postgres and the bucket. People sign in through GitHub or any OpenID Connect provider, and nobody else needs database or bucket credentials.
+
+```bash
+dendrite init --server https://lineage.example.com --project recon   # writes dendrite.toml; commit it
+python run.py                                                         # first run: sign in, then it runs
+```
+
+Nothing in the pipeline changes: `Lab()` finds `dendrite.toml`.
+
+- **Uploads** go straight to the bucket through presigned URLs, and only for blobs the project doesn't already have.
+- **Upload checks:** S3 and MinIO check each upload's SHA-256 against its content address.
+- **Access:** each project has viewers, runners and admins, and the UI shows who ran what.
+- **CI** uses a scoped token: `dendrite token create --project recon --role runner`.
+
+The server is `dendrite server run --config server.toml`: a FastAPI app plus Postgres and a bucket. [`examples/team`](examples/team) runs one on your machine with Docker, end to end.
+
 ## Configuration
 
 | Variable | Default | |
@@ -214,6 +232,8 @@ Each run also publishes a Prefect markdown artifact, `dendrite-<exp id>`, so lin
 | `DENDRITE_ENV` | — | an environment fingerprint mixed into every signature, e.g. an image digest |
 | `DENDRITE_CHECK_READS` | `warn` | the undeclared-read guard: `warn`, `error` or `off` |
 | `DENDRITE_GC_GRACE` | `3600` | seconds during which clean-up skips freshly written objects |
+| `DENDRITE_SERVER`, `DENDRITE_PROJECT` | — | record to a dendrite server instead (also read from `dendrite.toml`) |
+| `DENDRITE_TOKEN` | — | a server token for CI; people use `dendrite login` instead |
 | `DENDRITE_PRESIGN` | `1` | downloads from S3 redirect to a short-lived signed URL; set `0` when browsers can't reach the store |
 
 For MinIO, or any S3-compatible store, pass storage options:

@@ -2,6 +2,9 @@ import { cleanup, fireEvent, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { type ArtifactDetail, api } from "../api";
 import { renderWithQuery } from "../test/render";
+
+const abs = (path: string) => new URL(path, document.baseURI).href;
+
 import { ArtifactDetailPanel, type Nav } from "./DetailPanel";
 
 // Render engines need browser workers/canvas; exercise our selection and error handling here.
@@ -48,7 +51,7 @@ function setup(a: ArtifactDetail) {
 it("previews files above the old text limit using their original filename", async () => {
   setup(artifact());
   const viewer = await screen.findByText("Viewing report.pdf");
-  expect(viewer.getAttribute("href")).toBe("/api/artifacts/abc123/download");
+  expect(viewer.getAttribute("href")).toBe(abs("api/artifacts/abc123/download"));
   expect(screen.queryByText("Too large to preview.")).toBeNull();
 });
 
@@ -60,7 +63,7 @@ it.each([
   await screen.findByRole("button", { name: "Expand preview" });
   const video = container.querySelector("video")!;
   expect(video).toBeTruthy();
-  expect(video.getAttribute("src")).toBe("/api/artifacts/abc123/download?redirect=1");
+  expect(video.getAttribute("src")).toBe(abs("api/artifacts/abc123/download?redirect=1"));
   expect(video.preload).toBe("metadata");
   expect(video.controls).toBe(true);
   expect(screen.queryByText(`Viewing ${filename}`)).toBeNull();
@@ -117,11 +120,11 @@ it("opens nested directory members without treating their hashes as registered a
   );
   fireEvent.click(await screen.findByRole("button", { name: "nested/a report.csv" }));
   expect((await screen.findByText("Viewing a report.csv")).getAttribute("href")).toBe(
-    "/api/artifacts/abc123/download?path=nested%2Fa%20report.csv",
+    abs("api/artifacts/abc123/download?path=nested%2Fa%20report.csv"),
   );
   fireEvent.click(screen.getByRole("button", { name: "plot.png" }));
   expect((await screen.findByText("Viewing plot.png")).getAttribute("href")).toBe(
-    "/api/artifacts/abc123/download?path=plot.png",
+    abs("api/artifacts/abc123/download?path=plot.png"),
   );
 });
 
@@ -130,7 +133,7 @@ it("keeps a download available when the renderer cannot preview a file", async (
   fireEvent.click(await screen.findByRole("button", { name: "Simulate renderer failure" }));
   expect(await screen.findByText(/Unable to preview this file/)).toBeTruthy();
   expect(screen.getByRole("link", { name: "Download file" }).getAttribute("href")).toBe(
-    "/api/artifacts/abc123/download?redirect=1",
+    abs("api/artifacts/abc123/download?redirect=1"),
   );
 });
 
@@ -179,7 +182,7 @@ it("waits for a click before previewing a large file from a remote store", async
   expect(screen.queryByText("Viewing splats.ply")).toBeNull();
   expect(screen.queryByRole("button", { name: "Expand preview" })).toBeNull();
   expect(screen.getByRole("link", { name: "Download file" }).getAttribute("href")).toBe(
-    "/api/artifacts/abc123/download?redirect=1",
+    abs("api/artifacts/abc123/download?redirect=1"),
   );
   fireEvent.click(load);
   expect(await screen.findByText("Viewing splats.ply")).toBeTruthy();

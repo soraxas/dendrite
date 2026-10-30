@@ -39,6 +39,7 @@ def by_id(inv):
     return {e["id"]: e for e in inv["experiments"]}
 
 
+@pytest.mark.local_only("sizes blobs by listing the store, which runs on the server")
 def test_exclusive_bytes_count_shared_cache_once(lab, source):
     a = lab.create(toy.toy, inputs={"src": source}).run()
     b = a.fork({"train.iterations": 20}).run()
@@ -137,6 +138,7 @@ def test_mark_stopped_unblocks_cleanup(lab, source):
         a.mark_stopped()
 
 
+@pytest.mark.local_only("eviction on the server can't remove this machine's checkouts")
 def test_evicted_step_recomputes(lab, source):
     a = lab.create(toy.toy, inputs={"src": source}).run()
     old = execs(a)["extract"]
@@ -179,6 +181,7 @@ def test_evict_skips_experiment_inputs(lab, source):
     assert report["deleted"] == [] and report["skipped"][0]["why"] == "input"
 
 
+@pytest.mark.local_only("sizes blobs by listing the store, which runs on the server")
 def test_orphan_and_grace(lab, source):
     lab.create(toy.toy, inputs={"src": source}).run()
     orphan = lab.store.put_value("left over by a failed run").hash
@@ -238,6 +241,7 @@ def test_running_guard(lab, source):
     assert a.delete(force=True) == [a.id]
 
 
+@pytest.mark.local_only("a hosted storage report describes the server's scratch, not this machine's")
 def test_clean_then_load(lab, source):
     a = lab.create(toy.toy, inputs={"src": source}).run()
     rows = a.load("extract")

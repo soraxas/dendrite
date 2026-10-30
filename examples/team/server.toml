@@ -1,0 +1,18 @@
+# A dendrite server for trying hosted mode on one machine (see README.md here).
+# For a real deployment: an https base_url, a real identity provider, and secrets via ${ENV}.
+base_url = "http://127.0.0.1:8455"
+database_url = "postgresql+psycopg://dendrite:dendrite@127.0.0.1:15434/dendrite"
+store_url = "s3://lineage/team"          # each project's blobs go under <store_url>/<project>
+home = ".dendrite-server"                # server-side cache, relative to this file
+admins = ["admin@example.com"]
+verify_uploads = "checksum"              # MinIO enforces each upload's SHA-256 itself
+
+[store_options]
+endpoint_url = "http://127.0.0.1:19100"
+key = "dendrite"
+secret = "dendrite-secret"
+
+[auth]
+# "dev" signs anyone in by the email they type, so it only runs on localhost.
+# Production: provider = "github" (client_id, client_secret) or "oidc" (issuer, client_id, …).
+provider = "dev"

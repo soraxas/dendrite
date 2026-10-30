@@ -11,13 +11,25 @@ export interface ArtifactRef {
   filename: string | null;
 }
 
+export interface HostedInfo {
+  project: string;
+  user?: string;
+  role?: "viewer" | "runner" | "admin" | null;
+  csrf?: string | null;
+  projects?: string[];
+}
+
 export interface Info {
   db: string;
   store: string;
   ui: "react" | "missing";
   edit: boolean;
+  /** Writing step source back to its file (never on a hosted server). */
+  source_edit?: boolean;
   plan: boolean;
   pipelines: string[];
+  /** Set when a dendrite server serves this project's UI. */
+  hosted?: HostedInfo;
 }
 
 export interface SourceInfo {
@@ -31,7 +43,7 @@ export interface SourceInfo {
 
 export interface SourceSnapshot extends SourceInfo {
   source: string;
-  status: "same" | "changed" | "missing";
+  status: "same" | "changed" | "missing" | "elsewhere";
   file_sha: string | null;
   editable: boolean;
 }
@@ -47,6 +59,8 @@ export interface TreeEntry {
   finished_at: number | null;
   counts: Partial<Record<RunStatus, number>>;
   keep?: boolean;
+  /** Hosted projects: who created it. */
+  created_by?: string | null;
 }
 
 export interface ExperimentSummary {
@@ -267,6 +281,8 @@ export interface Execution {
   started_at: number;
   finished_at: number | null;
   error: string | null;
+  /** Hosted projects: who ran it. */
+  run_by?: string | null;
   inputs: Record<string, string>;
   outputs: Record<string, string>;
   artifacts?: Record<string, ArtifactRef>;
@@ -391,7 +407,17 @@ export class ApiError extends Error {
   }
 }
 
+// A hosted server's session needs this header on every change (see `Info.hosted.csrf`).
+let csrf: string | null = null;
+export const setCsrf = (token: string | null | undefined) => {
+  csrf = token ?? null;
+};
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const method = (init?.method ?? "GET").toUpperCase();
+  if (csrf && method !== "GET" && method !== "HEAD") {
+    init = { ...init, headers: { ...(init?.headers as Record<string, string>), "X-Dendrite-CSRF": csrf } };
+  }
   const r = await fetch(path, init);
   if (!r.ok) {
     const body = await r.text();
@@ -417,27 +443,27 @@ const send = <T>(method: string, path: string, body?: unknown) =>
     headers: { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-const exp = (id: string) => `/api/experiments/${encodeURIComponent(id)}`;
+const exp = (id: string) => `api/experiments/${encodeURIComponent(id)}`;
 
 export const api = {
-  info: () => get<Info>("/api/info"),
-  experiments: () => get<TreeEntry[]>("/api/experiments"),
-  dag: (id: string) => get<Dag>(`/api/experiments/${encodeURIComponent(id)}/dag`),
-  diff: (a: string, b: string) => get<Diff>(`/api/diff?a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}`),
-  artifact: (h: string) => get<ArtifactDetail>(`/api/artifacts/${encodeURIComponent(h)}`),
-  lineage: (h: string) => get<Lineage>(`/api/artifacts/${encodeURIComponent(h)}/lineage`),
-  execution: (id: string) => get<Execution>(`/api/executions/${encodeURIComponent(id)}`),
-  source: (h: string) => get<SourceSnapshot>(`/api/sources/${encodeURIComponent(h)}`),
+  info: () => get<Info>("api/info"),
+  experiments: () => get<TreeEntry[]>("api/experiments"),
+  dag: (id: string) => get<Dag>(`api/experiments/${encodeURIComponent(id)}/dag`),
+  diff: (a: string, b: string) => get<Diff>(`api/diff?a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}`),
+  artifact: (h: string) => get<ArtifactDetail>(`api/artifacts/${encodeURIComponent(h)}`),
+  lineage: (h: string) => get<Lineage>(`api/artifacts/${encodeURIComponent(h)}/lineage`),
+  execution: (id: string) => get<Execution>(`api/executions/${encodeURIComponent(id)}`),
+  source: (h: string) => get<SourceSnapshot>(`api/sources/${encodeURIComponent(h)}`),
   saveSource: (h: string, source: string, file_sha: string) =>
-    request<{ file_sha: string }>(`/api/sources/${encodeURIComponent(h)}`, {
+    request<{ file_sha: string }>(`api/sources/${encodeURIComponent(h)}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ source, file_sha }),
     }),
   plan: (id: string) => get<Plan>(`${exp(id)}/plan`),
-  shape: (pipeline: string) => get<Shape>(`/api/pipelines/${encodeURIComponent(pipeline)}/shape`),
+  shape: (pipeline: string) => get<Shape>(`api/pipelines/${encodeURIComponent(pipeline)}/shape`),
   shapeOf: (pipeline: string, source: string) =>
-    send<Shape>("POST", `/api/pipelines/${encodeURIComponent(pipeline)}/shape`, { source }),
+    send<Shape>("POST", `api/pipelines/${encodeURIComponent(pipeline)}/shape`, { source }),
   check: (id: string) => get<Diagnostic[]>(`${exp(id)}/check`),
   fork: (id: string, name?: string) => send<ExperimentSummary>("POST", `${exp(id)}/fork`, { name: name ?? null }),
   editDraft: (id: string, edit: DraftEdit) => send<ExperimentSummary>("PATCH", exp(id), edit),
@@ -448,27 +474,31 @@ export const api = {
       `${exp(id)}?forks=${forks}`,
     ),
   deleteMany: (ids: string[], forks: ForkMode = "refuse", force = false) =>
-    send<{ deleted: string[]; reparented: Record<string, string | null> }>("POST", "/api/experiments/delete", {
+    send<{ deleted: string[]; reparented: Record<string, string | null> }>("POST", "api/experiments/delete", {
       ids,
       forks,
       force,
     }),
   estimate: (ids: string[], forks: ForkMode = "keep") =>
-    send<{ ids: string[]; bytes: number }>("POST", "/api/storage/estimate", { ids, forks }),
+    send<{ ids: string[]; bytes: number }>("POST", "api/storage/estimate", { ids, forks }),
   stop: (id: string) => send<ExperimentSummary>("POST", `${exp(id)}/stop`),
   evictArtifact: (hash: string, apply = false, force = false) =>
-    send<ReclaimReport>("POST", `/api/artifacts/${encodeURIComponent(hash)}/evict`, { apply, force }),
+    send<ReclaimReport>("POST", `api/artifacts/${encodeURIComponent(hash)}/evict`, { apply, force }),
   keep: (id: string, keep: boolean) => send<ExperimentSummary>("POST", `${exp(id)}/keep`, { keep }),
-  storage: (refresh = false) => get<Inventory>(`/api/storage${refresh ? "?refresh=1" : ""}`),
+  storage: (refresh = false) => get<Inventory>(`api/storage${refresh ? "?refresh=1" : ""}`),
   evict: (execId: string, apply = false, force = false) =>
-    send<ReclaimReport>("POST", `/api/executions/${encodeURIComponent(execId)}/evict`, { apply, force }),
-  gc: (req: GcRequest) => send<ReclaimReport>("POST", "/api/gc", req),
-  clean: (force = false) => send<{ removed: number; bytes: number }>("POST", "/api/storage/clean", { force }),
-  view: (pipeline: string) => get<PipelineView>(`/api/pipelines/${encodeURIComponent(pipeline)}/view`),
+    send<ReclaimReport>("POST", `api/executions/${encodeURIComponent(execId)}/evict`, { apply, force }),
+  gc: (req: GcRequest) => send<ReclaimReport>("POST", "api/gc", req),
+  clean: (force = false) => send<{ removed: number; bytes: number }>("POST", "api/storage/clean", { force }),
+  view: (pipeline: string) => get<PipelineView>(`api/pipelines/${encodeURIComponent(pipeline)}/view`),
   saveView: (pipeline: string, view: PipelineView) =>
-    send<PipelineView>("PUT", `/api/pipelines/${encodeURIComponent(pipeline)}/view`, view),
+    send<PipelineView>("PUT", `api/pipelines/${encodeURIComponent(pipeline)}/view`, view),
+  // Absolute: file renderers may fetch from a worker, whose relative URLs resolve elsewhere.
   downloadUrl: (h: string, path?: string) =>
-    `/api/artifacts/${encodeURIComponent(h)}/download${path === undefined ? "" : `?path=${encodeURIComponent(path)}`}`,
+    new URL(
+      `api/artifacts/${encodeURIComponent(h)}/download${path === undefined ? "" : `?path=${encodeURIComponent(path)}`}`,
+      document.baseURI,
+    ).href,
 };
 
 /** For links and media elements: a remote store may redirect them straight to the object. */

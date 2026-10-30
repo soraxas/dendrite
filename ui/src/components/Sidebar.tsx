@@ -99,7 +99,10 @@ export function Sidebar({ tree, selected, onOpen, collapsed, onToggle }: Props) 
               <span className="nm">{e.name || e.id}</span>
               <span className="when">{when.text}</span>
             </div>
-            <div className="sub">{outcome(e)}</div>
+            <div className="sub">
+              {outcome(e)}
+              {e.created_by && <span className="by"> · by {e.created_by}</span>}
+            </div>
             <OutcomeBar e={e} />
           </div>
         </div>

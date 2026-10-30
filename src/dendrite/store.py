@@ -103,6 +103,21 @@ class ArtifactStore(ABC):
         for h in hashes:
             self.delete(h)
 
+    def prefetch(self, refs: Iterable[ArtifactRef]) -> None:
+        """Hint that ``refs`` are about to be loaded (a remote store batches their lookups)."""
+        return None  # local stores have nothing to prepare
+
+    def has_many(self, hashes: Iterable[str]) -> set[str]:
+        """The subset of ``hashes`` that is stored."""
+        return {h for h in set(hashes) if self.has(h)}
+
+    def _put_missing(self, files: list[tuple[str, Path]]) -> None:
+        """Store each ``(hash, path)`` the store doesn't already have."""
+        present = self.has_many(h for h, _ in files)
+        for h, f in {h: f for h, f in files}.items():
+            if h not in present:
+                self._put_object_file(h, f)
+
     @property
     @abstractmethod
     def url(self) -> str: ...
@@ -124,20 +139,19 @@ class ArtifactStore(ABC):
     def put_path(self, path: str | os.PathLike) -> ArtifactRef:
         p = Path(path)
         if p.is_dir():
-            entries = []
+            entries, files = [], []
             total = 0
             for f in sorted(x for x in p.rglob("*") if x.is_file()):
                 h, size = sha256_file(f)
-                if not self.has(h):
-                    self._put_object_file(h, f)
+                files.append((h, f))
                 entries.append([f.relative_to(p).as_posix(), h, size])
                 total += size
+            self._put_missing(files)
             manifest = canonical_json(entries).encode()
             return ArtifactRef(self._put_object_bytes(manifest), "dir", total, p.name)
         if p.is_file():
             h, size = sha256_file(p)
-            if not self.has(h):
-                self._put_object_file(h, p)
+            self._put_missing([(h, p)])
             return ArtifactRef(h, "file", size, p.name)
         raise FileNotFoundError(f"cannot store {p}: no such file or directory")
 
@@ -157,7 +171,8 @@ class ArtifactStore(ABC):
         if not self.has(ref.hash):
             return False
         if ref.kind == "dir" and deep:
-            return all(self.has(h) for _, h, _ in self.manifest(ref))
+            members = {h for _, h, _ in self.manifest(ref)}
+            return self.has_many(members) == members
         return True
 
     def load(self, ref: ArtifactRef) -> Any:
@@ -307,7 +322,13 @@ class FsspecStore(ArtifactStore):
         return f"{self.base}/objects/{h[:2]}/{h[2:]}"
 
     def has(self, h: str) -> bool:
-        return self.fs.exists(self._obj(h))
+        # Not fs.exists(): s3fs answers that from cached directory listings, which miss blobs
+        # written since (another process's upload, a commit). One HEAD, never cached.
+        try:
+            self.fs.info(self._obj(h), refresh=True)
+            return True
+        except FileNotFoundError:
+            return False
 
     def _put_object_file(self, h: str, src: Path) -> None:
         # Object PUTs are atomic on S3-style stores; content addressing makes races benign.
@@ -321,6 +342,26 @@ class FsspecStore(ArtifactStore):
 
     def open_object(self, h: str) -> BinaryIO:
         return self.fs.open(self._obj(h), "rb")
+
+    def has_many(self, hashes: Iterable[str]) -> set[str]:
+        wanted = set(hashes)
+        if len(wanted) <= 512:  # a shard of a big bucket lists slower than a few hundred HEADs
+            from concurrent.futures import ThreadPoolExecutor
+
+            with ThreadPoolExecutor(16) as pool:
+                return {h for h, ok in zip(wanted, pool.map(self.has, wanted), strict=True) if ok}
+        # Many hashes: one listing per two-character shard instead of a request per object.
+        found: set[str] = set()
+        for shard in {h[:2] for h in wanted}:
+            path = f"{self.base}/objects/{shard}"
+            try:
+                names = self.fs.ls(path, detail=False, refresh=True)
+            except FileNotFoundError:
+                continue
+            finally:
+                self.fs.invalidate_cache(path)  # a cached listing would hide later uploads
+            found |= {shard + n.rstrip("/").rsplit("/", 1)[-1] for n in names}
+        return wanted & found
 
     def signed_url(self, h: str, filename: str, expires: int) -> str | None:
         kwargs: dict[str, Any] = {}
@@ -349,7 +390,9 @@ class FsspecStore(ArtifactStore):
         root = f"{self.base}/objects"
         if not self.fs.exists(root):
             return
-        for path, info in self.fs.find(root, detail=True).items():
+        listing = self.fs.find(root, detail=True)
+        self.fs.invalidate_cache(root)  # keep later existence checks off this snapshot
+        for path, info in listing.items():
             parts = path.rstrip("/").split("/")
             if len(parts) < 2 or len(parts[-2]) != 2 or parts[-1].startswith("."):
                 continue

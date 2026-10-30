@@ -27,6 +27,8 @@ uv run pytest                              # full suite (Prefect test harness + 
 uv run pytest tests/test_lineage.py::test_artifact_fork_pins_node   # single test
 uv run pytest -k pin                       # by keyword
 DENDRITE_TEST_DB=postgres uv run pytest   # whole suite on Postgres (testcontainers; needs Docker)
+DENDRITE_TEST_REMOTE=1 uv run pytest      # whole suite through an in-process dendrite server (Postgres + moto)
+uv run dendrite server run --config examples/team/server.toml   # hosted server; see examples/team/README.md
 uv run python examples/minimal.py          # smallest setup: two steps, a run and a fork
 uv run python examples/recon.py            # demo: baseline + config fork + pinned fork (DEMO_SLEEP=2 to slow nodes)
 uv run dendrite ui --port 8454 --import examples.recon   # API + SPA; --import enables draft previews
@@ -180,6 +182,24 @@ The flow of a run spans several modules in `src/dendrite/`:
   - Expanded fan-outs draw at most `SHOW_AT_MOST` items (`sampleItems`), and the rest map to `more:<step>`.
   - Items' edges attach to their `fan:<step>` frame. Never draw every item of a fan-out.
 
+14. **Hosted mode** (`hosted/`, `remote.py`, OpenSpec `hosted-server`).
+
+- **Choosing a backend.** `config.Settings.resolve` picks direct, hosted or local mode. In order: arguments, `DENDRITE_DB_URL`/`DENDRITE_STORE_URL`, `DENDRITE_SERVER`+`DENDRITE_PROJECT`, the nearest `dendrite.toml`, local. In hosted mode `Lab` holds `remote.HttpMetadata` and `remote.ServerStore`. Everything above them (tasks, signatures, verify, plans) is unchanged.
+- **The server** (`hosted/app.py`, `dendrite server run --config server.toml`).
+  - Each project is a Postgres schema holding the unchanged core tables, plus a blob prefix.
+  - The `dendrite_control` schema (`hosted/control.py`) holds users, projects, memberships, tokens (stored hashed), sessions, device logins, attribution, value previews and URL-signing logs.
+  - `/api/v1/projects/{p}/rpc/{method}` runs one method from `wire.REMOTE` on the project's `ServerMetadata` as the caller.
+- **Permissions** (`hosted/authz.py`).
+  - `ServerMetadata` checks every write against the `CALLER` contextvar: role, ownership, leases bound to the caller (`Caller.tag`), and committed blobs before `publish`/`register_artifacts`.
+  - The UI mount (`hosted/ui.py`, `/p/{project}/`) reuses `create_app(hosted=…)`. Only storage reclamation needs a path rule (`ADMIN_ROUTES`).
+- **Blobs** (`hosted/blobs.py`).
+  - `blobs/missing` deduplicates. S3/MinIO uploads are presigned PUTs with `ChecksumSHA256` + `If-None-Match: *` (multipart: per-part checksums). `verify_uploads = "hash"` stages them and re-hashes on the server.
+  - Blobs ≤256 KB travel inline in `blobs/missing`. Stores that can't presign (a local directory, `memory://`, GCS so far) are proxied through the server, which hashes them.
+- **Sign-in** (`hosted/auth.py`).
+  - Browser: GitHub, generic OIDC, or `dev` (localhost only), giving a session cookie plus CSRF header.
+  - CLI: a device flow run by the server itself. The token is minted on the poll, so no secret is ever stored in plain text. `remote.device_login` prompts automatically on the first call only when interactive; otherwise it raises `NotLoggedIn`.
+- **Round trips.** `HttpMetadata` batches "queued" node-run writes and progress, and flushes before any other call. Clients drop idle connections at `remote.KEEPALIVE` (2 s), below the server's 30 s, or a reused connection can lose a request. `ArtifactStore.prefetch` batches a step's input URLs.
+
 ## Invariants to preserve
 
 - Signatures must never include experiment ids or flow-run ids. That is what makes cross-experiment reuse work.
@@ -191,6 +211,8 @@ The flow of a run spans several modules in `src/dendrite/`:
 - **Reclaiming space never risks a wrong result.** It may only delete blobs, never metadata rows or anything a cache hit could trust without `verify()`. Anything deleted must recompute when needed. `tests/test_storage.py` covers this.
 - Progress, body reads and stages are display-only: they never enter a signature.
 - **Plans are side-effect free.** A plan never writes node_runs, executions, blobs, leases or pipeline reads, never touches Prefect, and never calls step functions. `tests/test_plan.py::test_plan_writes_nothing` checks this.
+- **A hosted server never unpickles.** Value previews come from the text the producer recorded (`value_previews`). `tests/test_hosted.py::test_the_server_never_unpickles` checks this.
+- **Hosted publish needs committed blobs.** No execution or artifact row may reference a blob the server hasn't confirmed is stored at its content address.
 - **Step contract** (README, "The step contract"):
   - The pipeline body only wires steps together.
   - Step outputs depend only on what the signature hashes.
@@ -202,6 +224,7 @@ The flow of a run spans several modules in `src/dendrite/`:
 - **Narrow code fingerprint.** The fingerprint covers only the node function's own source (`inspect.getsource`). Callers bump `version=` when helper functions change.
 - **Pickles.** `value` artifacts are pickles, and `load()` and the UI preview unpickle them.
 - **The read guard is best-effort.** It sees only Python-level `open`/`os.open`. It misses C `fopen`, subprocesses, threads started by the step, and anything outside the project directory.
+- **Hosted mode runs on one server process.** Upload sessions (`Broker.uploads`) and idempotency keys are in memory, so a multi-replica deployment needs sticky sessions or shared state. GCS uploads are proxied through the server, since signed GCS uploads aren't implemented. A token revoked on another replica can work for up to `AUTH_CACHE_SECONDS`.
 - **Plans can be incomplete.** They can't predict branching on the *contents* of a result that hasn't been computed. Downstream `run`/`upstream` is an upper bound: an unchanged upstream output still lets downstream reuse.
 
 ## Tests
@@ -209,6 +232,7 @@ The flow of a run spans several modules in `src/dendrite/`:
 - `tests/toy.py` defines the toy pipelines and a `CALLS` counter of real executions. Tests assert on that counter to prove cache reuse.
 - Pipelines and tasks are registered by name at import time (`_PIPELINES`), so `Experiment.pipeline` needs the defining module imported.
 - `conftest.py` starts one session-wide `prefect_test_harness`.
+- **Hosted tests.** The `hosted` fixture runs a real server in a thread on the test Postgres and moto. `tests/test_hosted.py` covers roles, leases, uploads, login and the UI gate. `DENDRITE_TEST_REMOTE=1` runs the whole suite with `lab` backed by a server project; tests that reach into local internals are marked `@pytest.mark.local_only("why")`. moto doesn't enforce upload checksums, so the fixture uses `verify_uploads = "hash"`.
 - UI tests live next to the code as `ui/src/**/*.test.ts(x)`. Builders are in `ui/src/test/fixtures.ts`, and `renderWithQuery` gives a fresh QueryClient. Mock the network with `vi.spyOn(api, ...)`. `layout.ts` creates the ELK worker lazily, so graph modules import cleanly under jsdom.
 
 ## OpenSpec

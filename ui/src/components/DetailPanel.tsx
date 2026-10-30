@@ -326,6 +326,7 @@ function ReusedFrom({
       )}
       <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
         ran {fmtTime(ex.started_at)}
+        {ex.run_by ? ` by ${ex.run_by}` : ""}
         {took ? ` · took ${took}` : ""} · run{" "}
         <a className="mono" onClick={() => nav.selectExec(ex.id)}>
           {short(ex.id, 8)}
@@ -631,6 +632,12 @@ export function ExecutionDetailPanel({ id, nav }: { id: string; nav: Nav }) {
           <dd>{fmtDur(x.finished_at != null ? x.finished_at - x.started_at : null)}</dd>
           <dt>started</dt>
           <dd>{fmtTime(x.started_at)}</dd>
+          {x.run_by && (
+            <>
+              <dt>run by</dt>
+              <dd>{x.run_by}</dd>
+            </>
+          )}
           {x.task_run_id && (
             <>
               <dt>prefect task</dt>

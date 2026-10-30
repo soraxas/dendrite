@@ -10,6 +10,11 @@ const AceEditor = lazy(() => import("./AceEditor"));
 type Prompt = null | "confirm-save" | "confirm-close" | "conflict";
 
 function statusNote(s: SourceSnapshot, canEdit: boolean): { tone: string; text: string } {
+  if (s.status === "elsewhere")
+    return {
+      tone: "queued",
+      text: "Recorded on the machine that ran this step. Showing the code exactly as it ran.",
+    };
   if (s.status === "missing")
     return {
       tone: "failed",
@@ -83,7 +88,7 @@ export function CodeModal({ hash, step, onClose }: { hash: string; step: string;
     }
   }
 
-  const note = snap ? statusNote(snap, !!info?.edit) : null;
+  const note = snap ? statusNote(snap, !!(info?.source_edit ?? info?.edit)) : null;
   const where = snap ? `${snap.display ?? snap.file ?? "unknown file"}${snap.line ? `:${snap.line}` : ""}` : "";
 
   return (

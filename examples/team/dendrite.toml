@@ -1,0 +1,5 @@
+# Which dendrite server this repo's pipelines record to. Safe to commit: no credentials.
+# Sign in with `dendrite login`; CI sets DENDRITE_TOKEN.
+[server]
+url = "http://127.0.0.1:8455"
+project = "demo"

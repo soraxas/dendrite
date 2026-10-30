@@ -17,7 +17,7 @@ from prefect import flow
 from . import runtime
 from .config import Settings
 from .db import Metadata
-from .store import PENDING, ArtifactRef, PlanIncomplete, open_store
+from .store import PENDING, ArtifactRef, ArtifactStore, PlanIncomplete, open_store
 
 _PIPELINES: dict[str, Pipeline] = {}
 _MISSING = object()
@@ -152,6 +152,11 @@ class Lab:
     ``Lab()`` reads ``DENDRITE_HOME`` (default ``.dendrite``), ``DENDRITE_DB_URL``
     (SQLite or ``postgresql+psycopg://…``) and ``DENDRITE_STORE_URL`` (a directory, or
     ``s3://bucket/prefix`` / any fsspec URL; pass ``storage_options`` for MinIO).
+
+    In hosted mode (``Lab(server=…, project=…)``, ``DENDRITE_SERVER``, or a repo's
+    ``dendrite.toml``; see ``config.py``) metadata and blobs go through a dendrite server
+    instead, and the first call that needs it signs in. ``DENDRITE_HOME`` then holds only
+    the local checkout cache and scratch space.
     """
 
     def __init__(
@@ -161,14 +166,45 @@ class Lab:
         db_url: str | None = None,
         store_url: str | None = None,
         storage_options: dict[str, Any] | None = None,
+        server: str | None = None,
+        project: str | None = None,
+        client_options: dict[str, Any] | None = None,
     ):
-        self.settings = Settings.resolve(home, db_url, store_url)
+        self.settings = Settings.resolve(home, db_url, store_url, server=server, project=project)
         self.home = self.settings.home
         self.home.mkdir(parents=True, exist_ok=True)
+        if self.settings.hosted:
+            from .remote import connect
+
+            self.db, self.store = connect(
+                self.settings.server, self.settings.project, self.home, **(client_options or {})
+            )
+            return
         self.db = Metadata(self.settings.db_url)
         self.store = open_store(self.settings.store_url, self.home / "cache", **(storage_options or {}))
 
+    @property
+    def hosted(self) -> bool:
+        """Metadata and blobs live on a dendrite server (storage reports run there too)."""
+        return getattr(self.store, "remote", False) and hasattr(self.db, "client")
+
+    def _server_storage(self, op: str, **kw: Any) -> Any:
+        c = self.db.client
+        return c.request("POST", c.api(f"storage/{op}"), kw)["result"]
+
+    @classmethod
+    def from_parts(cls, db: Any, store: ArtifactStore, home: Path, settings: Settings | None = None) -> Lab:
+        """A Lab over metadata and a store built elsewhere (the hosted server, or a remote client)."""
+        lab = cls.__new__(cls)
+        lab.settings = settings or Settings.resolve(home, db_url=getattr(db, "url", "remote"), store_url=store.url)
+        lab.home = Path(home)
+        lab.home.mkdir(parents=True, exist_ok=True)
+        lab.db, lab.store = db, store
+        return lab
+
     def __repr__(self) -> str:
+        if self.settings.hosted:
+            return f"<Lab server={self.settings.server} project={self.settings.project}>"
         return f"<Lab db={self.settings.db_url} store={self.store.url}>"
 
     # -- artifacts -----------------------------------------------------------------
@@ -362,6 +398,8 @@ class Lab:
 
     def deletion_estimate(self, ids: Iterable[str], forks: str = "keep") -> dict[str, Any]:
         """Bytes that deleting ``ids`` (and with ``forks="delete"`` their forks) would free after GC."""
+        if self.hosted:
+            return self._server_storage("estimate", ids=list(ids), forks=forks)
         from .storage import Storage
 
         targets = set(ids)
@@ -378,6 +416,8 @@ class Lab:
     def storage(self) -> dict[str, Any]:
         """Where the space goes: store totals (live vs collectable), per experiment, cache
         entries, the largest artifacts and local scratch. See ``storage.py``."""
+        if self.hosted:
+            return self._server_storage("inventory")
         from .storage import Storage
 
         return Storage(self).inventory()
@@ -396,12 +436,23 @@ class Lab:
         ``older_than`` (seconds) also evicts cache last used before then, sparing kept
         experiments, pins and each pipeline's newest completed run.
         """
+        if self.hosted:
+            return self._server_storage(
+                "gc",
+                older_than=older_than,
+                dry_run=dry_run,
+                grace=grace,
+                force=force,
+                hashes=None if hashes is None else list(hashes),
+            )
         from .storage import Storage
 
         return Storage(self).gc(older_than, dry_run=dry_run, grace=grace, force=force, hashes=hashes)
 
     def evict(self, target: str, *, dry_run: bool = True, force: bool = False) -> dict[str, Any]:
         """Delete an execution's (or artifact's) output blobs; they recompute when next needed."""
+        if self.hosted:
+            return self._server_storage("evict", target=target, dry_run=dry_run, force=force)
         from .storage import Storage
 
         return Storage(self).evict(target, dry_run=dry_run, force=force)
@@ -431,6 +482,7 @@ class Lab:
                     "started_at": e._row["started_at"],
                     "finished_at": e._row["finished_at"],
                     "counts": counts,
+                    "created_by": e._row.get("created_by"),  # hosted projects only
                 }
             )
         return out

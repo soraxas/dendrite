@@ -164,6 +164,7 @@ def test_lease_steal_after_expiry(lab):
     assert not lab.db.renew_lease("sig", "w1", ttl=10)
 
 
+@pytest.mark.local_only("reads lease rows with lab.db.ro()")
 def test_failure_records_lineage_and_releases_lease(lab, source):
     toy.FAIL["train"] = True
     exp = lab.create(toy.toy, inputs={"src": source})
@@ -326,6 +327,7 @@ def test_queued_steps_show_which_step_they_wait_for(lab, source):
     assert not any(str(h).startswith("queued:") for n in exp.node_runs() for h in (n["inputs"] or {}).values())
 
 
+@pytest.mark.local_only("counts SQL statements on the local engine")
 def test_dag_query_count_does_not_grow_with_fanout(lab, source):
     import sqlalchemy as sa
 

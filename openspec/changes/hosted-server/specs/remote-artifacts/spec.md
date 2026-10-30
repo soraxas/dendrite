@@ -2,7 +2,11 @@
 
 ### Requirement: Brokered blob access
 
-In hosted mode, clients SHALL read and write blobs directly in the bucket, through URLs the server signs. Blob bytes SHALL NOT pass through the server, except while the server verifies a staged upload. URLs SHALL be confined to the caller's project prefix and SHALL expire within 15 minutes.
+In hosted mode, clients SHALL read and write blobs directly in the bucket, through URLs the server signs. Blob bytes SHALL NOT pass through the server, with three exceptions, each hashed by the server on the way in:
+
+- blobs of at most 256 KB, which travel inline with the request that checks for them
+- stores that can't presign, which are proxied
+- staged uploads the server verifies URLs SHALL be confined to the caller's project prefix and SHALL expire within 15 minutes.
 
 #### Scenario: Cache-hit input downloads from the bucket
 

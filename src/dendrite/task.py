@@ -656,6 +656,11 @@ class ArtifactTask:
         return {"id": exec_id}, refs, "computed"
 
     def _compute(self, lab, exec_id: str, call: dict[str, Any], params: dict[str, Any]):
+        inputs: list[ArtifactRef] = []
+        for pname in self.signature.parameters:
+            if pname not in params and pname in call:
+                _map_refs(call[pname], inputs.append)
+        lab.store.prefetch(inputs)  # a remote store fetches every input's location at once
         kwargs = {}
         for pname in self.signature.parameters:
             if pname in params:

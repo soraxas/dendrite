@@ -1,8 +1,12 @@
-"""Real-time headless Chrome screenshot over CDP (macOS Chrome path): screenshot.py OUT.png URL [wait_s] [w h] [click_selector] [hover_selector]"""
+"""Real-time headless Chrome screenshot over CDP (macOS Chrome path): screenshot.py OUT.png URL [wait_s] [w h] [click_selector] [hover_selector]
+
+SCREENSHOT_COOKIE="name=value" sets a cookie for URL first.
+"""
 
 import asyncio
 import base64
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -57,6 +61,10 @@ async def main(out, url, wait=3.0, w=1500, h=900, click=None, hover=None):
             await call("Log.enable")
             await call("Page.enable")
             await call("Emulation.setDeviceMetricsOverride", width=w, height=h, deviceScaleFactor=1, mobile=False)
+            # SCREENSHOT_COOKIE="name=value" signs the page in (e.g. a hosted server's session).
+            if cookie := os.environ.get("SCREENSHOT_COOKIE"):
+                name, _, value = cookie.partition("=")
+                await call("Network.setCookie", name=name, value=value, url=url)
             await call("Page.navigate", url=url)
             end = time.time() + wait
             while time.time() < end:

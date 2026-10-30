@@ -16,7 +16,8 @@ def no_grace(monkeypatch):
 def client(lab, tmp_path, edit=True):
     from dendrite import Lab
 
-    lab = Lab(lab.home, db_url=lab.settings.db_url)  # picks up DENDRITE_GC_GRACE
+    if not lab.hosted:
+        lab = Lab(lab.home, db_url=lab.settings.db_url)  # picks up DENDRITE_GC_GRACE
     return TestClient(create_app(lab, ui_dir=no_bundle(tmp_path), allow_edit=edit))
 
 
@@ -93,6 +94,7 @@ def test_storage_mutations_need_edit(lab, source, tmp_path):
     assert lab.get(a.id).status == "completed"
 
 
+@pytest.mark.local_only("sets the grace period through this process's environment; a server takes it from server.toml")
 def test_gc_include_recent(lab, source, tmp_path, monkeypatch):
     monkeypatch.setenv("DENDRITE_GC_GRACE", "3600")
     lab.create(toy.toy, inputs={"src": source}).run()
@@ -112,6 +114,7 @@ def test_gc_busy_is_409(lab, source, tmp_path):
     assert r.status_code == 409 and r.json()["detail"]["code"] == "busy"
 
 
+@pytest.mark.local_only("the CLI is pointed at a local database URL")
 def test_cli_storage_commands(lab, source, capsys):
     a = lab.create(toy.toy, inputs={"src": source}, name="base").run()
     b = a.fork({"train.iterations": 20}).run()

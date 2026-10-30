@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ApiError, type Dag, type Lineage, type PlanNode } from "./api";
+import { ApiError, type Dag, type Lineage, type PlanNode, setCsrf } from "./api";
 import { CodeView } from "./components/CodeView";
 import { DagView } from "./components/DagView";
 import {
@@ -11,6 +11,7 @@ import {
   NodeDetail,
 } from "./components/DetailPanel";
 import { DraftBar, DraftStepEditor } from "./components/Draft";
+import { HostedBar } from "./components/HostedBar";
 import { LineageView } from "./components/LineageView";
 import { DiffPage, MetricsPage, ParamsPage } from "./components/Pages";
 import { Sidebar } from "./components/Sidebar";
@@ -104,7 +105,11 @@ export function App() {
   const lineageQ = useLineage(inLineage ? route.artifact : undefined);
   const diffQ = useDiff(route.view === "diff" ? route.exp : undefined, route.other);
   const dag: Dag | undefined = plan ?? (isDraft && !planQ.error ? undefined : dagQ.data);
-  const canEdit = !!info?.edit;
+  const role = info?.hosted ? info.hosted.role : undefined;
+  // Hosted: runners edit drafts and stages; only admins reclaim storage. Local: `info.edit`.
+  const canEdit = !!info?.edit && role !== "viewer" && role !== null;
+  const canReclaim = !!info?.edit && (role === undefined || role === "admin");
+  useEffect(() => setCsrf(info?.hosted?.csrf), [info?.hosted?.csrf]);
   const lineage = lineageQ.data;
 
   useEffect(() => {
@@ -198,7 +203,7 @@ export function App() {
       <StoragePage
         tab={route.tab ?? "experiments"}
         go={(tab) => navigate({ view: "storage", tab }, { replace: true })}
-        canEdit={canEdit}
+        canEdit={canReclaim}
         nameOf={nameOf}
         openExp={nav.openExp}
         openArtifact={(h) => navigate({ view: "lineage", artifact: h, sel: `artifact:${h}` })}
@@ -449,7 +454,8 @@ export function App() {
         >
           Storage
         </button>
-        {info && (
+        {info?.hosted && <HostedBar hosted={info.hosted} />}
+        {info && !info.hosted && (
           <details className="lab">
             <summary title="Where results are stored">Lab</summary>
             <div className="lab-pop">

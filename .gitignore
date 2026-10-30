@@ -2,6 +2,7 @@
 __pycache__/
 *.pyc
 .dendrite/
+.dendrite-server/
 .pytest_cache/
 src/dendrite/ui/dist/
 ui/node_modules/

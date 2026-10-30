@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
+import os
 import sys
 import time
 
@@ -328,12 +329,210 @@ def cmd_ui(lab: Lab, args) -> None:
     Server(config).run()
 
 
+def cmd_init(args) -> None:
+    from pathlib import Path
+
+    from .config import PROJECT_FILE, write_project_file
+
+    target = Path(args.dir).resolve()
+    if (target / PROJECT_FILE).exists() and not args.force:
+        sys.exit(f"error: {target / PROJECT_FILE} exists (use --force to replace it)")
+    path = write_project_file(target, args.server, args.project)
+    print(f"wrote {path}: runs here record to {args.server}, project {args.project}")
+    print("commit it, then run your pipeline; you'll be asked to sign in the first time")
+
+
+def _server_of(args) -> tuple[str, str | None]:
+    """The server (and project) to talk to: ``--server``/``--project``, else the resolved config."""
+    from .config import Settings
+
+    if getattr(args, "server", None):
+        return args.server.rstrip("/"), getattr(args, "project", None)
+    try:
+        s = Settings.resolve()
+    except ValueError as e:
+        sys.exit(f"error: {e}")
+    if not s.hosted:
+        sys.exit("error: no server configured: pass --server, set DENDRITE_SERVER, or run `dendrite init`")
+    return s.server, getattr(args, "project", None) or s.project
+
+
+def _client(args, project: str | None = None):
+    from .remote import ServerClient
+
+    server, proj = _server_of(args)
+    return ServerClient(server, project or proj or "")
+
+
+def cmd_login(args) -> None:
+    from .remote import device_login
+
+    server, project = _server_of(args)
+    device_login(server, project=project, out=sys.stdout)
+    cmd_whoami(args)
+
+
+def cmd_logout(args) -> None:
+    from .remote import NotLoggedIn, save_token
+
+    server, _ = _server_of(args)
+    try:
+        _client(args).request("POST", "/api/v1/logout")
+    except NotLoggedIn:
+        pass
+    save_token(server, None)
+    print(f"signed out of {server}")
+
+
+def cmd_whoami(args) -> None:
+    c = _client(args)
+    s = c.request("GET", "/api/v1/session")
+    who = s["user"]["email"] or s["user"]["name"] or s["user"]["id"]
+    print(f"{who} on {c.server}" + (" (server admin)" if s["user"]["admin"] else ""))
+    for p in s["projects"]:
+        print(f"  {p['name']}: {p['role']}")
+
+
+def cmd_token(args) -> None:
+    c = _client(args)
+    if args.action == "create":
+        if not (args.project and args.role):
+            sys.exit("error: token create needs --project and --role")
+        t = c.request(
+            "POST",
+            "/api/v1/tokens",
+            {"project": args.project, "role": args.role, "name": args.name, "ttl_days": args.days},
+        )
+        print(t["token"])
+        print(
+            f"# {t['name']}: {args.role} in {args.project}, id {t['id']}; shown once, store it as DENDRITE_TOKEN",
+            file=sys.stderr,
+        )
+    elif args.action == "list":
+        rows = c.request("GET", f"/api/v1/tokens?project={args.project}")["tokens"]
+        print(
+            _table(
+                [[t["id"], t["name"] or "", t["role"] or "", _fmt_time(t["expires_at"])] for t in rows],
+                ["id", "name", "role", "expires"],
+            )
+        )
+    else:
+        if not args.id:
+            sys.exit("error: token revoke needs a token id")
+        print("revoked" if c.request("DELETE", f"/api/v1/tokens/{args.id}")["revoked"] else "already revoked")
+
+
+def cmd_project(args) -> None:
+    c = _client(args)
+    if args.action == "create":
+        c.request("POST", "/api/v1/projects", {"name": args.name})
+        print(f"created project {args.name}")
+    else:
+        for p in c.request("GET", "/api/v1/projects")["projects"]:
+            print(f"{p['name']}: {p['role']}")
+
+
+def cmd_member(args) -> None:
+    c = _client(args)
+    if args.action == "list":
+        rows = c.request("GET", f"/api/v1/projects/{args.project_name}/members")["members"]
+        print(_table([[m["email"] or m["id"], m["role"]] for m in rows], ["email", "role"]))
+        return
+    role = None if args.action == "remove" else args.role
+    if args.action == "add" and role is None:
+        sys.exit("error: member add needs a role (viewer, runner or admin)")
+    c.request("PUT", f"/api/v1/projects/{args.project_name}/members", {"email": args.email, "role": role})
+    print(f"{args.email}: {role or 'removed'} in {args.project_name}")
+
+
+def cmd_server(args) -> None:
+    from .hosted.settings import ServerSettings
+
+    settings = ServerSettings.load(args.config)
+    if args.action == "run":
+        import uvicorn
+
+        from .hosted.app import create_server_app
+
+        app = create_server_app(settings)
+        print(f"dendrite server at {settings.base_url} (auth: {settings.auth.provider}, store: {settings.store_url})")
+        uvicorn.run(
+            app,
+            host=args.host,
+            port=args.port,
+            timeout_graceful_shutdown=3,
+            timeout_keep_alive=settings.keep_alive_seconds,
+        )
+        return
+    from .hosted.app import Hosted
+
+    server = Hosted(settings)
+    if args.action == "admin-token":
+        if not args.email:
+            sys.exit("error: admin-token needs --email")
+        user = server.control.invite(args.email, admin=True)
+        secret, _ = server.control.create_token(user["id"], name="bootstrap")
+        print(secret)
+        print(f"# a server-admin token for {args.email}; shown once", file=sys.stderr)
+    elif args.action == "adopt":
+        if not (args.project and args.schema):
+            sys.exit("error: adopt needs --project and --schema (and --store for its blobs)")
+        server.create_project(args.project, db_schema=args.schema, store_url=args.store)
+        print(f"adopted schema {args.schema} as project {args.project}")
+    elif args.action == "create-project":
+        server.create_project(args.project)
+        print(f"created project {args.project}")
+
+
+# Commands that don't open a Lab (they configure, sign in to or run a server).
+NO_LAB = {"init", "login", "logout", "whoami", "token", "project", "member", "server"}
+
+
 def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(prog="dendrite", description=__doc__)
     p.add_argument("--home", help="lab directory (default $DENDRITE_HOME or .dendrite)")
     p.add_argument("--db-url", help="SQLAlchemy URL (default $DENDRITE_DB_URL or SQLite in --home)")
     p.add_argument("--store-url", help="artifact store path or fsspec URL (default $DENDRITE_STORE_URL)")
     sub = p.add_subparsers(dest="cmd", required=True)
+    s = sub.add_parser("init", help="point this repo at a dendrite server (writes dendrite.toml)")
+    s.add_argument("--server", required=True, help="server URL, e.g. https://lineage.example.com")
+    s.add_argument("--project", required=True)
+    s.add_argument("--dir", default=".", help="where to write dendrite.toml (default: here)")
+    s.add_argument("--force", action="store_true", help="replace an existing dendrite.toml")
+    for name, help_ in (
+        ("login", "sign in to the dendrite server"),
+        ("logout", "sign out and revoke this machine's token"),
+        ("whoami", "who you are on the server, and your projects"),
+    ):
+        s = sub.add_parser(name, help=help_)
+        s.add_argument("--server", help="server URL (default: from dendrite.toml or DENDRITE_SERVER)")
+    s = sub.add_parser("token", help="service tokens for CI (project admins)")
+    s.add_argument("action", choices=["create", "list", "revoke"])
+    s.add_argument("id", nargs="?", help="token id (revoke)")
+    s.add_argument("--project")
+    s.add_argument("--role", choices=["viewer", "runner", "admin"])
+    s.add_argument("--name")
+    s.add_argument("--days", type=int, default=365, help="lifetime (default 365)")
+    s.add_argument("--server")
+    s = sub.add_parser("project", help="list projects, or create one (server admins)")
+    s.add_argument("action", choices=["list", "create"])
+    s.add_argument("name", nargs="?")
+    s.add_argument("--server")
+    s = sub.add_parser("member", help="manage a project's members (project admins)")
+    s.add_argument("action", choices=["list", "add", "remove"])
+    s.add_argument("project_name", metavar="project")
+    s.add_argument("email", nargs="?")
+    s.add_argument("role", nargs="?", choices=["viewer", "runner", "admin"])
+    s.add_argument("--server")
+    s = sub.add_parser("server", help="run or administer a dendrite server (on the server host)")
+    s.add_argument("action", choices=["run", "admin-token", "adopt", "create-project"])
+    s.add_argument("--config", default=os.environ.get("DENDRITE_SERVER_CONFIG", "server.toml"))
+    s.add_argument("--host", default="127.0.0.1")
+    s.add_argument("--port", type=int, default=8455)
+    s.add_argument("--email", help="admin-token: whose")
+    s.add_argument("--project", help="adopt/create-project: the project name")
+    s.add_argument("--schema", help="adopt: the existing Postgres schema")
+    s.add_argument("--store", help="adopt: the existing blob store URL (default: <store_url>/<project>)")
     sub.add_parser("list", help="list experiments")
     s = sub.add_parser("show", help="show an experiment's nodes, outputs and metrics")
     s.add_argument("experiment")
@@ -383,6 +582,9 @@ def main(argv: list[str] | None = None) -> None:
         help="let the UI save edited step source to disk even when not bound to localhost",
     )
     args = p.parse_args(argv)
+    if args.cmd in NO_LAB:
+        globals()[f"cmd_{args.cmd}"](args)
+        return
     lab = Lab(args.home, db_url=args.db_url, store_url=args.store_url)
     try:
         globals()[f"cmd_{args.cmd}"](lab, args)

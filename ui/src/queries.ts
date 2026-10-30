@@ -22,7 +22,7 @@ export function useLiveUpdates(): void {
   const qc = useQueryClient();
   useEffect(() => {
     if (typeof EventSource === "undefined") return;
-    const es = new EventSource("/api/events");
+    const es = new EventSource("api/events");
     es.onopen = () => setLive(true);
     es.onerror = () => setLive(false); // EventSource retries by itself; polling covers the gap
     // Coalesce: a key invalidated again within REFETCH_GAP is refetched once, at the end of the gap.

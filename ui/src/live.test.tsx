@@ -38,7 +38,7 @@ describe("live updates", () => {
       </QueryClientProvider>,
     );
     const es = FakeSource.last;
-    expect(es.url).toBe("/api/events");
+    expect(es.url).toBe("api/events");
     act(() => es.onopen!());
     expect(isLive()).toBe(true);
     act(() => es.onmessage!({ data: JSON.stringify({ hello: true }) }));

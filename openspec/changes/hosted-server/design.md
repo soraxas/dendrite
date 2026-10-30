@@ -232,6 +232,34 @@ The whole existing suite, plus new auth and permission tests, runs against it. T
   - Instead, the producing client records a truncated `repr` at publish time, in a `value_previews` side table. It already trusts its own value.
   - The UI shows that text. Values without one show only their size and a download link.
 
+## Implementation notes
+
+What building it changed or added:
+
+- **Small blobs travel inline.** Blobs of at most 256 KB go up inside the `blobs/missing` request, and the server hashes and stores them. Fan-outs of small values would otherwise pay three round trips each.
+
+- **Stores that can't presign are proxied.** A local directory, `memory://` and, for now, GCS stream through the server, which hashes them on the way in. GCS signed uploads (CRC32C) are a follow-up.
+
+- **Upload sessions and idempotency keys live in the server process.** One replica, or sticky sessions, until they move to Postgres.
+
+- **The server caches authentication for 30 s.** Token and role lookups are reused (`AUTH_CACHE_SECONDS`), and `last_used_at` is written at most once a minute. Revoking on the same server takes effect at once.
+
+- **Connection lifetimes.** Clients drop idle connections after 2 s, below the server's 30 s keep-alive. With equal lifetimes, a request sent on a connection the server was closing was lost and waited out the client's 120 s timeout.
+
+- **Two latent bugs, also present in direct mode:**
+
+  - `FsspecStore.has` used `fs.exists`, which s3fs answers from cached directory listings, so a blob uploaded after a listing looked missing.
+  - Concurrent inserts of the same source snapshot or node run could collide on Postgres. Both now insert inside a savepoint.
+
+- **Measured.** A 300-step fan-out on one machine (MinIO, Postgres, server and client local), timing the first run and a fully cached re-run:
+
+  | | first run | cached re-run |
+  |---|---|---|
+  | local SQLite | 5.5–7.1 s | 3.9–4.0 s |
+  | hosted | 8.8–10.0 s | 6.1–9.0 s |
+
+  That is about 1.4–1.6× for the first run and 1.5–2.3× cached.
+
 ## Risks / Trade-offs
 
 - **A runner could publish a wrong result under a valid signature** and poison the project cache. → Runners are trusted, as today. Attribution makes this traceable, and admins can evict by user. Documented in the security notes.

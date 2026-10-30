@@ -16,7 +16,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -64,10 +64,14 @@ def _artifact(lab: Lab, key: str) -> ArtifactRef:
         raise HTTPException(404, f"no artifact {key!r}") from None
 
 
-def _preview(lab: Lab, ref: ArtifactRef, present: bool) -> dict[str, Any]:
+def _preview(lab: Lab, ref: ArtifactRef, present: bool, hosted: Any = None) -> dict[str, Any]:
     store = lab.store
     if not present:
         return {"type": "missing"}
+    if ref.kind == "value" and hosted is not None:
+        # A hosted server never unpickles: values carry the text their producer recorded.
+        text = hosted.value_preview(ref.hash)
+        return {"type": "value", "repr": text if text is not None else "(no preview was recorded for this value)"}
     if ref.kind == "dir":
         entries = store.manifest(ref)
         return {
@@ -211,15 +215,36 @@ def _display_path(file: str | None) -> str | None:
         return file
 
 
+def _db_label(lab: Lab) -> str:
+    engine = getattr(lab.db, "engine", None)
+    if engine is None:  # a hosted project, reached through its server
+        return f"{lab.settings.server} (project {lab.settings.project})"
+    return engine.url.render_as_string(hide_password=True)
+
+
 def create_app(
-    lab: Lab | None = None, ui_dir: Path = UI_DIR, allow_edit: bool = False, presign: bool | None = None
+    lab: Lab | None = None,
+    ui_dir: Path = UI_DIR,
+    allow_edit: bool = False,
+    presign: bool | None = None,
+    *,
+    source_edit: bool | None = None,
+    hosted: Any = None,
 ) -> FastAPI:
-    """``allow_edit`` lets the UI write edited step source back to its file (see sources.py).
+    """``allow_edit`` lets the UI change things: drafts, deletions, storage and step source.
+    ``source_edit`` (default: ``allow_edit``) separately allows writing step source back to
+    its file (see sources.py).
+
+    ``hosted`` is set when a dendrite server mounts this app for a project: it supplies the
+    signed-in user (``whoami(request)``) and producer-recorded value previews, and the
+    project's metadata enforces roles and ownership itself.
 
     ``presign`` (default: ``DENDRITE_PRESIGN``, on unless ``0``) lets downloads from a remote
     store redirect to a signed URL. Turn it off when browsers can't reach the store's endpoint.
     """
     lab = lab or Lab()
+    if source_edit is None:
+        source_edit = allow_edit
     if presign is None:
         presign = os.environ.get("DENDRITE_PRESIGN", "1") != "0"
     mode = ui_mode(ui_dir)
@@ -227,16 +252,25 @@ def create_app(
     app.state.lab = lab
     app.state.closing = threading.Event()  # set on shutdown; ends live-update streams
 
+    @app.exception_handler(PermissionError)
+    async def forbidden(_: Request, e: PermissionError):
+        return JSONResponse({"detail": str(e)}, status_code=403)
+
     @app.get("/api/info")
-    def info() -> dict[str, Any]:
-        return {
-            "db": lab.db.engine.url.render_as_string(hide_password=True),
-            "store": lab.store.url,
+    def info(request: Request) -> dict[str, Any]:
+        out = {
+            "db": "server" if hosted else _db_label(lab),
+            "store": "server" if hosted else lab.store.url,
             "ui": mode,
             "edit": allow_edit,
-            "plan": bool(_PIPELINES),
-            "pipelines": sorted(_PIPELINES),
+            "source_edit": source_edit,
+            # A hosted server shares no pipeline code with its clients, and never runs any.
+            "plan": bool(_PIPELINES) and hosted is None,
+            "pipelines": [] if hosted is not None else sorted(_PIPELINES),
         }
+        if hosted is not None:
+            out["hosted"] = hosted.whoami(request)
+        return out
 
     def require_edit() -> None:
         if not allow_edit:
@@ -368,6 +402,15 @@ def create_app(
         return busy_or_refused(lab.clean, force=bool(req and req.force))
 
     def pipeline(name: str):
+        if hosted is not None:
+            raise HTTPException(
+                409,
+                {
+                    "code": "pipeline_not_imported",
+                    "message": "a hosted server never runs pipeline code: plan and check drafts where the code lives "
+                    "(Experiment.plan()), or with `dendrite ui --import …` on your machine",
+                },
+            )
         runtime.refresh_modules()  # a saved edit (here or on disk) reloads before it is shown
         pipe = _PIPELINES.get(name)
         if pipe is None:
@@ -428,6 +471,15 @@ def create_app(
     @app.get("/api/experiments/{exp_id}/plan")
     def plan(exp_id: str) -> dict[str, Any]:
         exp = _experiment(lab, exp_id)
+        if hosted is not None:
+            raise HTTPException(
+                409,
+                {
+                    "code": "pipeline_not_imported",
+                    "message": "a hosted server never runs pipeline code: plan and check drafts where the code lives "
+                    "(Experiment.plan()), or with `dendrite ui --import …` on your machine",
+                },
+            )
         if exp.pipeline_name not in _PIPELINES:
             raise HTTPException(
                 409,
@@ -514,7 +566,7 @@ def create_app(
             "present": present,
             "producer": lab.db.execution(producer) if producer else None,
             "experiments": lab.db.experiments_using_artifact(ref.hash),
-            "preview": _preview(lab, ref, present),
+            "preview": _preview(lab, ref, present, hosted),
             "auto_preview_bytes": AUTO_PREVIEW_BYTES if lab.store.remote else None,
         }
 
@@ -573,17 +625,19 @@ def create_app(
         snap = lab.db.snapshot(source_hash)
         if snap is None:
             raise HTTPException(404, f"no source snapshot {source_hash!r}")
-        disk = disk_status(snap)
+        # A hosted server never opens a path a client recorded: the file is on the runner's machine.
+        disk = {"status": "elsewhere", "file_sha": None} if hosted is not None else disk_status(snap)
         return {
             **{k: snap[k] for k in ("hash", "source", "file", "line", "module", "qualname")},
             "display": _display_path(snap["file"]),
             **disk,
-            "editable": allow_edit and disk["status"] == "same",
+            "editable": source_edit and disk["status"] == "same",
         }
 
     @app.put("/api/sources/{source_hash}")
     def save_source(source_hash: str, edit: SourceEdit) -> dict[str, Any]:
-        require_edit()
+        if not source_edit:
+            raise HTTPException(403, EDIT_DISABLED)
         snap = lab.db.snapshot(source_hash)
         if snap is None:
             raise HTTPException(404, f"no source snapshot {source_hash!r}")

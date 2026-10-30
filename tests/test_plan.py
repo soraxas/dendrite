@@ -127,6 +127,7 @@ def test_missing_blob(lab, source):
     assert outcomes(p)["featurize"] == ("run", "missing_blob")
 
 
+@pytest.mark.local_only("snapshots every table with lab.db.ro(); tests/test_hosted.py checks plans remotely")
 def test_plan_writes_nothing(lab, source):
     a = lab.create(toy.toy_parallel, inputs={"src": source}).run()
     d = a.fork({"train.iterations": 3}, draft=True)

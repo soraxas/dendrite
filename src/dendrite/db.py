@@ -230,13 +230,14 @@ def _sqlite_engine(url: str, immediate: bool) -> sa.Engine:
 
 
 class Metadata:
-    def __init__(self, url: str):
+    def __init__(self, url: str, **pool: Any):
+        """``pool`` passes pool settings (``pool_size``, ``max_overflow``) to a non-SQLite engine."""
         self.url = url
         if url.startswith("sqlite"):
             self.engine = _sqlite_engine(url, immediate=True)
             self.reader = _sqlite_engine(url, immediate=False)
         else:
-            self.engine = sa.create_engine(url, pool_pre_ping=True)
+            self.engine = sa.create_engine(url, pool_pre_ping=True, **pool)
             self.reader = self.engine
         meta.create_all(self.engine)
 
@@ -510,7 +511,15 @@ class Metadata:
             seq = conn.execute(
                 sa.select(sa.func.count()).select_from(node_runs).where(node_runs.c.experiment_id == exp_id)
             ).scalar_one()
-            conn.execute(node_runs.insert().values(experiment_id=exp_id, node=node, seq=seq, **values))
+            try:
+                with conn.begin_nested():
+                    conn.execute(node_runs.insert().values(experiment_id=exp_id, node=node, seq=seq, **values))
+            except IntegrityError:  # inserted concurrently since the update above: update it instead
+                conn.execute(
+                    node_runs.update()
+                    .where(node_runs.c.experiment_id == exp_id, node_runs.c.node == node)
+                    .values(**values)
+                )
 
     def upsert_node_run(self, exp_id: str, node: str, **values: Any) -> None:
         with self.tx() as conn:
@@ -759,17 +768,24 @@ class Metadata:
     def record_source(self, exec_id: str, snap: dict[str, Any]) -> None:
         """Link an execution to its node function's source snapshot (stored once per text)."""
         with self.tx() as conn:
-            exists = conn.execute(sa.select(code_snapshots.c.hash).where(code_snapshots.c.hash == snap["hash"])).first()
-            if not exists:
-                conn.execute(code_snapshots.insert().values(created_at=time.time(), **snap))
+            self._insert_snapshot(conn, snap)
             conn.execute(execution_sources.insert().values(execution_id=exec_id, source_hash=snap["hash"]))
+
+    @staticmethod
+    def _insert_snapshot(conn: sa.Connection, snap: dict[str, Any]) -> None:
+        # Parallel executions of one step store the same text at once; the loser's insert is a no-op.
+        if conn.execute(sa.select(code_snapshots.c.hash).where(code_snapshots.c.hash == snap["hash"])).first():
+            return
+        try:
+            with conn.begin_nested():
+                conn.execute(code_snapshots.insert().values(created_at=time.time(), **snap))
+        except IntegrityError:
+            pass
 
     def save_snapshot(self, snap: dict[str, Any]) -> None:
         """Store a source snapshot (once per text) without linking it to an execution."""
         with self.tx() as conn:
-            exists = conn.execute(sa.select(code_snapshots.c.hash).where(code_snapshots.c.hash == snap["hash"])).first()
-            if not exists:
-                conn.execute(code_snapshots.insert().values(created_at=time.time(), **snap))
+            self._insert_snapshot(conn, snap)
 
     def snapshot(self, source_hash: str) -> dict | None:
         with self.ro() as conn:

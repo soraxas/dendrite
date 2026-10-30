@@ -28,6 +28,7 @@ def _remote_lab(lab, tmp_path, url, **opts):
     return Lab(tmp_path / "remote", db_url=lab.settings.db_url, store_url=url, storage_options=opts or None)
 
 
+@pytest.mark.local_only("LocalStore-specific")
 def test_local_downloads_serve_the_blob_with_ranges(lab, tmp_path):
     f, d = _files(tmp_path)
     file_ref, dir_ref = lab.ingest(f), lab.ingest(d)
