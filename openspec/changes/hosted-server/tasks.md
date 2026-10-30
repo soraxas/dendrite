@@ -56,5 +56,5 @@
 
 - [x] 8.1 `dendrite server` config loading, the Postgres-only check, and `min_client` version negotiation (426)
 - [x] 8.2 `dendrite server adopt` for an existing direct-mode schema and prefix
-- [ ] 8.3 (example `server.toml`, compose for Postgres + MinIO and the network notes are done; no server image yet, since Prefect comes from ../prefect) Docker image and an example `server.toml`; document the network setup (Postgres and bucket private to the server)
+- [x] 8.3 (the image installs Prefect 3.8.8 from PyPI; docs/deploying.md; `dendrite server check`) Docker image and an example `server.toml`; document the network setup (Postgres and bucket private to the server)
 - [x] 8.4 README "Team setup" section; CLAUDE.md architecture and invariants (server never unpickles, uploads committed before publish)

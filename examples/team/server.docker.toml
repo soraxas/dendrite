@@ -1,0 +1,11 @@
+# The dendrite server running in Docker (compose profile "server"), on http://127.0.0.1:8456.
+# Blobs live in a volume and stream through the server. With a real S3 bucket, set store_url and
+# [store_options]; clients then transfer straight to the bucket with presigned URLs.
+base_url = "http://127.0.0.1:8456"
+database_url = "postgresql+psycopg://dendrite:dendrite@db:5432/dendrite"
+store_url = "/var/lib/dendrite/blobs"
+home = "/var/lib/dendrite/home"
+admins = ["admin@example.com"]
+
+[auth]
+provider = "dev"   # localhost only; see README.md for GitHub or OIDC

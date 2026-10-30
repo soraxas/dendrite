@@ -16,8 +16,10 @@ def statuses(exp):
     return {n["node"]: n["status"] for n in exp.node_runs()}
 
 
-def api(hosted, token, method, path, **kw):
-    return httpx.request(method, hosted.url + path, headers={"Authorization": f"Bearer {token}"}, **kw)
+def api(hosted, token, method, path, headers=None, **kw):
+    return httpx.request(
+        method, hosted.url + path, headers={"Authorization": f"Bearer {token}", **(headers or {})}, **kw
+    )
 
 
 def rpc(hosted, token, project, method, *args, **kwargs):
@@ -544,3 +546,106 @@ def test_publish_refuses_uncommitted_inputs(hosted, tmp_path, source):
             lease=None,
         )
     lab.db.dispose()
+
+
+def test_two_server_processes_share_uploads_and_replies(hosted):
+    from fastapi.testclient import TestClient
+
+    from dendrite.hosted import wire
+    from dendrite.hosted.app import Hosted, create_server_app
+
+    other = TestClient(create_server_app(hosted.server.settings, Hosted(hosted.server.settings)))  # replica B
+    project = hosted.project()
+    auth = {"Authorization": f"Bearer {hosted.admin_token}"}
+
+    data = bytes(range(256)) * 2000  # above the inline limit, so it's a presigned upload
+    h = hashlib.sha256(data).hexdigest()
+    body = wire.dumps({"items": [{"hash": h, "size": len(data)}]})
+    plan = wire.loads(
+        api(hosted, hosted.admin_token, "POST", f"/api/v1/projects/{project}/blobs/missing", content=body).content
+    )["uploads"][0]
+    assert httpx.put(plan["url"], content=data, headers=plan["headers"]).status_code == 200
+    # Planned on A, committed on B.
+    done = other.post(
+        f"/api/v1/projects/{project}/blobs/commit", content=wire.dumps({"upload": plan["upload"]}), headers=auth
+    )
+    assert wire.loads(done.content)["state"] == "committed"
+
+    # A retried write that lands on B replays A's reply instead of running again.
+    call = wire.dumps({"args": ["sig-r", "w", 60], "kwargs": {}})
+    first = api(
+        hosted,
+        hosted.admin_token,
+        "POST",
+        f"/api/v1/projects/{project}/rpc/acquire_lease",
+        content=call,
+        headers={"Idempotency-Key": "k-1"},
+    )
+    retry = other.post(
+        f"/api/v1/projects/{project}/rpc/acquire_lease", content=call, headers={**auth, "Idempotency-Key": "k-1"}
+    )
+    fresh = other.post(
+        f"/api/v1/projects/{project}/rpc/acquire_lease", content=call, headers={**auth, "Idempotency-Key": "k-2"}
+    )
+    assert wire.loads(first.content)["result"] is True and wire.loads(retry.content)["result"] is True
+    assert wire.loads(fresh.content)["result"] is False  # without the key it really ran again: the lease is held
+
+
+def test_github_sign_in_uses_the_verified_primary_email(pg_url, tmp_path):
+    from urllib.parse import parse_qs, urlparse
+
+    from fastapi import FastAPI, Form, Header
+    from fastapi.testclient import TestClient
+
+    from dendrite.hosted.app import Hosted, create_server_app
+    from dendrite.hosted.settings import ServerSettings
+
+    gh = FastAPI()  # api.github.com and github.com, as far as sign-in needs them
+    uid = uuid_hex()
+
+    @gh.post("/login/oauth/access_token")
+    def access_token(client_id: str = Form(...), client_secret: str = Form(...), code: str = Form(...)):
+        assert (client_id, client_secret, code) == ("gh-app", "gh-secret", "c-gh")
+        return {"access_token": "gho_x", "token_type": "bearer"}
+
+    @gh.get("/user")
+    def user(authorization: str = Header(...)):
+        assert authorization == "Bearer gho_x"
+        return {"id": int(uid, 16), "login": "octo", "name": None}
+
+    @gh.get("/user/emails")
+    def emails():
+        return [
+            {"email": f"old-{uid}@example.com", "primary": False, "verified": True},
+            {"email": f"unverified-{uid}@example.com", "primary": True, "verified": False},
+        ]
+
+    settings = ServerSettings(
+        base_url="http://127.0.0.1:9998",
+        database_url=pg_url,
+        store_url=str(tmp_path / "store"),
+        home=tmp_path / "srv",
+        auth={"provider": "github", "client_id": "gh-app", "client_secret": "gh-secret"},
+    )
+    server = Hosted(settings)
+    app = create_server_app(settings, server)
+    app.state.providers.http = TestClient(gh)  # routes every github.com / api.github.com call here
+    browser = TestClient(app, base_url=settings.base_url)
+    r = browser.get("/auth/login", follow_redirects=False)
+    assert r.headers["location"].startswith("https://github.com/login/oauth/authorize?")
+    state = parse_qs(urlparse(r.headers["location"]).query)["state"][0]
+    done = browser.get("/auth/callback", params={"code": "c-gh", "state": state}, follow_redirects=False)
+    assert done.status_code == 303 and "dendrite_session" in done.cookies
+    me = server.control.upsert_user("github", str(int(uid, 16)), None, None)
+    assert me["name"] == "octo" and me["email"] is None  # the primary email isn't verified, so no email
+
+
+def test_server_check_reports_what_the_store_enforces(hosted):
+    from dendrite.hosted.check import run_checks
+
+    seen = []
+    ok = run_checks(hosted.server.settings, lambda status, name, detail: seen.append((status, name)))
+    found = dict((name, status) for status, name in seen)
+    assert ok and found["database"] == "ok" and found["presigned upload"] == "ok"
+    assert found["upload checksums"] == "warn"  # moto accepts mismatched bytes; the check says so
+    assert found["no overwrites"] == "ok" and found["presigned download"] == "ok"

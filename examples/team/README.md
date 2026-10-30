@@ -97,7 +97,19 @@ uv run dendrite token create --project demo --role runner --name ci     # prints
 
 Set it as `DENDRITE_TOKEN` in CI. Without a token, a non-interactive run fails immediately with `NotLoggedIn` instead of waiting for a sign-in.
 
+## The server as a container
+
+The repo's `Dockerfile` builds the server image, and Compose can run it next to the same Postgres:
+
+```bash
+docker compose --profile server up -d --wait server        # http://127.0.0.1:8456, config: server.docker.toml
+```
+
+That variant keeps blobs in a volume and streams them through the server, because presigned URLs must name a hostname that both the server and your machine can reach, which an in-Compose MinIO doesn't have. With a real S3 bucket, clients transfer directly as above.
+
 ## For a real deployment
+
+See [`docs/deploying.md`](../../docs/deploying.md). In short:
 
 - **TLS:** put the server behind HTTPS and set `base_url` to that address.
 - **Sign-in:** use `provider = "github"`, or `"oidc"` with an `issuer`, and pass `client_secret = "${GITHUB_CLIENT_SECRET}"` through the environment.

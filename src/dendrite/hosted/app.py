@@ -18,7 +18,6 @@ import logging
 import os
 import tempfile
 import threading
-import time
 from collections import OrderedDict
 from contextlib import contextmanager
 from pathlib import Path
@@ -111,7 +110,7 @@ class Project:
             from dataclasses import replace
 
             self.lab.settings = replace(self.lab.settings, gc_grace=float(s.gc_grace))
-        self.broker = Broker(store, s)
+        self.broker = Broker(store, s, server.control, row["name"])
         self.tmp = home / "uploads"
         self.ui_app = None  # the project's web UI, built on first use (ui.py)
 
@@ -127,7 +126,6 @@ class Hosted:
         self.control = Control(self.engine)
         self._projects: OrderedDict[str, Project] = OrderedDict()
         self._lock = threading.Lock()
-        self._idem: OrderedDict[str, tuple[float, int, bytes]] = OrderedDict()
         for email in settings.admins:  # admins named in the config are admins before they first sign in
             self.control.invite(email, admin=True)
 
@@ -181,21 +179,13 @@ class Hosted:
             raise ApiError(403, "PermissionError", f"needs the {needed} role in project {project!r}")
         return c
 
-    # -- idempotency -------------------------------------------------------------
-    def remembered(self, key: str | None) -> tuple[int, bytes] | None:
-        if not key:
-            return None
-        now = time.time()
-        with self._lock:
-            while self._idem and next(iter(self._idem.values()))[0] < now - IDEMPOTENCY_SECONDS:
-                self._idem.popitem(last=False)
-            hit = self._idem.get(key)
-        return (hit[1], hit[2]) if hit else None
+    # -- idempotency (in the database, so a retry may reach another server process) --------
+    def remembered(self, caller: Caller, key: str | None) -> tuple[int, bytes] | None:
+        return self.control.reply(caller.user_id, key, IDEMPOTENCY_SECONDS) if key else None
 
-    def remember(self, key: str | None, status: int, body: bytes) -> None:
+    def remember(self, caller: Caller, key: str | None, status: int, body: bytes) -> None:
         if key:
-            with self._lock:
-                self._idem[key] = (time.time(), status, body)
+            self.control.save_reply(caller.user_id, key, status, body, IDEMPOTENCY_SECONDS)
 
     # -- remote metadata ---------------------------------------------------------
     def call(self, project: str, caller: Caller, method: str, args: list, kwargs: dict) -> Any:
@@ -277,11 +267,12 @@ def create_server_app(settings: ServerSettings, hosted: Hosted | None = None) ->
     @app.post("/api/v1/projects/{project}/rpc/{method}")
     async def rpc(project: str, method: str, request: Request):
         key = request.headers.get("idempotency-key")
-        if (hit := server.remembered(key)) is not None:
-            return Response(hit[1], status_code=hit[0], media_type="application/json")
         raw = await request.body()
+        c = None
         try:
             c = await run_in_threadpool(server.caller, request, project)
+            if (hit := await run_in_threadpool(server.remembered, c, key)) is not None:
+                return Response(hit[1], status_code=hit[0], media_type="application/json")
             body = json_body(raw)
             result = await run_in_threadpool(
                 server.call, project, c, method, body.get("args", []), body.get("kwargs", {})
@@ -289,8 +280,8 @@ def create_server_app(settings: ServerSettings, hosted: Hosted | None = None) ->
             resp = encoded({"result": result})
         except Exception as e:  # noqa: BLE001
             resp = _error_response(e)
-        if resp.status_code < 500:
-            server.remember(key, resp.status_code, resp.body)
+        if c is not None and resp.status_code < 500:
+            await run_in_threadpool(server.remember, c, key, resp.status_code, resp.body)
         return resp
 
     @app.post("/api/v1/projects/{project}/rpc")

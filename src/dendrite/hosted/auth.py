@@ -19,8 +19,6 @@ import base64
 import hashlib
 import html
 import secrets
-import threading
-import time
 from typing import Any
 from urllib.parse import quote, urlencode
 
@@ -78,8 +76,6 @@ class Providers:
         self.server = server
         self.settings = server.settings
         self.http = httpx.Client(timeout=20, follow_redirects=True)
-        self._states: dict[str, dict[str, Any]] = {}
-        self._lock = threading.Lock()
         self._oidc: dict[str, Any] | None = None
 
     @property
@@ -88,16 +84,11 @@ class Providers:
 
     def remember(self, **data: Any) -> str:
         state = secrets.token_urlsafe(24)
-        now = time.time()
-        with self._lock:
-            for k in [k for k, v in self._states.items() if v["at"] < now - STATE_TTL]:
-                del self._states[k]
-            self._states[state] = {**data, "at": now}
+        self.server.control.save_oauth_state(state, data, STATE_TTL)
         return state
 
     def recall(self, state: str | None) -> dict[str, Any] | None:
-        with self._lock:
-            return self._states.pop(state or "", None)
+        return self.server.control.take_oauth_state(state, STATE_TTL) if state else None
 
     def discovery(self) -> dict[str, Any]:
         if self._oidc is None:
@@ -118,16 +109,16 @@ class Providers:
                 "state": state,
             }
             return "https://github.com/login/oauth/authorize?" + urlencode(q)
-        verifier = secrets.token_urlsafe(48)
+        verifier, nonce = secrets.token_urlsafe(48), secrets.token_urlsafe(16)
         challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
-        state = self.remember(next=next_url, verifier=verifier, nonce=secrets.token_urlsafe(16))
+        state = self.remember(next=next_url, verifier=verifier, nonce=nonce)
         q = {
             "client_id": a.client_id,
             "redirect_uri": self.redirect_uri,
             "response_type": "code",
             "scope": " ".join(a.scopes),
             "state": state,
-            "nonce": self._states[state]["nonce"],
+            "nonce": nonce,
             "code_challenge": challenge,
             "code_challenge_method": "S256",
         }

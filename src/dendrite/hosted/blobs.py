@@ -15,6 +15,7 @@ Upload of one missing blob, by store and ``verify_uploads``:
 * any other store: ``proxy``, a PUT to the server, which hashes the body as it stores it.
 
 A blob is committed once it exists at its content address; publish refuses any that isn't.
+Upload sessions live in the control database, so any server process can commit an upload.
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ from ..store import ArtifactStore, FsspecStore, _protocols
 from .settings import ServerSettings
 
 INLINE_VERIFY = 64 * 1024**2  # staged uploads up to this size are verified within the commit request
+STALE_VERIFY = 120  # seconds a verification may go without progress before another process takes over
 
 
 def b64(h: str) -> str:
@@ -53,17 +55,21 @@ class Upload:
     multipart_id: str | None = None
     state: str = "uploading"  # uploading | verifying | committed | failed
     error: str | None = None
-    preview: str | None = None
-    created: float = field(default_factory=time.time)
+    updated_at: float = field(default_factory=time.time)
+
+    FIELDS = ("id", "hash", "size", "key", "staged", "multipart_id", "state", "error")
+
+    def row(self) -> dict:
+        return {k: getattr(self, k) for k in self.FIELDS}
 
 
 class Broker:
-    def __init__(self, store: ArtifactStore, settings: ServerSettings):
-        self.store, self.settings = store, settings
+    """One project's uploads. Sessions live in the control database (``control.uploads``), so
+    a commit can reach a different server process than the one that planned the upload."""
+
+    def __init__(self, store: ArtifactStore, settings: ServerSettings, control=None, project: str = ""):
+        self.store, self.settings, self.control, self.project = store, settings, control, project
         self.s3 = isinstance(store, FsspecStore) and "s3" in _protocols(store.fs)
-        # In memory: an upload must be committed through the server process that planned it.
-        self.uploads: dict[str, Upload] = {}
-        self._lock = threading.Lock()
         self._expired_at = time.time()
 
     # -- S3 plumbing -------------------------------------------------------------
@@ -82,6 +88,18 @@ class Broker:
 
     def _call(self, method: str, **kw: Any) -> Any:
         return self.store.fs.call_s3(method, **kw)
+
+    # -- sessions ----------------------------------------------------------------
+    def _upload(self, upload_id: str) -> Upload:
+        row = self.control.upload(upload_id, self.project)
+        if row is None:
+            raise UploadError("unknown or expired upload; plan it again")
+        return Upload(**{k: row[k] for k in (*Upload.FIELDS, "updated_at")})
+
+    def _set(self, up: Upload, **values: Any) -> None:
+        for k, v in values.items():
+            setattr(up, k, v)
+        self.control.update_upload(up.id, **values)
 
     # -- planning ----------------------------------------------------------------
     def missing(self, items: list[dict]) -> list[dict]:
@@ -103,8 +121,12 @@ class Broker:
         staged = self.settings.verify_uploads == "hash" and (multipart or not self.settings.store_enforces_sha256)
         up = Upload(uuid.uuid4().hex, h, size, "", staged)
         up.key = self._staging(up.id) if staged else self._final(h)
-        with self._lock:
-            self.uploads[up.id] = up
+        if multipart:
+            bucket, key = self._split(up.key)
+            up.multipart_id = self._call("create_multipart_upload", Bucket=bucket, Key=key, ChecksumAlgorithm="SHA256")[
+                "UploadId"
+            ]
+        self.control.save_upload(self.project, up.row())
         if not multipart:
             headers = {"x-amz-checksum-sha256": b64(h)}
             params: dict[str, Any] = {"ChecksumSHA256": b64(h)}
@@ -118,10 +140,6 @@ class Broker:
                 "url": self._sign(up.key, "put_object", **params),
                 "headers": headers,
             }
-        bucket, key = self._split(up.key)
-        up.multipart_id = self._call("create_multipart_upload", Bucket=bucket, Key=key, ChecksumAlgorithm="SHA256")[
-            "UploadId"
-        ]
         part = max(self.settings.part_size, math.ceil(size / 9_000))
         return {"hash": h, "method": "multipart", "upload": up.id, "part_size": part, "parts": math.ceil(size / part)}
 
@@ -135,16 +153,14 @@ class Broker:
             out.append({"n": n, "url": url, "headers": {"x-amz-checksum-sha256": checksum}})
         return out
 
-    def _upload(self, upload_id: str) -> Upload:
-        up = self.uploads.get(upload_id)
-        if up is None:
-            raise UploadError("unknown or expired upload; plan it again")
-        return up
-
     # -- committing --------------------------------------------------------------
-    def commit(self, upload_id: str, parts: list[dict] | None = None, preview: str | None = None) -> dict:
+    def commit(self, upload_id: str, parts: list[dict] | None = None) -> dict:
         up = self._upload(upload_id)
-        up.preview = preview if preview is not None else up.preview
+        if up.state == "verifying":
+            # The process hashing it may have died: if it has gone quiet, take the job over (once).
+            if self.control.update_upload(up.id, when_state="verifying", stale_before=time.time() - STALE_VERIFY):
+                threading.Thread(target=self._verify_staged, args=(up,), daemon=True).start()
+            return self._state(up)
         if up.state != "uploading":
             return self._state(up)
         bucket, key = self._split(up.key)
@@ -167,7 +183,7 @@ class Broker:
             head = self._call("head_object", Bucket=bucket, Key=key, ChecksumMode="ENABLED")
         except FileNotFoundError:
             if self.store.has(up.hash):  # a concurrent upload of the same content won
-                up.state = "committed"
+                self._set(up, state="committed")
                 return self._state(up)
             raise UploadError("nothing was uploaded") from None
         if int(head.get("ContentLength", -1)) != up.size:
@@ -177,10 +193,10 @@ class Broker:
         elif up.staged and up.size <= INLINE_VERIFY:
             self._verify_staged(up)  # small enough to check within this request
         elif up.staged:
-            up.state = "verifying"  # the client polls until the server has hashed it
+            self._set(up, state="verifying")  # the client polls until the server has hashed it
             threading.Thread(target=self._verify_staged, args=(up,), daemon=True).start()
         else:
-            up.state = "committed"
+            self._set(up, state="committed")
         return self._state(up)
 
     def _verify_staged(self, up: Upload) -> None:
@@ -189,18 +205,19 @@ class Broker:
             with self.store.fs.open(up.key, "rb", block_size=8 * 1024**2) as f:
                 while chunk := f.read(8 * 1024**2):
                     digest.update(chunk)
+                    self.control.update_upload(up.id)  # still alive: keeps another process from taking over
             if digest.hexdigest() != up.hash:
                 self._fail(up, "uploaded bytes don't match their hash")
                 return
             if not self.store.has(up.hash):
                 self.store.fs.copy(up.key, self._final(up.hash))
             self.store.fs.rm_file(up.key)
-            up.state = "committed"
+            self._set(up, state="committed")
         except Exception as e:  # report it to the polling client
             self._fail(up, f"verification failed: {e}")
 
     def _fail(self, up: Upload, why: str) -> None:
-        up.state, up.error = "failed", why
+        self._set(up, state="failed", error=why)
         try:
             self.store.fs.rm_file(up.key)
         except FileNotFoundError:
@@ -211,38 +228,18 @@ class Broker:
         if up.error:
             out["error"] = up.error
         if up.state in ("committed", "failed"):
-            with self._lock:
-                self.uploads.pop(up.id, None)
+            self.control.delete_upload(up.id)
         return out
 
     def expire(self, older_than: float = 24 * 3600) -> None:
         """Forget uploads never committed, and delete their staged bytes."""
-        cutoff = time.time() - older_than
-        for up in [u for u in self.uploads.values() if u.created < cutoff and u.state == "uploading"]:
-            self._fail(up, "expired")
-            self.uploads.pop(up.id, None)
-
-    # -- proxied uploads (stores that can't presign) --------------------------------
-    def accept(self, h: str, chunks, tmp_dir) -> None:
-        """Store a streamed body under ``h`` if it hashes to ``h``."""
-        import os
-        import tempfile
-        from pathlib import Path
-
-        tmp_dir.mkdir(parents=True, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(dir=tmp_dir, prefix=".up-")
-        digest = hashlib.sha256()
-        try:
-            with os.fdopen(fd, "wb") as f:
-                for chunk in chunks:
-                    digest.update(chunk)
-                    f.write(chunk)
-            if digest.hexdigest() != h:
-                raise UploadError("uploaded bytes don't match their hash")
-            if not self.store.has(h):
-                self.store._put_object_file(h, Path(tmp))
-        finally:
-            Path(tmp).unlink(missing_ok=True)
+        for row in self.control.abandoned_uploads(self.project, time.time() - older_than):
+            if row["staged"] or row["key"] != self._final(row["hash"]):
+                try:
+                    self.store.fs.rm_file(row["key"])
+                except FileNotFoundError:
+                    pass
+            self.control.delete_upload(row["id"])
 
     # -- downloads ---------------------------------------------------------------
     def download_urls(self, hashes: list[str]) -> dict[str, str | None]:

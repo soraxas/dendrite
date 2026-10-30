@@ -23,6 +23,8 @@ from ..db import Metadata
 from ..store import ArtifactRef, ArtifactStore
 from .control import Caller, Control, role_at_least
 
+PROJECT_POOL, PROJECT_OVERFLOW = 2, 3  # per open project: 2 idle, at most 5 connections
+
 CALLER: contextvars.ContextVar[Caller | None] = contextvars.ContextVar("dendrite_caller", default=None)
 
 
@@ -48,7 +50,7 @@ def need(role: str) -> Caller | None:
 class ServerMetadata(Metadata):
     def __init__(self, url: str, *, project: str, control: Control, store: ArtifactStore):
         # A server holds an engine per open project; keep each pool small.
-        super().__init__(url, pool_size=2, max_overflow=8)
+        super().__init__(url, pool_size=2, max_overflow=PROJECT_OVERFLOW)
         self.project, self.control, self.store = project, control, store
         self._owners: dict[tuple[str, str], str] = {}
 

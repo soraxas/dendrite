@@ -220,7 +220,10 @@ Nothing in the pipeline changes: `Lab()` finds `dendrite.toml`.
 - **Access:** each project has viewers, runners and admins, and the UI shows who ran what.
 - **CI** uses a scoped token: `dendrite token create --project recon --role runner`.
 
-The server is `dendrite server run --config server.toml`: a FastAPI app plus Postgres and a bucket. [`examples/team`](examples/team) runs one on your machine with Docker, end to end.
+The server is `dendrite server run --config server.toml`, or the `Dockerfile` image: a FastAPI app plus Postgres and a bucket.
+
+- [`examples/team`](examples/team) runs one on your machine with Docker, end to end.
+- [`docs/deploying.md`](docs/deploying.md) covers production: sign-in apps, the bucket policy, replicas and `dendrite server check`.
 
 ## Configuration
 

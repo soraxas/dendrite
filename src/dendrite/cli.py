@@ -464,6 +464,12 @@ def cmd_server(args) -> None:
             timeout_keep_alive=settings.keep_alive_seconds,
         )
         return
+    if args.action == "check":
+        from .hosted.check import run_checks
+
+        marks = {"ok": "  ok  ", "warn": " warn ", "FAIL": " FAIL "}
+        ok = run_checks(settings, lambda status, name, detail: print(f"[{marks[status]}] {name}: {detail}"))
+        sys.exit(0 if ok else 1)
     from .hosted.app import Hosted
 
     server = Hosted(settings)
@@ -525,7 +531,7 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("role", nargs="?", choices=["viewer", "runner", "admin"])
     s.add_argument("--server")
     s = sub.add_parser("server", help="run or administer a dendrite server (on the server host)")
-    s.add_argument("action", choices=["run", "admin-token", "adopt", "create-project"])
+    s.add_argument("action", choices=["run", "check", "admin-token", "adopt", "create-project"])
     s.add_argument("--config", default=os.environ.get("DENDRITE_SERVER_CONFIG", "server.toml"))
     s.add_argument("--host", default="127.0.0.1")
     s.add_argument("--port", type=int, default=8455)

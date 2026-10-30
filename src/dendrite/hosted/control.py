@@ -114,6 +114,46 @@ value_previews = sa.Table(
     sa.Column("text", sa.Text, nullable=False),
 )
 
+# Uploads planned but not yet committed. In the database, so any server process can continue
+# an upload another one planned (several replicas behind a load balancer).
+uploads = sa.Table(
+    "uploads",
+    meta,
+    sa.Column("id", sa.String, primary_key=True),
+    sa.Column("project", sa.String, nullable=False),
+    sa.Column("hash", sa.String, nullable=False),
+    sa.Column("size", sa.BigInteger, nullable=False),
+    sa.Column("key", sa.String, nullable=False),  # the final object, or a staging key
+    sa.Column("staged", sa.Boolean, nullable=False),
+    sa.Column("multipart_id", sa.String),
+    sa.Column("state", sa.String, nullable=False),  # uploading | verifying | committed | failed
+    sa.Column("error", sa.String),
+    sa.Column("created_at", sa.Float, nullable=False),
+    sa.Column("updated_at", sa.Float, nullable=False),
+)
+
+# Replies to writes, by the client's idempotency key: a retried write returns the same reply
+# instead of running again, whichever server process receives the retry.
+replies = sa.Table(
+    "replies",
+    meta,
+    sa.Column("user_id", sa.String, primary_key=True),
+    sa.Column("key", sa.String, primary_key=True),
+    sa.Column("status", sa.Integer, nullable=False),
+    sa.Column("body", sa.LargeBinary, nullable=False),
+    sa.Column("created_at", sa.Float, nullable=False),
+)
+
+# Browser sign-ins in progress (OAuth state, PKCE verifier, where to go next): in the database,
+# so the provider's callback may reach a different server process than the one that started it.
+oauth_states = sa.Table(
+    "oauth_states",
+    meta,
+    sa.Column("state", sa.String, primary_key=True),
+    sa.Column("data", sa.JSON, nullable=False),
+    sa.Column("created_at", sa.Float, nullable=False),
+)
+
 # Every presigned URL handed out, for auditing reads.
 signings = sa.Table(
     "signings",
@@ -418,6 +458,84 @@ class Control:
                 sa.select(value_previews.c.text).where(value_previews.c.project == project, value_previews.c.hash == h)
             ).first()
         return row.text if row else None
+
+    # -- upload sessions ------------------------------------------------------------
+    def save_upload(self, project: str, up: dict) -> None:
+        now = time.time()
+        with self.engine.begin() as conn:
+            conn.execute(uploads.insert().values(project=project, created_at=now, updated_at=now, **up))
+
+    def upload(self, upload_id: str, project: str) -> dict | None:
+        with self.engine.connect() as conn:
+            row = conn.execute(
+                sa.select(uploads).where(uploads.c.id == upload_id, uploads.c.project == project)
+            ).first()
+        return dict(row._mapping) if row else None
+
+    def update_upload(
+        self, upload_id: str, *, when_state: str | None = None, stale_before: float | None = None, **values
+    ) -> bool:
+        """Update an upload; with ``when_state``/``stale_before`` only if it still matches (compare-and-set)."""
+        q = uploads.update().where(uploads.c.id == upload_id)
+        if when_state is not None:
+            q = q.where(uploads.c.state == when_state)
+        if stale_before is not None:
+            q = q.where(uploads.c.updated_at < stale_before)
+        with self.engine.begin() as conn:
+            return conn.execute(q.values(updated_at=time.time(), **values)).rowcount == 1
+
+    def delete_upload(self, upload_id: str) -> None:
+        with self.engine.begin() as conn:
+            conn.execute(uploads.delete().where(uploads.c.id == upload_id))
+
+    def abandoned_uploads(self, project: str, before: float) -> list[dict]:
+        with self.engine.connect() as conn:
+            rows = conn.execute(
+                sa.select(uploads).where(
+                    uploads.c.project == project, uploads.c.state == "uploading", uploads.c.created_at < before
+                )
+            ).all()
+        return [dict(r._mapping) for r in rows]
+
+    # -- sign-ins in progress ---------------------------------------------------------
+    def save_oauth_state(self, state: str, data: dict, max_age: float) -> None:
+        now = time.time()
+        with self.engine.begin() as conn:
+            conn.execute(oauth_states.delete().where(oauth_states.c.created_at < now - max_age))
+            conn.execute(oauth_states.insert().values(state=state, data=data, created_at=now))
+
+    def take_oauth_state(self, state: str, max_age: float) -> dict | None:
+        """The sign-in's data, once: it is deleted as it is read."""
+        with self.engine.begin() as conn:
+            row = conn.execute(sa.select(oauth_states).where(oauth_states.c.state == state)).first()
+            if row is None:
+                return None
+            conn.execute(oauth_states.delete().where(oauth_states.c.state == state))
+        return dict(row.data) if row.created_at > time.time() - max_age else None
+
+    # -- replies to retried writes ---------------------------------------------------
+    def reply(self, user_id: str, key: str, max_age: float) -> tuple[int, bytes] | None:
+        with self.engine.connect() as conn:
+            row = conn.execute(
+                sa.select(replies.c.status, replies.c.body, replies.c.created_at).where(
+                    replies.c.user_id == user_id, replies.c.key == key
+                )
+            ).first()
+        return (row.status, row.body) if row and row.created_at > time.time() - max_age else None
+
+    def save_reply(self, user_id: str, key: str, status: int, body: bytes, max_age: float) -> None:
+        from sqlalchemy.exc import IntegrityError
+
+        now = time.time()
+        try:
+            with self.engine.begin() as conn:
+                if secrets.randbelow(100) == 0:  # now and then, drop expired replies
+                    conn.execute(replies.delete().where(replies.c.created_at < now - max_age))
+                conn.execute(
+                    replies.insert().values(user_id=user_id, key=key, status=status, body=body, created_at=now)
+                )
+        except IntegrityError:  # the same retry raced in; the first reply stands
+            pass
 
     def log_signing(self, project: str, caller: Caller, method: str, hashes: Iterable[str]) -> None:
         now = time.time()

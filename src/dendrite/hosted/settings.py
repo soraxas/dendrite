@@ -82,8 +82,9 @@ class ServerSettings:
     url_seconds: int = 15 * 60
     # Idle connections stay open this long; clients drop theirs sooner (remote.KEEPALIVE).
     keep_alive_seconds: int = 30
-    # Projects kept open; the least recently used close. Each holds up to 10 Postgres connections
-    # (2 idle), so keep max_open_projects * 2 + 15 well under Postgres's max_connections (100).
+    # Projects kept open; the least recently used close. Each holds up to 5 Postgres connections
+    # (2 idle), so max_open_projects * 5 + 15 should stay under max_connections (100 by default);
+    # `dendrite server check` reports it.
     max_open_projects: int = 16
     # Garbage collection skips blobs written within this many seconds (in-flight uploads).
     # Unset: DENDRITE_GC_GRACE, else an hour.

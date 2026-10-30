@@ -29,6 +29,8 @@ uv run pytest -k pin                       # by keyword
 DENDRITE_TEST_DB=postgres uv run pytest   # whole suite on Postgres (testcontainers; needs Docker)
 DENDRITE_TEST_REMOTE=1 uv run pytest      # whole suite through an in-process dendrite server (Postgres + moto)
 uv run dendrite server run --config examples/team/server.toml   # hosted server; see examples/team/README.md
+uv run dendrite server check --config server.toml                # probe a deployment's database, bucket and sign-in
+docker build -t dendrite-server .          # the server image (Prefect from PyPI); docs/deploying.md
 uv run python examples/minimal.py          # smallest setup: two steps, a run and a fork
 uv run python examples/recon.py            # demo: baseline + config fork + pinned fork (DEMO_SLEEP=2 to slow nodes)
 uv run dendrite ui --port 8454 --import examples.recon   # API + SPA; --import enables draft previews
@@ -224,7 +226,7 @@ The flow of a run spans several modules in `src/dendrite/`:
 - **Narrow code fingerprint.** The fingerprint covers only the node function's own source (`inspect.getsource`). Callers bump `version=` when helper functions change.
 - **Pickles.** `value` artifacts are pickles, and `load()` and the UI preview unpickle them.
 - **The read guard is best-effort.** It sees only Python-level `open`/`os.open`. It misses C `fopen`, subprocesses, threads started by the step, and anything outside the project directory.
-- **Hosted mode runs on one server process.** Upload sessions (`Broker.uploads`) and idempotency keys are in memory, so a multi-replica deployment needs sticky sessions or shared state. GCS uploads are proxied through the server, since signed GCS uploads aren't implemented. A token revoked on another replica can work for up to `AUTH_CACHE_SECONDS`.
+- **Hosted mode, per replica.** Upload sessions, OAuth sign-ins and replies to retried writes live in the control database, so replicas can share the load. Token and role lookups are cached per process for `AUTH_CACHE_SECONDS`, so a token revoked on one replica keeps working on another until its cached entry expires. GCS uploads are proxied through the server, since signed GCS uploads aren't implemented.
 - **Plans can be incomplete.** They can't predict branching on the *contents* of a result that hasn't been computed. Downstream `run`/`upstream` is an upper bound: an unchanged upstream output still lets downstream reuse.
 
 ## Tests

@@ -240,7 +240,7 @@ What building it changed or added:
 
 - **Stores that can't presign are proxied.** A local directory, `memory://` and, for now, GCS stream through the server, which hashes them on the way in. GCS signed uploads (CRC32C) are a follow-up.
 
-- **Upload sessions and idempotency keys live in the server process.** One replica, or sticky sessions, until they move to Postgres.
+- **Shared state lives in Postgres.** Upload sessions, OAuth sign-ins in progress and replies to retried writes are stored there, so replicas behind a load balancer share them. A staged verification that stops making progress for 2 minutes is taken over, once, by whichever replica the client polls next.
 
 - **The server caches authentication for 30 s.** Token and role lookups are reused (`AUTH_CACHE_SECONDS`), and `last_used_at` is written at most once a minute. Revoking on the same server takes effect at once.
 

@@ -1,0 +1,9 @@
+.git
+.venv
+**/__pycache__
+**/.pytest_cache
+.dendrite
+.dendrite-server
+**/node_modules
+src/dendrite/ui/dist
+examples/team/.dendrite*
