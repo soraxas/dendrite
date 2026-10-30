@@ -221,6 +221,7 @@ Spec-driven changes live in `openspec/`:
 - `openspec/changes/storage-management/` is the storage inventory, delete, evict, GC and clean-up change.
 - `openspec/changes/live-graph/` is live progress, pushed updates, fan-out groups and pipeline-read edges.
 - `openspec/changes/pipeline-stages/` is stages in code and in the UI, and the stage overview.
+- `openspec/changes/hosted-server/` is the proposed hosted mode: a server that owns Postgres and the bucket, login, projects and roles, and presigned blob access. Not implemented yet.
 - `openspec/changes/react-flow-ui/` is the React Flow UI change. Archive it with `openspec archive react-flow-ui` once it has been reviewed.
 - Use `/opsx:propose`, `/opsx:apply` and `/opsx:archive` for new work.
 - Validate with `openspec validate <change>`.
