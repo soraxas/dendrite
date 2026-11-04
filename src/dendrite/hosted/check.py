@@ -87,13 +87,15 @@ def _check_store(store, settings: ServerSettings, note) -> None:
     # Probe the bucket itself: uploads straight to their content address, as in checksum mode.
     direct = replace(settings, verify_uploads="checksum", store_enforces_sha256=True)
     broker = Broker(store, direct, control=_NoSessions(), project="_check")
-    if not broker.s3:
+    if not (broker.s3 or broker.gcs):
         store._put_object_bytes(probe)
         ok = store.read_bytes(h) == probe
         store.delete(h)
         note(OK if ok else FAIL, "store", f"{store.url}: writable; blobs stream through the server (no presigning)")
         return
     plan = broker.plan(h, len(probe))
+    if broker.gcs:
+        return _check_gcs(store, broker, plan, probe, h, note)
     try:
         wrong = httpx.put(plan["url"], content=b"not the declared bytes!", headers=plan["headers"], timeout=30)
         enforced = wrong.status_code >= 400
@@ -128,6 +130,45 @@ def _check_store(store, settings: ServerSettings, note) -> None:
         try:
             store.delete(h)
         except Exception:  # noqa: BLE001 - best effort clean-up
+            pass
+
+
+def _check_gcs(store, broker, plan, probe: bytes, h: str, note) -> None:
+    """GCS checks uploads with CRC32C on commit (not a signed SHA-256), so probe what it enforces."""
+    try:
+        put = httpx.put(plan["url"], content=probe, headers=plan["headers"], timeout=30)
+        note(OK if put.status_code == 200 else FAIL, "presigned upload", f"HTTP {put.status_code} {put.text[:120]}")
+        info = store.fs.info(store._obj(h), refresh=True)
+        note(
+            OK if info.get("crc32c") else WARN,
+            "upload checksums",
+            "GCS records CRC32C; the server compares it with the client's on commit"
+            if info.get("crc32c")
+            else 'no CRC32C on the stored object: set verify_uploads = "hash"',
+        )
+        again = httpx.put(plan["url"], content=probe, headers=plan["headers"], timeout=30)
+        note(
+            OK if again.status_code == 412 else WARN,
+            "no overwrites",
+            "x-goog-if-generation-match is enforced"
+            if again.status_code == 412
+            else f"the store allowed an overwrite (HTTP {again.status_code})",
+        )
+        got = httpx.get(store.signed_url(h, "check.txt", 60), timeout=30)
+        note(
+            OK if got.content == probe else FAIL,
+            "presigned download",
+            "clients and browsers must reach storage.googleapis.com for these URLs"
+            if got.content == probe
+            else f"HTTP {got.status_code}: the server's credentials can't sign URLs (on Cloud Run, grant it "
+            "roles/iam.serviceAccountTokenCreator on itself)",
+        )
+    except Exception as e:  # noqa: BLE001
+        note(FAIL, "presigned upload", f"{e} (signing needs a key or roles/iam.serviceAccountTokenCreator)")
+    finally:
+        try:
+            store.delete(h)
+        except Exception:  # noqa: BLE001
             pass
 
 

@@ -69,7 +69,17 @@ class Broker:
 
     def __init__(self, store: ArtifactStore, settings: ServerSettings, control=None, project: str = ""):
         self.store, self.settings, self.control, self.project = store, settings, control, project
-        self.s3 = isinstance(store, FsspecStore) and "s3" in _protocols(store.fs)
+        protocols = _protocols(store.fs) if isinstance(store, FsspecStore) else set()
+        self.s3 = "s3" in protocols
+        self.gcs = bool({"gs", "gcs"} & protocols)
+        if self.gcs:
+            from .gcs import GcsSigner
+
+            endpoint = settings.store_options.get("endpoint_url")
+            self.gcs_signer = GcsSigner(settings.gcs_signing_key, endpoint)
+            store.signer = lambda path, method, expires, filename=None: self.gcs_signer.sign(
+                path, method, expires, filename=filename
+            )
         self._expired_at = time.time()
 
     # -- S3 plumbing -------------------------------------------------------------
@@ -115,6 +125,8 @@ class Broker:
         ]
 
     def plan(self, h: str, size: int) -> dict:
+        if self.gcs:
+            return self._plan_gcs(h, size)
         if not self.s3:
             return {"hash": h, "method": "proxy"}
         multipart = size > self.settings.multipart_threshold
@@ -143,6 +155,18 @@ class Broker:
         part = max(self.settings.part_size, math.ceil(size / 9_000))
         return {"hash": h, "method": "multipart", "upload": up.id, "part_size": part, "parts": math.ceil(size / part)}
 
+    def _plan_gcs(self, h: str, size: int) -> dict:
+        """One signed PUT (GCS takes up to 5 TiB in one), never overwriting an existing object.
+        GCS checksums with CRC32C, not SHA-256: the client reports its CRC32C on commit, and with
+        ``verify_uploads = "hash"`` the server also re-hashes from a staging key."""
+        staged = self.settings.verify_uploads == "hash"
+        up = Upload(uuid.uuid4().hex, h, size, "", staged)
+        up.key = self._staging(up.id) if staged else self._final(h)
+        self.control.save_upload(self.project, up.row())
+        headers = {"x-goog-if-generation-match": "0"}
+        url = self.gcs_signer.sign(up.key, "PUT", self.settings.url_seconds, headers=headers)
+        return {"hash": h, "method": "put", "upload": up.id, "url": url, "headers": headers, "checksum": "crc32c"}
+
     def part_urls(self, upload_id: str, parts: list[dict]) -> list[dict]:
         """Presigned URLs for parts, each bound to the SHA-256 the client computed for it."""
         up = self._upload(upload_id)
@@ -154,7 +178,7 @@ class Broker:
         return out
 
     # -- committing --------------------------------------------------------------
-    def commit(self, upload_id: str, parts: list[dict] | None = None) -> dict:
+    def commit(self, upload_id: str, parts: list[dict] | None = None, crc32c: str | None = None) -> dict:
         up = self._upload(upload_id)
         if up.state == "verifying":
             # The process hashing it may have died: if it has gone quiet, take the job over (once).
@@ -163,6 +187,8 @@ class Broker:
             return self._state(up)
         if up.state != "uploading":
             return self._state(up)
+        if self.gcs:
+            return self._commit_gcs(up, crc32c)
         bucket, key = self._split(up.key)
         if up.multipart_id:
             if not parts:
@@ -194,6 +220,27 @@ class Broker:
             self._verify_staged(up)  # small enough to check within this request
         elif up.staged:
             self._set(up, state="verifying")  # the client polls until the server has hashed it
+            threading.Thread(target=self._verify_staged, args=(up,), daemon=True).start()
+        else:
+            self._set(up, state="committed")
+        return self._state(up)
+
+    def _commit_gcs(self, up: Upload, crc32c: str | None) -> dict:
+        try:
+            info = self.store.fs.info(up.key, refresh=True)
+        except FileNotFoundError:
+            if self.store.has(up.hash):  # a concurrent upload of the same content won
+                self._set(up, state="committed")
+                return self._state(up)
+            raise UploadError("nothing was uploaded") from None
+        if int(info.get("size", -1)) != up.size:
+            self._fail(up, f"uploaded {info.get('size')} bytes, expected {up.size}")
+        elif crc32c and info.get("crc32c") and info["crc32c"] != crc32c:
+            self._fail(up, "the stored bytes' CRC32C doesn't match the client's: corrupted in transit")
+        elif up.staged and up.size <= INLINE_VERIFY:
+            self._verify_staged(up)
+        elif up.staged:
+            self._set(up, state="verifying")
             threading.Thread(target=self._verify_staged, args=(up,), daemon=True).start()
         else:
             self._set(up, state="committed")
@@ -249,7 +296,7 @@ class Broker:
         for h in hashes:
             if h not in present:
                 out[h] = None
-            elif self.s3:
+            elif self.s3 or self.gcs:
                 out[h] = self.store.signed_url(h, h, self.settings.url_seconds)
             else:
                 out[h] = "proxy"

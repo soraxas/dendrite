@@ -93,7 +93,7 @@ The bucket stays private. Clients receive short-lived URLs (15 minutes) for exac
 
 - **No CORS rules are needed.** The CLI isn't a browser; and in the UI, downloads and video load directly, while the in-page file viewer streams through the server.
 
-- **GCS works,** but uploads stream through the server for now; signed GCS uploads are planned.
+- **GCS works the same way:** signed V4 URLs, with `x-goog-if-generation-match: 0` so nothing is overwritten. On commit the server compares GCS's CRC32C with the client's. The server signs with its own service account through IAM `signBlob` (grant it `roles/iam.serviceAccountTokenCreator` on itself), or with a key file set as `gcs_signing_key`. [`deploy/gcp`](../deploy/gcp) sets all of this up on Cloud Run.
 
 ## 5. Postgres
 

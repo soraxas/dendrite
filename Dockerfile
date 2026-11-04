@@ -16,7 +16,7 @@ WORKDIR /src
 COPY pyproject.toml README.md hatch_build.py ./
 COPY src/ src/
 COPY --from=ui /src/src/dendrite/ui/dist src/dendrite/ui/dist
-RUN uv pip install --system --no-cache ".[server,s3]" "prefect==3.9.0" \
+RUN uv pip install --system --no-cache ".[server,s3,gcs]" "prefect==3.9.0" \
     && rm -rf /src
 
 RUN useradd --create-home --uid 10001 dendrite && mkdir -p /var/lib/dendrite && chown dendrite /var/lib/dendrite

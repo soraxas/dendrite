@@ -1,0 +1,18 @@
+# dendrite server on Cloud Run, rendered by deploy.sh and stored in Secret Manager
+# (dendrite-server-toml), which mounts it at /etc/dendrite/server.toml.
+# ${DB_PASSWORD} and ${OAUTH_CLIENT_SECRET} are read from the environment at start-up
+# (also from Secret Manager); this file holds no secrets itself.
+base_url = "https://@DOMAIN@"
+database_url = "postgresql+psycopg://@DB_USER@:${DB_PASSWORD}@/@DB_NAME@?host=/cloudsql/@SQL_CONNECTION@"
+store_url = "gs://@BUCKET@/dendrite"
+home = "/var/lib/dendrite"
+admins = [@ADMINS@]
+allowed_domains = [@ALLOWED_DOMAINS@]
+verify_uploads = "checksum"
+max_open_projects = 8          # 2 Cloud Run instances x (8 x 5 + 15) stays under Cloud SQL's max_connections=200
+
+[auth]
+provider = "oidc"
+issuer = "https://accounts.google.com"
+client_id = "@OAUTH_CLIENT_ID@"
+client_secret = "${OAUTH_CLIENT_SECRET}"

@@ -455,15 +455,22 @@ class ServerStore(ArtifactStore):
             with open(src, "rb") as f:
                 self.client.request("PUT", plan["url"].removeprefix(self.client.server), content=f)
             return
-        parts = None
+        parts, extra = None, {}
         if method == "put":
             with open(src, "rb") as f:
                 r = self.client.blob_http.put(plan["url"], content=f, headers=plan["headers"])
             if r.status_code not in (200, 412):  # 412: someone stored the same content first
                 raise UploadFailed(f"upload of {plan['hash'][:12]} failed: {r.status_code} {r.text[:300]}")
+            if plan.get("checksum") == "crc32c":  # GCS: the server compares it with what was stored
+                from .hosted.gcs import crc32c_b64
+
+                try:
+                    extra["crc32c"] = crc32c_b64(src)
+                except ImportError:  # google-crc32c isn't installed: the server checks the size only
+                    pass
         else:
             parts = self._multipart(plan, src)
-        self._commit(plan, parts)
+        self._commit(plan, parts, extra)
 
     def _multipart(self, plan: dict, src: Path) -> list[dict]:
         size, part = src.stat().st_size, plan["part_size"]
@@ -491,8 +498,8 @@ class ServerStore(ArtifactStore):
                     )
         return done
 
-    def _commit(self, plan: dict, parts: list[dict] | None) -> None:
-        body: dict[str, Any] = {"upload": plan["upload"]}
+    def _commit(self, plan: dict, parts: list[dict] | None, extra: dict | None = None) -> None:
+        body: dict[str, Any] = {"upload": plan["upload"], **(extra or {})}
         if parts:
             body["parts"] = parts
         wait = 0.2

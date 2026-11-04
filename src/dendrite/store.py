@@ -363,7 +363,11 @@ class FsspecStore(ArtifactStore):
             found |= {shard + n.rstrip("/").rsplit("/", 1)[-1] for n in names}
         return wanted & found
 
+    signer = None  # set by a server for stores fsspec can't sign for (GCS, see hosted/gcs.py)
+
     def signed_url(self, h: str, filename: str, expires: int) -> str | None:
+        if self.signer is not None:
+            return self.signer(self._obj(h), "GET", expires, filename=filename)
         kwargs: dict[str, Any] = {}
         if "s3" in _protocols(self.fs):  # name the download; S3 passes these to GetObject
             kwargs["ResponseContentDisposition"] = content_disposition(filename)

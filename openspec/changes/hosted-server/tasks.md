@@ -15,7 +15,7 @@
 ## 3. Brokered blobs
 
 - [x] 3.1 Server: `blobs/missing`, `blobs/presence`, `blobs/urls`, all per-project prefix and batched at 1000
-- [ ] 3.2 (S3/MinIO done; GCS signed uploads not yet, GCS is proxied through the server) Upload plans per store: conditional `If-None-Match: *` PUTs; SHA-256 on S3/MinIO (whole object, or per part for multipart); CRC32C on GCS resumable/multipart; `blobs/commit` checks size and stored checksum
+- [x] 3.2 (GCS: one signed PUT with if-generation-match and CRC32C compared on commit, not resumable/multipart) Upload plans per store: conditional `If-None-Match: *` PUTs; SHA-256 on S3/MinIO (whole object, or per part for multipart); CRC32C on GCS resumable/multipart; `blobs/commit` checks size and stored checksum
 - [x] 3.3 `verify_uploads = "hash"` and `store_enforces_sha256`: staging keys, server-side SHA-256 then copy into place, 202 and polling, GC of stale staging keys
 - [x] 3.4 Add `ServerStore` (upload only what's missing, presigned GET into the checkout cache, batched `verify`)
 - [x] 3.5 Publish refuses uncommitted outputs; record `value_previews` at publish time, and never unpickle on the server

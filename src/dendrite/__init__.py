@@ -6,6 +6,10 @@ from importlib.metadata import PackageNotFoundError, version
 # Opt out of Prefect SDK telemetry. Prefect reads this once during `import prefect`, so it
 # must be set before the submodules below import it. setdefault keeps an explicit override.
 os.environ.setdefault("DO_NOT_TRACK", "1")
+# gcsfs defaults to an experimental gRPC client for zonal/hierarchical buckets, which asks
+# Google's API for each bucket's layout (ignoring endpoint_url, and stalling where gRPC is
+# blocked). dendrite needs plain object storage; set it to "true" to opt back in.
+os.environ.setdefault("GCSFS_EXPERIMENTAL_ZB_HNS_SUPPORT", "false")
 
 try:
     __version__ = version("dendrite")

@@ -352,7 +352,8 @@ def create_server_app(settings: ServerSettings, hosted: Hosted | None = None) ->
     async def blobs_commit(project: str, request: Request):
         await threaded(server.caller, request, project, "runner")
         body = json_body(await request.body())
-        return encoded(await threaded(server.project(project).broker.commit, body["upload"], body.get("parts")))
+        broker = server.project(project).broker
+        return encoded(await threaded(broker.commit, body["upload"], body.get("parts"), body.get("crc32c")))
 
     @app.post("/api/v1/projects/{project}/blobs/presence")
     async def blobs_presence(project: str, request: Request):

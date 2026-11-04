@@ -80,6 +80,9 @@ class ServerSettings:
     multipart_threshold: int = 4 * 1024**3
     part_size: int = 64 * 1024**2
     url_seconds: int = 15 * 60
+    # GCS: a service-account key file to sign URLs with. Unset, the server signs with its own
+    # credentials (on Cloud Run/GKE: its service account, through IAM signBlob).
+    gcs_signing_key: str | None = None
     # Idle connections stay open this long; clients drop theirs sooner (remote.KEEPALIVE).
     keep_alive_seconds: int = 30
     # Projects kept open; the least recently used close. Each holds up to 5 Postgres connections

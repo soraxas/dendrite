@@ -238,7 +238,11 @@ What building it changed or added:
 
 - **Small blobs travel inline.** Blobs of at most 256 KB go up inside the `blobs/missing` request, and the server hashes and stores them. Fan-outs of small values would otherwise pay three round trips each.
 
-- **Stores that can't presign are proxied.** A local directory, `memory://` and, for now, GCS stream through the server, which hashes them on the way in. GCS signed uploads (CRC32C) are a follow-up.
+- **Stores that can't presign are proxied.** A local directory and `memory://` stream through the server, which hashes them on the way in.
+
+- **GCS uses signed V4 URLs** (`hosted/gcs.py`). Each upload is one PUT, since GCS takes up to 5 TiB in one request. `x-goog-if-generation-match: 0` prevents overwrites, and the client's CRC32C is compared with GCS's on commit. On Cloud Run the server signs through IAM `signBlob`, so no key file is needed. This matters there: Cloud Run caps request bodies at 32 MiB, so proxying through the server was never an option.
+
+- **gcsfs's experimental gRPC client is disabled** (`GCSFS_EXPERIMENTAL_ZB_HNS_SUPPORT=false`): it looked up every bucket's layout over gRPC, ignoring `endpoint_url`.
 
 - **Shared state lives in Postgres.** Upload sessions, OAuth sign-ins in progress and replies to retried writes are stored there, so replicas behind a load balancer share them. A staged verification that stops making progress for 2 minutes is taken over, once, by whichever replica the client polls next.
 

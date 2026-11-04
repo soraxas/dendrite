@@ -197,7 +197,7 @@ The flow of a run spans several modules in `src/dendrite/`:
   - The UI mount (`hosted/ui.py`, `/p/{project}/`) reuses `create_app(hosted=…)`. Only storage reclamation needs a path rule (`ADMIN_ROUTES`).
 - **Blobs** (`hosted/blobs.py`).
   - `blobs/missing` deduplicates. S3/MinIO uploads are presigned PUTs with `ChecksumSHA256` + `If-None-Match: *` (multipart: per-part checksums). `verify_uploads = "hash"` stages them and re-hashes on the server.
-  - Blobs ≤256 KB travel inline in `blobs/missing`. Stores that can't presign (a local directory, `memory://`, GCS so far) are proxied through the server, which hashes them.
+  - Blobs ≤256 KB travel inline in `blobs/missing`. GCS uses V4 signed URLs from `hosted/gcs.py` (IAM `signBlob` without a key file), with `x-goog-if-generation-match: 0` and the client's CRC32C compared on commit. Stores that can't presign (a local directory, `memory://`) are proxied through the server, which hashes them.
 - **Sign-in** (`hosted/auth.py`).
   - Browser: GitHub, generic OIDC, or `dev` (localhost only), giving a session cookie plus CSRF header.
   - CLI: a device flow run by the server itself. The token is minted on the poll, so no secret is ever stored in plain text. `remote.device_login` prompts automatically on the first call only when interactive; otherwise it raises `NotLoggedIn`.
@@ -228,7 +228,8 @@ The flow of a run spans several modules in `src/dendrite/`:
 - **Narrow code fingerprint.** The fingerprint covers only the node function's own source (`inspect.getsource`). Callers bump `version=` when helper functions change.
 - **Pickles.** `value` artifacts are pickles, and `load()` and the UI preview unpickle them.
 - **The read guard is best-effort.** It sees only Python-level `open`/`os.open`. It misses C `fopen`, subprocesses, threads started by the step, and anything outside the project directory.
-- **Hosted mode, per replica.** Upload sessions, OAuth sign-ins and replies to retried writes live in the control database, so replicas can share the load. Token and role lookups are cached per process for `AUTH_CACHE_SECONDS`, so a token revoked on one replica keeps working on another until its cached entry expires. GCS uploads are proxied through the server, since signed GCS uploads aren't implemented.
+- **gcsfs's experimental gRPC mode is off.** `dendrite/__init__.py` sets `GCSFS_EXPERIMENTAL_ZB_HNS_SUPPORT=false`: otherwise gcsfs asks Google's API for each bucket's layout over gRPC, which ignores `endpoint_url` and stalls where gRPC is blocked.
+- **Hosted mode, per replica.** Upload sessions, OAuth sign-ins and replies to retried writes live in the control database, so replicas can share the load. Token and role lookups are cached per process for `AUTH_CACHE_SECONDS`, so a token revoked on one replica keeps working on another until its cached entry expires.
 - **Plans can be incomplete.** They can't predict branching on the *contents* of a result that hasn't been computed. Downstream `run`/`upstream` is an upper bound: an unchanged upstream output still lets downstream reuse.
 
 ## Tests
