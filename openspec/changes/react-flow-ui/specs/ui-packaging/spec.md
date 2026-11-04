@@ -11,12 +11,23 @@ The system SHALL build the React UI from `ui/` into `src/dendrite/ui/dist/`, a d
 
 ### Requirement: Build guard for missing bundle
 
-The build SHALL fail for sdist and wheel targets when `src/dendrite/ui/dist/index.html` is missing. The exceptions are editable installs and builds run with `DENDRITE_SKIP_UI_CHECK=1`.
+The build SHALL handle a missing `src/dendrite/ui/dist/index.html` in an sdist or wheel build as follows:
+
+- The build SHALL first try to build it with `npm`, when `ui/` and `npm` are available.
+- If it is still missing, a release build (`DENDRITE_REQUIRE_UI=1`) SHALL fail.
+- Any other build SHALL package the API without the UI and say so.
+
+Editable installs, and builds run with `DENDRITE_SKIP_UI_CHECK=1`, never build the UI.
 
 #### Scenario: Missing bundle blocks release build
 
-- **WHEN** `uv build --wheel` is run without a built UI
+- **WHEN** `DENDRITE_REQUIRE_UI=1 uv build --wheel` is run without a built UI, and npm can't build it
 - **THEN** the build fails with a message telling the user to run `scripts/build-ui.sh`
+
+#### Scenario: A git install without Node.js still installs
+
+- **WHEN** dendrite is installed from git on a machine without npm
+- **THEN** the install succeeds without the UI, and pipelines, the CLI and hosted mode work
 
 #### Scenario: Editable install unaffected
 

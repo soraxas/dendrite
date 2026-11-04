@@ -41,7 +41,7 @@ uv run dendrite du                                       # storage inventory; rm
 cd ui && npm run dev                       # hot-reloading UI, /api proxied to :8454 (Node 20+; UI work only)
 cd ui && npm run build                     # tsc type-check + vite build into src/dendrite/ui/dist (git-ignored)
 cd ui && npm test                          # Vitest + Testing Library (jsdom): UI logic and draft-editing components
-scripts/build-ui.sh && uv build            # release: the build guard fails a wheel/sdist without the bundle
+scripts/build-ui.sh && DENDRITE_REQUIRE_UI=1 uv build   # release: fails rather than ship a wheel without the UI
 ```
 
 Postgres for tests comes from the session fixture `pg_url` in `conftest.py`:
@@ -98,7 +98,7 @@ The flow of a run spans several modules in `src/dendrite/`:
    - **Shipping the UI:**
      - `ui/` is a React + TS + Vite app (React Flow + elkjs + TanStack Query).
      - It builds into `src/dendrite/ui/dist/`, which is git-ignored and packaged through `[tool.hatch.build] artifacts`.
-     - `hatch_build.py` refuses sdist or wheel builds without the bundle. Editable builds and `DENDRITE_SKIP_UI_CHECK=1` are exempt.
+     - `hatch_build.py` builds a missing bundle with npm when it can. Otherwise it packages without the UI: a git install on a laptop with no Node still works, since the team server serves the UI. `DENDRITE_REQUIRE_UI=1` (releases) fails instead. Editable builds and `DENDRITE_SKIP_UI_CHECK=1` never build it.
      - `create_app` mounts `dist/` with `StaticFiles` *after* the API routes when the bundle exists. Without it, `/` is a short "UI isn't built" page and only the API is served (`/api/info` reports `ui: "missing"`).
    - **Layout:**
      - `ui/src/layout.ts` runs ELK in a web worker. It caches positions per graph shape (node ids plus edges), so status polls never re-lay-out.

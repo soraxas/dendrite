@@ -206,19 +206,63 @@ Each run also publishes a Prefect markdown artifact, `dendrite-<exp id>`, so lin
 
 ## Sharing results with a team
 
-Run a dendrite server, and everyone in a project shares one cache: what one person computed, the next person reuses, downloading only what their steps read. The server owns Postgres and the bucket. People sign in through GitHub or any OpenID Connect provider, and nobody else needs database or bucket credentials.
+Run a dendrite server, and everyone in a project shares one cache: what one person computed, the next person reuses. The server owns Postgres and the bucket. People sign in through GitHub or any OpenID Connect provider, and nobody else needs database or bucket credentials.
+
+### Getting started on your laptop
+
+Your pipelines still run on your machine. The server holds the shared history and files.
+
+1. **Install dendrite** in your project (from git for now):
+
+   ```bash
+   uv add "dendrite @ git+https://github.com/soraxas/dendrite"
+   ```
+
+2. **Point the repo at your team's server**, once per repo, and commit the file it writes:
+
+   ```bash
+   dendrite init --server https://lineage.example.com --project recon
+   git add dendrite.toml && git commit -m "Record runs to the team's dendrite server"
+   ```
+
+   `dendrite.toml` holds only the server and project, never credentials. Teammates who clone the repo get it too.
+
+3. **Sign in**, once per laptop:
+
+   ```bash
+   dendrite login      # opens the browser; approve the code it shows
+   dendrite whoami     # your projects and your role in each
+   ```
+
+   If you skip this, your first run asks you to sign in.
+
+4. **Run your pipeline as usual:**
+
+   ```bash
+   python run.py
+   ```
+
+   Nothing in the code changes: `Lab()` finds `dendrite.toml`. Then:
+
+   - **Steps anyone in the project already computed are skipped.** Their outputs download straight from the bucket, and only when a later step reads them.
+   - **New outputs are uploaded** straight to the bucket, and only files the project doesn't already have.
+   - **The run is recorded under your name**, with its parameters and lineage.
+
+5. **Look at it with your team** at `https://lineage.example.com/p/recon/`:
+
+   - **See who ran what**, live while it runs.
+   - **Fork anyone's experiment** to change a parameter; the fork reuses their results.
+   - **Compare runs.**
+
+Your role in a project decides what you can do. Viewers browse; runners also run, edit drafts and delete their own experiments; admins also manage members and reclaim storage. An admin adds you with `dendrite member add recon you@example.com runner`.
+
+**Without a repo**, set `DENDRITE_SERVER=https://lineage.example.com` and `DENDRITE_PROJECT=recon`, or pass `Lab(server=…, project=…)`. **In CI**, use a scoped token instead of signing in:
 
 ```bash
-dendrite init --server https://lineage.example.com --project recon   # writes dendrite.toml; commit it
-python run.py                                                         # first run: sign in, then it runs
+dendrite token create --project recon --role runner --name ci   # then set DENDRITE_TOKEN in CI
 ```
 
-Nothing in the pipeline changes: `Lab()` finds `dendrite.toml`.
-
-- **Uploads** go straight to the bucket through presigned URLs, and only for blobs the project doesn't already have.
-- **Upload checks:** S3 and MinIO check each upload's SHA-256 against its content address.
-- **Access:** each project has viewers, runners and admins, and the UI shows who ran what.
-- **CI** uses a scoped token: `dendrite token create --project recon --role runner`.
+### Running the server
 
 The server is `dendrite server run --config server.toml`, or the `Dockerfile` image: a FastAPI app plus Postgres and a bucket.
 
@@ -259,7 +303,7 @@ uv run pytest                          # Python tests (SQLite, local/memory/S3 s
 DENDRITE_TEST_DB=postgres uv run pytest   # on Postgres, in a throwaway container (needs Docker)
 cd ui && npm install && npm run dev    # hot-reloading UI; /api proxied to :8454
 cd ui && npm test                      # UI tests (Vitest)
-scripts/build-ui.sh && uv build        # release: the build fails without the UI bundle
+scripts/build-ui.sh && DENDRITE_REQUIRE_UI=1 uv build   # release: fails without the UI bundle
 prek install                           # lint/format hooks (ruff, Biome, typos, …) on commit and push
 prek run --all-files                   # run them all now
 ```

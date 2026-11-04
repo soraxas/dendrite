@@ -24,8 +24,9 @@ def project_copy(dest: Path, with_bundle: bool) -> Path:
     return dest
 
 
-def build(project: Path, out: Path):
-    env = {k: v for k, v in os.environ.items() if k != "DENDRITE_SKIP_UI_CHECK"}
+def build(project: Path, out: Path, **extra: str):
+    env = {k: v for k, v in os.environ.items() if k not in ("DENDRITE_SKIP_UI_CHECK", "DENDRITE_REQUIRE_UI")}
+    env.update(extra)
     return subprocess.run(
         ["uv", "build", "--wheel", "--no-sources", "-o", str(out), str(project)],
         capture_output=True,
@@ -46,9 +47,21 @@ def test_wheel_contains_the_ui_bundle(tmp_path):
     assert "dendrite/ui/legacy.html" not in names
 
 
-def test_build_fails_without_bundle(tmp_path):
+def test_a_release_build_fails_without_the_bundle(tmp_path):
+    (tmp_path / "proj").mkdir()
+    proj = project_copy(tmp_path / "proj", with_bundle=False)
+    res = build(proj, tmp_path / "out", DENDRITE_REQUIRE_UI="1")
+    assert res.returncode != 0
+    assert "scripts/build-ui.sh" in res.stderr
+
+
+def test_a_git_install_without_node_packages_the_api(tmp_path):
+    # A copy without ui/: like installing from git on a machine with no npm.
     (tmp_path / "proj").mkdir()
     proj = project_copy(tmp_path / "proj", with_bundle=False)
     res = build(proj, tmp_path / "out")
-    assert res.returncode != 0
-    assert "scripts/build-ui.sh" in res.stderr
+    assert res.returncode == 0, res.stderr[-2000:]
+    assert "packaging without the web UI" in res.stderr
+    (wheel,) = (tmp_path / "out").glob("*.whl")
+    names = set(zipfile.ZipFile(wheel).namelist())
+    assert "dendrite/cli.py" in names and "dendrite/ui/dist/index.html" not in names

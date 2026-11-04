@@ -97,6 +97,11 @@ export function App() {
   const { data: info } = useInfo();
   const inLineage = route.view === "lineage";
   const inStorage = route.view === "storage";
+  // The Experiments tab returns to the experiment you were looking at before Storage.
+  const [lastExp, setLastExp] = useState<string | undefined>(route.exp);
+  useEffect(() => {
+    if (route.exp) setLastExp(route.exp);
+  }, [route.exp]);
   // A draft has no runs yet; its graph is the plan of what running it would do.
   const isDraft = !inLineage && tree.find((e) => e.id === route.exp)?.status === "draft";
   const planQ = usePlan(isDraft ? route.exp : undefined);
@@ -430,6 +435,26 @@ export function App() {
     <div className={`app ${collapsed ? "side-collapsed" : ""}`}>
       <header className="top">
         <span className="brand">dendrite</span>
+        <nav className="tabs" aria-label="Sections">
+          <button
+            className={`tab ${inStorage ? "" : "active"}`}
+            aria-current={inStorage ? undefined : "page"}
+            title="Experiments, their pipelines, lineage and results"
+            onClick={() =>
+              navigate(lastExp && tree.some((e) => e.id === lastExp) ? { view: "dag", exp: lastExp } : { view: "home" })
+            }
+          >
+            Experiments
+          </button>
+          <button
+            className={`tab ${inStorage ? "active" : ""}`}
+            aria-current={inStorage ? "page" : undefined}
+            title="Storage use, deleting experiments and cleaning up"
+            onClick={() => navigate({ view: "storage" })}
+          >
+            Storage
+          </button>
+        </nav>
         {running.length > 0 && (
           <span className="live" title="The page updates every second while something runs.">
             <i className="dot pulse" style={{ background: "var(--running)" }} />
@@ -447,13 +472,6 @@ export function App() {
         >
           <i className={`live-dot ${live ? "" : "off"}`} /> {live ? "live" : "polling"}
         </span>
-        <button
-          className={`top-link ${inStorage ? "active" : ""}`}
-          title="Storage use, deleting experiments and cleaning up"
-          onClick={() => navigate({ view: "storage" })}
-        >
-          Storage
-        </button>
         {info?.hosted && <HostedBar hosted={info.hosted} />}
         {info && !info.hosted && (
           <details className="lab">
