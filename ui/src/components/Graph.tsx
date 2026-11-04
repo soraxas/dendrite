@@ -17,7 +17,7 @@ import {
 } from "@xyflow/react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { type LayoutEdge, type Point, useElkLayout } from "../layout";
-import { MOVE_MS, useTweenedPoints } from "../tween";
+import { ease, MOVE_MS, useTweenedPoints } from "../tween";
 
 export interface GraphNode<T extends Record<string, unknown> = Record<string, unknown>> {
   id: string;
@@ -139,7 +139,7 @@ function Canvas({ nodes, edges, nodeTypes, selectedId, focusId, onSelect, legend
   );
   const layout = useElkLayout(nodes, edges, shapeKey, size);
   const fitted = useRef(false);
-  const { fitView, getZoom, setCenter, getViewport } = useReactFlow();
+  const { fitView, getZoom, setCenter, getViewport, setViewport } = useReactFlow();
   // Appearing nodes first render where they come from (their `origins` in the previous layout),
   // then move to their place once that has painted; the CSS transition animates the move.
   const previous = useRef<Map<string, Point>>(new Map());
@@ -234,36 +234,35 @@ function Canvas({ nodes, edges, nodeTypes, selectedId, focusId, onSelect, legend
       });
   }, [layout, edges, incident]);
 
-  // Re-fit only when the graph's shape changes, never on status polls. If fitting everything
-  // would make text illegible, centre the focus node at a readable zoom instead.
+  // Fit once, when the graph first appears. If fitting everything would make text illegible,
+  // centre the focus node at a readable zoom instead. Later shape changes (a fan-out item
+  // finishing, a stage expanding) never refit: they pan just enough to keep one node where it
+  // was on screen, in step with the nodes' move, so the user's place in the graph holds still.
+  const placed = useRef<Map<string, Point> | null>(null);
   // biome-ignore lint/correctness/useExhaustiveDependencies: re-fit only when the graph's shape changes, never on status polls
   useEffect(() => {
     if (!layout) return;
+    const before = placed.current;
+    placed.current = layout.nodes;
     const first = !fitted.current;
     fitted.current = true;
     if (!first) {
-      // Keep the view still while nodes move. Refit only if the new layout no longer fits, and
-      // only once they have settled, so the two motions never fight.
+      if (!before) return;
       const { x, y, zoom } = getViewport();
-      const view = {
-        left: -x / zoom,
-        top: -y / zoom,
-        right: (size.width - x) / zoom,
-        bottom: (size.height - y) / zoom,
-      };
-      let fits = true;
-      for (const n of nodes) {
-        const p = layout.nodes.get(n.id);
-        const s = layout.sizes.get(n.id) ?? n;
-        if (p && (p.x < view.left || p.y < view.top || p.x + s.width > view.right || p.y + s.height > view.bottom))
-          fits = false;
-      }
-      if (fits) return;
-      const t = setTimeout(
-        () => fitView({ padding: 0.12, maxZoom: 1.2, minZoom: MIN_LEGIBLE_ZOOM, duration: 300 }),
-        MOVE_MS,
+      const anchor = anchorNode(before, layout.nodes, nodes, selectedId, {
+        x: (size.width / 2 - x) / zoom,
+        y: (size.height / 2 - y) / zoom,
+      });
+      if (!anchor) return;
+      const from = before.get(anchor)!;
+      const to = layout.nodes.get(anchor)!;
+      if (from.x === to.x && from.y === to.y) return;
+      const still = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+      setViewport(
+        { x: x - (to.x - from.x) * zoom, y: y - (to.y - from.y) * zoom, zoom },
+        still ? undefined : { duration: MOVE_MS, ease },
       );
-      return () => clearTimeout(t);
+      return;
     }
     requestAnimationFrame(async () => {
       await fitView({ padding: 0.12, maxZoom: 1.2, minZoom: 0.2 });
@@ -343,6 +342,27 @@ function Canvas({ nodes, edges, nodeTypes, selectedId, focusId, onSelect, legend
       )}
     </div>
   );
+}
+
+/** The node to hold still across a re-layout: the selection if it stays, else the plain (non-frame)
+ *  node nearest the middle of the view among those in both layouts. */
+export function anchorNode(
+  before: Map<string, Point>,
+  after: Map<string, Point>,
+  nodes: { id: string; frame?: boolean }[],
+  selectedId: string | null | undefined,
+  centre: Point,
+): string | undefined {
+  if (selectedId && before.has(selectedId) && after.has(selectedId)) return selectedId;
+  let best: string | undefined;
+  let bestD = Number.POSITIVE_INFINITY;
+  for (const n of nodes) {
+    const p = before.get(n.id);
+    if (n.frame || !p || !after.has(n.id)) continue;
+    const d = Math.hypot(p.x - centre.x, p.y - centre.y);
+    if (d < bestD) [best, bestD] = [n.id, d];
+  }
+  return best;
 }
 
 export function Graph(props: Props) {
