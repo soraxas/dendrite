@@ -649,3 +649,84 @@ def test_server_check_reports_what_the_store_enforces(hosted):
     assert ok and found["database"] == "ok" and found["presigned upload"] == "ok"
     assert found["upload checksums"] == "warn"  # moto accepts mismatched bytes; the check says so
     assert found["no overwrites"] == "ok" and found["presigned download"] == "ok"
+
+
+# -- dendrite push ----------------------------------------------------------------
+def test_push_local_experiments_to_the_server(hosted, tmp_path, source):
+    from dendrite.push import push
+
+    local = Lab(tmp_path / "laptop", db_url=f"sqlite:///{tmp_path / 'laptop' / 'lineage.db'}")
+    base = local.create(toy.toy, inputs={"src": source}, name="base").run()
+    fork = base.fork({"train.iterations": 3}, name="fork").run()
+    project = hosted.project()
+    me = hosted.lab(tmp_path / "me", project, hosted.user(f"pusher{uuid_hex()}@t.io", project, "runner"))
+    notes = []
+    out = push(local, me, [fork.id], report=notes.append)  # the parent comes along
+    assert set(out["created"]) == {base.id, fork.id} and not out["reused"]
+    rows = {e["id"]: e for e in me.db.experiments()}
+    assert rows[fork.id]["parent_id"] == base.id and rows[fork.id]["created_by"].startswith("pusher")
+    assert statuses(me.get(fork.id)) == statuses(fork)
+    assert me.get(fork.id).load("featurize") == [3, 7, 11, 15]  # served from the bucket now
+
+    # A teammate's identical run is a cache hit on what was pushed.
+    toy.CALLS.clear()
+    mate = hosted.lab(tmp_path / "mate", project, hosted.user(f"mate{uuid_hex()}@t.io", project, "runner"))
+    again = mate.create(toy.toy, inputs={"src": source}).run()
+    assert set(statuses(again).values()) == {"cached"} and sum(toy.CALLS.values()) == 0
+
+    # Pushing again changes nothing.
+    second = push(local, me, None, report=notes.append)
+    assert second["created"] == [] and set(second["skipped"]) == {base.id, fork.id}
+    for lab in (local, me, mate):
+        lab.db.dispose()
+
+
+def test_push_matches_executions_the_project_already_has(hosted, tmp_path, source):
+    from dendrite.push import push
+
+    project = hosted.project()
+    first = hosted.lab(tmp_path / "first", project)
+    first.create(toy.toy, inputs={"src": source}).run()  # the project computes it first
+    local = Lab(tmp_path / "laptop", db_url=f"sqlite:///{tmp_path / 'laptop' / 'lineage.db'}")
+    mine = local.create(toy.toy, inputs={"src": source}).run()
+    me = hosted.lab(tmp_path / "me", project)
+    out = push(local, me, [mine.id], report=lambda _m: None)
+    assert (
+        out["created"] == [mine.id] and out["executions"] == [] and len(out["reused"]) == 3
+    )  # extract, featurize, train
+    for lab in (first, local, me):
+        lab.db.dispose()
+
+
+def test_push_leaves_out_what_was_evicted_locally(hosted, tmp_path, source):
+    from dendrite.push import push
+
+    local = Lab(tmp_path / "laptop", db_url=f"sqlite:///{tmp_path / 'laptop' / 'lineage.db'}")
+    exp = local.create(toy.toy, inputs={"src": source}).run()
+    train = exp.node_outputs("train")
+    local.store.delete_many(train.values())  # evicted on the laptop
+    me = hosted.lab(tmp_path / "me", hosted.project())
+    notes = []
+    out = push(local, me, [exp.id], report=notes.append)
+    assert out["created"] == [exp.id] and any("no longer stored" in n for n in notes)
+    runs = {r["node"]: r for r in me.db.node_runs(exp.id)}
+    assert runs["train"]["execution_id"] is None and runs["extract"]["execution_id"]
+    # Nothing the server can't serve was recorded as a result: a new run recomputes train only.
+    toy.CALLS.clear()
+    me.create(toy.toy, inputs={"src": source}).run()
+    assert toy.CALLS["train"] == 1 and toy.CALLS["extract"] == 0
+    for lab in (local, me):
+        lab.db.dispose()
+
+
+def test_viewers_cannot_push(hosted, tmp_path, source):
+    from dendrite.push import push
+
+    local = Lab(tmp_path / "laptop", db_url=f"sqlite:///{tmp_path / 'laptop' / 'lineage.db'}")
+    exp = local.create(toy.toy, inputs={"src": source}).run()
+    project = hosted.project()
+    viewer = hosted.lab(tmp_path / "v", project, hosted.user(f"v{uuid_hex()}@t.io", project, "viewer"))
+    with pytest.raises(PermissionError):
+        push(local, viewer, [exp.id], report=lambda _m: None)
+    for lab in (local, viewer):
+        lab.db.dispose()

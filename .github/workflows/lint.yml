@@ -12,9 +12,6 @@ jobs:
   prek:
     name: prek
     runs-on: ubuntu-latest
-    env:
-      # uv-lock resolves against ../prefect; python.yml's `uv sync --locked` checks the lock instead.
-      SKIP: uv-lock
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:

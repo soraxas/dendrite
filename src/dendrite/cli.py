@@ -490,8 +490,30 @@ def cmd_server(args) -> None:
         print(f"created project {args.project}")
 
 
+def cmd_push(args) -> None:
+    """Copy experiments from this machine's local lab to the team server."""
+    from pathlib import Path
+
+    from .push import push
+
+    home = Path(args.home or os.environ.get("DENDRITE_HOME", ".dendrite"))
+    db_url = args.from_db_url or f"sqlite:///{home.resolve() / 'lineage.db'}"
+    if not args.from_db_url and not (home / "lineage.db").is_file():
+        sys.exit(f"error: no local lab at {home} (pass --home or --from-db-url)")
+    source = Lab(home, db_url=db_url, store_url=args.from_store_url or str(home / "store"))
+    server, project = _server_of(args)
+    target = Lab(home / "push-cache", server=server, project=project)
+    if not args.experiments and not args.all:
+        sys.exit("error: name experiments to push, or pass --all")
+    try:
+        push(source, target, None if args.all else args.experiments, parents=not args.no_parents)
+    except (KeyError, ValueError) as e:
+        sys.exit(f"error: {e.args[0] if e.args else e}")
+    print(f"open {server}/p/{project}/")
+
+
 # Commands that don't open a Lab (they configure, sign in to or run a server).
-NO_LAB = {"init", "login", "logout", "whoami", "token", "project", "member", "server"}
+NO_LAB = {"init", "login", "logout", "whoami", "token", "project", "member", "server", "push"}
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -512,6 +534,14 @@ def main(argv: list[str] | None = None) -> None:
     ):
         s = sub.add_parser(name, help=help_)
         s.add_argument("--server", help="server URL (default: from dendrite.toml or DENDRITE_SERVER)")
+    s = sub.add_parser("push", help="copy experiments from this machine's local lab to the team server")
+    s.add_argument("experiments", nargs="*", help="experiment ids or names (or --all)")
+    s.add_argument("--all", action="store_true", help="every experiment in the local lab")
+    s.add_argument("--no-parents", action="store_true", help="don't bring the experiments a fork came from")
+    s.add_argument("--from-db-url", help="local metadata URL (default: SQLite in --home)")
+    s.add_argument("--from-store-url", help="local store (default: <home>/store)")
+    s.add_argument("--server", help="server URL (default: from dendrite.toml or DENDRITE_SERVER)")
+    s.add_argument("--project", help="project (default: from dendrite.toml or DENDRITE_PROJECT)")
     s = sub.add_parser("token", help="service tokens for CI (project admins)")
     s.add_argument("action", choices=["create", "list", "revoke"])
     s.add_argument("id", nargs="?", help="token id (revoke)")

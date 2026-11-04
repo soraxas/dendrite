@@ -69,6 +69,7 @@ WRITES = {
     "acquire_lease",
     "renew_lease",
     "release_lease",
+    "import_bundle",
 }
 ADMIN = {"set_keep"}
 REMOTE = {**dict.fromkeys(READS, "viewer"), **dict.fromkeys(WRITES, "runner"), **dict.fromkeys(ADMIN, "admin")}

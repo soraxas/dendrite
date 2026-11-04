@@ -915,6 +915,125 @@ class Metadata:
         with self.tx() as conn:
             conn.execute(leases.delete().where(leases.c.signature == signature, leases.c.owner == owner))
 
+    # -- moving experiments between labs (``dendrite push``) -------------------------
+    def export_bundle(self, exp_ids: Iterable[str]) -> dict[str, Any]:
+        """Everything needed to recreate these experiments elsewhere: their rows, node runs and
+        stages, the executions they reference with lineage, metrics and sources, and the
+        artifacts all of that names. Parents come first."""
+        ids = list(dict.fromkeys(exp_ids))
+        with self.ro() as conn:
+
+            def rows(table, cond) -> list[dict]:
+                return [dict(r) for r in conn.execute(sa.select(table).where(cond)).mappings().all()]
+
+            exps = rows(experiments, experiments.c.id.in_(ids))
+            by_id = {e["id"]: e for e in exps}
+            order: list[dict] = []
+
+            def visit(e: dict) -> None:  # parents before forks
+                if e in order:
+                    return
+                if e["parent_id"] in by_id:
+                    visit(by_id[e["parent_id"]])
+                order.append(e)
+
+            for e in exps:
+                visit(e)
+            runs = rows(node_runs, node_runs.c.experiment_id.in_(ids))
+            exec_ids = sorted({r["execution_id"] for r in runs if r["execution_id"]})
+            out = {
+                "experiments": order,
+                "node_runs": runs,
+                "node_stages": rows(node_stages, node_stages.c.experiment_id.in_(ids)),
+                "pipeline_reads": rows(pipeline_reads, pipeline_reads.c.experiment_id.in_(ids)),
+                "executions": rows(executions, executions.c.id.in_(exec_ids)),
+                "execution_inputs": rows(execution_inputs, execution_inputs.c.execution_id.in_(exec_ids)),
+                "execution_outputs": rows(execution_outputs, execution_outputs.c.execution_id.in_(exec_ids)),
+                "metrics": rows(metrics, metrics.c.execution_id.in_(exec_ids)),
+                "execution_sources": rows(execution_sources, execution_sources.c.execution_id.in_(exec_ids)),
+            }
+            src_hashes = {r["source_hash"] for r in out["execution_sources"]}
+            out["code_snapshots"] = rows(code_snapshots, code_snapshots.c.hash.in_(src_hashes))
+            hashes: set[str] = set()
+            for e in order:
+                hashes |= set(e["inputs"].values())
+                for outs in e["pins"].values():
+                    hashes |= set(outs.values())
+            for r in runs:
+                hashes |= set((r["inputs"] or {}).values()) | set((r["outputs"] or {}).values())
+            hashes |= {r["artifact_hash"] for r in out["execution_inputs"] + out["execution_outputs"]}
+            hashes |= {r["artifact_hash"] for r in out["pipeline_reads"]}
+            out["artifacts"] = rows(artifacts, artifacts.c.hash.in_(hashes))
+        return out
+
+    def import_bundle(self, bundle: dict[str, Any]) -> dict[str, Any]:
+        """Recreate exported experiments here, in one transaction.
+
+        Experiments that already exist are skipped (pushing twice is harmless). An execution
+        whose id exists is reused, and so is a successful cacheable execution this lab already
+        has for the same signature, so the copy joins the existing cache instead of duplicating
+        it. Returns the ids created and how executions were matched.
+        """
+        created, skipped, inserted, reused = [], [], [], {}
+        with self.tx() as conn:
+            have = {
+                r[0]
+                for r in conn.execute(
+                    sa.select(experiments.c.id).where(experiments.c.id.in_([e["id"] for e in bundle["experiments"]]))
+                )
+            }
+            new_exps = [e for e in bundle["experiments"] if e["id"] not in have]
+            skipped = sorted(have)
+            new_ids = {e["id"] for e in new_exps}
+            self._register_artifacts(
+                conn, [ArtifactRef(a["hash"], a["kind"], a["size"], a["filename"]) for a in bundle["artifacts"]]
+            )
+            for snap in bundle["code_snapshots"]:
+                self._insert_snapshot(conn, {k: v for k, v in snap.items() if k != "created_at"})
+            # Executions: reuse what's here, insert the rest with their original ids.
+            exec_map: dict[str, str] = {}
+            wanted = {r["execution_id"] for r in bundle["node_runs"] if r["experiment_id"] in new_ids}
+            for ex in [e for e in bundle["executions"] if e["id"] in wanted]:
+                if conn.execute(sa.select(executions.c.id).where(executions.c.id == ex["id"])).first():
+                    exec_map[ex["id"]] = ex["id"]
+                    continue
+                if ex["status"] == "success" and ex["cacheable"]:
+                    hit = conn.execute(
+                        sa.select(executions.c.id).where(
+                            executions.c.signature == ex["signature"], executions.c.status == "success"
+                        )
+                    ).first()
+                    if hit:
+                        exec_map[ex["id"]] = reused[ex["id"]] = hit[0]
+                        continue
+                conn.execute(executions.insert().values(**ex))
+                exec_map[ex["id"]] = ex["id"]
+                inserted.append(ex["id"])
+            fresh = set(inserted)
+            for table in (execution_inputs, execution_outputs, metrics, execution_sources):
+                key = table.name
+                for r in bundle[key]:
+                    if r["execution_id"] in fresh:
+                        conn.execute(table.insert().values(**r))
+            # Experiments, parents first; a parent that isn't here or in the bundle is dropped.
+            for e in new_exps:
+                row = dict(e)
+                if row["parent_id"] and row["parent_id"] not in new_ids and row["parent_id"] not in have:
+                    row["parent_id"] = None
+                conn.execute(experiments.insert().values(**row))
+            for r in bundle["node_runs"]:
+                if r["experiment_id"] in new_ids:
+                    row = dict(r)
+                    if row["execution_id"]:
+                        row["execution_id"] = exec_map.get(row["execution_id"])
+                    conn.execute(node_runs.insert().values(**row))
+            for table in (node_stages, pipeline_reads):
+                for r in bundle[table.name]:
+                    if r["experiment_id"] in new_ids:
+                        conn.execute(table.insert().values(**r))
+            created = [e["id"] for e in new_exps]
+        return {"created": created, "skipped": skipped, "executions": inserted, "reused": reused}
+
     # -- lineage -------------------------------------------------------------------
     _ANCESTORS = sa.text(
         """

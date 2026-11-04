@@ -22,7 +22,7 @@ Prefect executes the DAG, and dendrite decides which nodes actually need to run:
 ## Commands
 
 ```bash
-uv sync                                    # installs prefect editable from ../prefect (see pyproject [tool.uv.sources])
+uv sync                                    # Prefect from PyPI; for a local checkout: uv pip install -e ../prefect
 uv run pytest                              # full suite (Prefect test harness + moto S3 server)
 uv run pytest tests/test_lineage.py::test_artifact_fork_pins_node   # single test
 uv run pytest -k pin                       # by keyword
@@ -30,6 +30,7 @@ DENDRITE_TEST_DB=postgres uv run pytest   # whole suite on Postgres (testcontain
 DENDRITE_TEST_REMOTE=1 uv run pytest      # whole suite through an in-process dendrite server (Postgres + moto)
 uv run dendrite server run --config examples/team/server.toml   # hosted server; see examples/team/README.md
 uv run dendrite server check --config server.toml                # probe a deployment's database, bucket and sign-in
+uv run dendrite push --all                 # copy a local lab's experiments to the configured server (push.py)
 docker build -t dendrite-server .          # the server image (Prefect from PyPI); docs/deploying.md
 uv run python examples/minimal.py          # smallest setup: two steps, a run and a fork
 uv run python examples/recon.py            # demo: baseline + config fork + pinned fork (DEMO_SLEEP=2 to slow nodes)
@@ -51,14 +52,14 @@ Postgres for tests comes from the session fixture `pg_url` in `conftest.py`:
 - **Isolation.** `pg_schema_url` gives each test its own schema and drops it afterwards.
 - **Whole suite.** `DENDRITE_TEST_DB=postgres` switches the shared `lab` fixture to Postgres. Tests that open a second `Lab` or call the CLI must pass `lab.settings.db_url` / `--db-url` along.
 
-CI has two path-filtered test workflows, so a docs-only push runs no tests. `.github/workflows/python.yml` runs pytest on SQLite and on Postgres when `src/`, `tests/`, `examples/` or the packaging files change. `.github/workflows/ui.yml` runs the UI tests and build when `ui/` changes. It clones Prefect into `../prefect` at `PREFECT_SHA`, blobless rather than shallow because versioningit needs the tags; bump it together with your local `../prefect`.
+CI has two path-filtered test workflows, so a docs-only push runs no tests. `.github/workflows/python.yml` runs pytest on SQLite and on Postgres when `src/`, `tests/`, `examples/` or the packaging files change. `.github/workflows/ui.yml` runs the UI tests and build when `ui/` changes.
 
 Linting and formatting run through [prek](https://github.com/j178/prek) in workspace mode, with two projects:
 
 - **Root, `.pre-commit-config.yaml`.** File hygiene, `uv-lock`, ruff check and format (settings in `[tool.ruff]`), validate-pyproject, typos (report only; allowed words in `_typos.toml`), shellcheck, mdformat, zizmor and the GitHub workflow schema. actionlint is `manual`. Root hooks also see `ui/` files.
 - **`ui/.pre-commit-config.yaml`.** Biome (`ui/biome.json`; the a11y rules that don't fit the hash-link UI are off) and `tsc` through `npm run typecheck`. Child hooks run inside `ui/` with paths relative to it.
 
-`prek install` sets up the pre-commit and pre-push hooks. Run `prek run --all-files` to check everything, and `prek run actionlint --hook-stage manual` for the workflows. `.github/workflows/lint.yml` runs prek, including actionlint, on every push, skipping `uv-lock`: it would resolve against `../prefect`, and `uv sync --locked` in `python.yml` already checks the lock.
+`prek install` sets up the pre-commit and pre-push hooks. Run `prek run --all-files` to check everything, and `prek run actionlint --hook-stage manual` for the workflows. `.github/workflows/lint.yml` runs prek, including actionlint, on every push.
 
 Configuration env vars:
 
@@ -200,6 +201,7 @@ The flow of a run spans several modules in `src/dendrite/`:
 - **Sign-in** (`hosted/auth.py`).
   - Browser: GitHub, generic OIDC, or `dev` (localhost only), giving a session cookie plus CSRF header.
   - CLI: a device flow run by the server itself. The token is minted on the poll, so no secret is ever stored in plain text. `remote.device_login` prompts automatically on the first call only when interactive; otherwise it raises `NotLoggedIn`.
+- **`dendrite push`** (`push.py`): `Metadata.export_bundle` on the local lab, the blobs through `ServerStore._put_missing`, then `import_bundle` on the server in one transaction. Existing experiments are skipped; an execution with an existing id, or a successful cacheable one with the same signature, is reused. Executions whose blobs were evicted locally are left out.
 - **Round trips.** `HttpMetadata` batches "queued" node-run writes and progress, and flushes before any other call. Clients drop idle connections at `remote.KEEPALIVE` (2 s), below the server's 30 s, or a reused connection can lose a request. `ArtifactStore.prefetch` batches a step's input URLs.
 
 ## Invariants to preserve

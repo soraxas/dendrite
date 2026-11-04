@@ -248,7 +248,15 @@ Your pipelines still run on your machine. The server holds the shared history an
    - **New outputs are uploaded** straight to the bucket, and only files the project doesn't already have.
    - **The run is recorded under your name**, with its parameters and lineage.
 
-5. **Look at it with your team** at `https://lineage.example.com/p/recon/`:
+5. **Bring what you already ran**, if you used dendrite before pointing the repo at the server. Those runs live only in your local `.dendrite/`:
+
+   ```bash
+   dendrite push --all          # or: dendrite push <experiment id or name> …
+   ```
+
+   This uploads whatever files the project lacks and recreates the experiments and their lineage on the server under your name. Results the project already has are matched rather than copied, and pushing twice is harmless.
+
+6. **Look at it with your team** at `https://lineage.example.com/p/recon/`:
 
    - **See who ran what**, live while it runs.
    - **Fork anyone's experiment** to change a parameter; the fork reuses their results.
@@ -294,7 +302,6 @@ Lab(store_url="s3://lineage/prod", storage_options={"endpoint_url": "http://mini
 - **Single process.** Runs use Prefect's default thread task runner. Deployments, remote workers, and process, Dask or Ray task runners aren't supported yet.
 - **Narrow code fingerprint.** Only a step's own source is hashed; bump `version=` when its helpers change.
 - **Value artifacts are pickles.** Only use stores you trust, and keep `dendrite ui` on localhost.
-- **Prefect comes from `../prefect`** (`[tool.uv.sources]`). Delete that entry to use PyPI.
 
 ## Development
 

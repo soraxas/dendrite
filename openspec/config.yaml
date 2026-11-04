@@ -3,7 +3,7 @@ context: |
   dendrite is an artifact-first experiment lineage, global caching and forking layer on Prefect 3.
   Stack:
   - Python 3.12, managed with uv (src layout, package `dendrite`)
-  - Prefect is installed editable from the sibling checkout ../prefect (3.9.x); check APIs against that source
+  - Prefect 3.9 from PyPI (`prefect>=3.9,<4`, locked to 3.9.0); a local checkout can be installed over it with `uv pip install -e ../prefect`
   - SQLAlchemy Core for metadata (SQLite by default, PostgreSQL via psycopg). No ORM, no Alembic yet
   - fsspec for the artifact store (local filesystem, S3/MinIO/GCS)
   - FastAPI + uvicorn serve the API, plus a build-free vanilla-JS SPA at src/dendrite/ui/index.html (no npm toolchain)

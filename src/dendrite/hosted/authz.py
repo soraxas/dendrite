@@ -251,6 +251,18 @@ class ServerMetadata(Metadata):
             lease=lease,
         )
 
+    # -- pushed experiments (``dendrite push``) -------------------------------------------
+    def import_bundle(self, bundle: dict[str, Any]) -> dict[str, Any]:
+        c = need("runner")
+        if c is not None:
+            refs = [ArtifactRef(a["hash"], a["kind"], a["size"], a["filename"]) for a in bundle["artifacts"]]
+            self._committed(refs)
+        out = super().import_bundle(bundle)
+        if c is not None:
+            self.control.attribute(self.project, "experiment", out["created"], c)
+            self.control.attribute(self.project, "execution", out["executions"], c)
+        return out
+
     # -- leases ------------------------------------------------------------------
     def acquire_lease(self, signature: str, owner: str, ttl: float) -> bool:
         need("runner")
