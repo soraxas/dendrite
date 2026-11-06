@@ -15,6 +15,7 @@ from __future__ import annotations
 import functools
 import importlib.metadata
 import inspect
+import json
 import logging
 import os
 import sys
@@ -44,9 +45,23 @@ def code_fingerprint(fn: Callable) -> str:
     try:
         src = textwrap.dedent(inspect.getsource(fn))
     except (OSError, TypeError):
-        code = fn.__code__
-        src = code.co_code.hex() + repr(code.co_consts) + repr(code.co_names)
+        code = getattr(fn, "__code__", None)
+        if code is not None:
+            src = code.co_code.hex() + repr(code.co_consts) + repr(code.co_names)
+        else:  # a C or builtin function: identify it by name and the version of what provides it
+            module = getattr(fn, "__module__", None) or ""
+            src = f"{module}.{getattr(fn, '__qualname__', repr(fn))}@{_dist_version(module)}"
     return sha256_bytes(src.encode())
+
+
+def _dist_version(module: str) -> str:
+    top = module.split(".", 1)[0]
+    if not top or top in sys.stdlib_module_names or top == "builtins":
+        return f"python-{sys.version_info.major}.{sys.version_info.minor}"
+    try:
+        return importlib.metadata.version(top)
+    except importlib.metadata.PackageNotFoundError:
+        return "unknown"
 
 
 def source_snapshot(fn: Callable) -> dict[str, Any] | None:
@@ -321,10 +336,63 @@ class ArtifactTask:
 
     # -- calling from a pipeline ---------------------------------------------------
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        if runtime._active_run.get() is None:
+            return self._eager(args, kwargs)  # outside a pipeline: run now, cached, in a session
         state = runtime.active()
         if state.plan:
             return self._plan(state, args, kwargs)
         return self._prefect_task(**self._enqueue(args, kwargs))
+
+    def rerun(self, *args: Any, **kwargs: Any) -> Any:
+        """Call the step, recomputing it even when a verified result exists.
+
+        The new result is published, so it is the one reused afterwards; if it differs from the
+        result it replaces, a :class:`NondeterministicStep` warning says so.
+        """
+        if runtime._active_run.get() is None:
+            return self._eager(args, kwargs, rerun=True)
+        state = runtime.active()
+        if state.rerun is not True:
+            state.rerun = {*(state.rerun or ()), self.name}
+        return self(*args, **kwargs)
+
+    # -- eager calls (outside a pipeline) ----------------------------------------------
+    def _eager(self, args: tuple, kwargs: dict, rerun: bool = False) -> Any:
+        if runtime.cache_mode() == "bypass":
+            return self.fn(*args, **kwargs)
+        lab = runtime.default_lab()
+        state = runtime.session(lab)
+        bound = self.signature.bind_partial(*args, **kwargs)
+        external: dict[str, ArtifactRef] = {}
+        call = {k: _eager_input(lab, v, f"{k}", external) for k, v in bound.arguments.items()}
+        with state.lock:
+            n = state.calls[self.name] = state.calls.get(self.name, 0) + 1
+        task = self if n == 1 else self.named(n)
+        exp = state.experiment
+        db = lab.db
+        if external:  # files from outside the lab show as the session's inputs
+            inputs = {**exp.inputs, **{f"{task.name}.{k}": r.hash for k, r in external.items()}}
+            db.update_experiment(exp.id, inputs=inputs)
+        db.update_experiment(exp.id, status="running", finished_at=None, error=None)
+        if rerun:
+            with state.lock:
+                state.rerun = state.rerun if state.rerun is True else {*(state.rerun or ()), task.name}
+        token = runtime._active_run.set(state.run_id)
+        try:
+            positional = tuple(
+                call.pop(n)
+                for n, p in self.signature.parameters.items()
+                if p.kind is inspect.Parameter.POSITIONAL_ONLY and n in call
+            )
+            out = task._execute(**task._enqueue(positional, call))
+        except BaseException as e:
+            db.update_experiment(exp.id, status="failed", finished_at=time.time(), error=repr(e))
+            raise
+        finally:
+            runtime._active_run.reset(token)
+        db.update_experiment(exp.id, status="completed", finished_at=time.time())
+        exp.refresh()
+        return _eager_output(lab, out)
 
     def submit(self, *args: Any, **kwargs: Any):
         state = runtime.active()
@@ -538,7 +606,10 @@ class ArtifactTask:
         state = runtime.get(run_id)
         lab, exp = state.lab, state.experiment
         db = lab.db
-        logger = get_run_logger()
+        try:
+            logger = get_run_logger()
+        except Exception:  # an eager call: no Prefect run around it
+            logger = logging.getLogger("dendrite")
 
         pinned = exp.pins.get(self.name)
         if pinned is not None:
@@ -571,7 +642,9 @@ class ArtifactTask:
             started_at=time.time(),
         )
         try:
-            row, refs, status = self._resolve(lab, exp.id, signature, spec, flat, params, call)
+            row, refs, status = self._resolve(
+                lab, exp.id, signature, spec, flat, params, call, rerun=state.reruns(self.name)
+            )
         except BaseException as e:
             db.upsert_node_run(exp.id, self.name, status="failed", error=repr(e), finished_at=time.time())
             raise
@@ -590,11 +663,19 @@ class ArtifactTask:
             logger.info("computed %s (execution %s)", signature[:12], row["id"])
         return self._shape(refs)
 
-    def _resolve(self, lab, exp_id, signature, spec, flat, params, call):
+    def _resolve(self, lab, exp_id, signature, spec, flat, params, call, rerun: bool = False):
         db = lab.db
         owner = uuid.uuid4().hex
         lease = None
-        if self.cache:
+        mode = runtime.cache_mode()
+        previous = None  # the result a rerun replaces, to check the step is deterministic
+        if self.cache and (rerun or mode in ("off", "bypass")):
+            previous = self._valid_hit(lab, signature)
+        elif self.cache and mode == "readonly":
+            hit = self._valid_hit(lab, signature)
+            if hit:
+                return hit[0], hit[1], "cached"
+        elif self.cache:
             waiting = False
             while True:
                 hit = self._valid_hit(lab, signature)
@@ -623,7 +704,7 @@ class ArtifactTask:
             signature=signature,
             node=self.name,
             spec=spec,
-            cacheable=self.cache,
+            cacheable=self.cache and mode != "readonly",
             experiment_id=exp_id,
             task_run_id=task_run_id,
         )
@@ -654,6 +735,23 @@ class ArtifactTask:
             if lease:
                 db.release_lease(*lease)
             raise
+        if previous is not None:
+            before = {o: r.hash for o, r in previous[1].items()}
+            after = {o: r.hash for o, r in refs.items()}
+            if before != after:
+                changed = sorted(o for o in after if before.get(o) != after[o])
+                msg = (
+                    f"{self.name} is not deterministic: rerunning it changed {', '.join(changed)} "
+                    f"(earlier run: execution {previous[0]['id']}). Its outputs depend on something "
+                    "the signature doesn't hash: unseeded randomness, the clock, or a hidden input."
+                )
+                warnings.warn(NondeterministicStep(msg), stacklevel=2)
+                try:
+                    db.write_telemetry(
+                        exec_id, logs=[{"seq": 10**9, "stream": "marker", "t": time.time(), "text": f"\n⚠ {msg}\n"}]
+                    )
+                except Exception:  # pragma: no cover - display only
+                    pass
         return {"id": exec_id}, refs, "computed"
 
     def _compute(self, lab, exec_id: str, call: dict[str, Any], params: dict[str, Any]):
@@ -679,7 +777,12 @@ class ArtifactTask:
         reads = guard.start(self.name, settings.check_reads, settings.project_root, allowed)
         try:
             try:
-                result = self.fn(**kwargs)
+                positional = [
+                    kwargs.pop(n)
+                    for n, p in self.signature.parameters.items()
+                    if p.kind is inspect.Parameter.POSITIONAL_ONLY and n in kwargs
+                ]
+                result = self.fn(*positional, **kwargs)
             except BaseException:
                 tel.write("stderr", traceback.format_exc(limit=20))
                 raise
@@ -702,6 +805,58 @@ class ArtifactTask:
             runtime._exec.reset(token)
             remove_tree(wd)
         return refs, ctx.metrics  # all of them: publish rewrites any a live flush already wrote
+
+
+class NondeterministicStep(UserWarning):
+    """A rerun produced different outputs from the same signature."""
+
+
+_PATHS: dict[tuple[str, int, int], ArtifactRef] = {}  # (resolved file, size, mtime_ns) -> ref
+_CHECKOUTS: dict[str, ArtifactRef] = {}  # paths eager calls returned -> their refs
+
+
+def _eager_input(lab, value: Any, where: str, external: dict[str, ArtifactRef]) -> Any:
+    """An eager argument as a pipeline call would see it: paths and objects become artifacts."""
+    if isinstance(value, ArtifactRef):
+        return value
+    if isinstance(value, os.PathLike):
+        p = Path(value).resolve()
+        known = _CHECKOUTS.get(str(p))
+        if known is not None:
+            return known
+        st = p.stat()
+        key = (str(p), st.st_size, st.st_mtime_ns)
+        ref = _PATHS.get(key) if p.is_file() else None
+        if ref is None:
+            ref = lab.ingest(p)
+            if p.is_file():
+                _PATHS[key] = ref
+        external[where] = ref
+        return ref
+    if isinstance(value, (list, tuple)):
+        items = [_eager_input(lab, v, f"{where}[{i}]", external) for i, v in enumerate(value)]
+        return type(value)(items) if not hasattr(value, "_fields") else type(value)(*items)
+    if isinstance(value, dict) and all(isinstance(k, str) for k in value):
+        return {k: _eager_input(lab, v, f"{where}.{k}", external) for k, v in value.items()}
+    try:
+        json.dumps(value)  # strictly JSON: a param, stored and shown as given
+        return value
+    except (TypeError, ValueError):
+        ref = lab.store.put_value(value)  # any other object: a value input, hashed by content
+        lab.db.register_artifacts([ref])
+        return ref
+
+
+def _eager_output(lab, out: Any) -> Any:
+    def load(ref: ArtifactRef) -> Any:
+        value = lab.store.load(ref)
+        if isinstance(value, Path):
+            _CHECKOUTS[str(value.resolve())] = ref
+        return value
+
+    if isinstance(out, ArtifactRef):
+        return load(out)
+    return tuple(load(r) for r in out)
 
 
 def _record_environment(lab, exec_id: str) -> None:

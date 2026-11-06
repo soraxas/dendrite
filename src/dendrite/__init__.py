@@ -17,10 +17,12 @@ except PackageNotFoundError:  # running from a source tree without installing
     __version__ = "0.0.0"
 
 from .experiment import Experiment, Lab, NotADraft, Pipeline, pipeline
-from .runtime import load, log_image, log_media, log_metric, progress, stage, workdir
+from .runtime import load, log_image, log_media, log_metric, progress, stage, use, workdir
 from .store import ArtifactRef, ArtifactStore, FsspecStore, LocalStore
-from .task import ArtifactTask, artifact_task
+from .task import ArtifactTask, NondeterministicStep, artifact_task
 from .telemetry import run
+
+step = artifact_task  # `@dendrite.step`, or `dendrite.step(fn)` for a function you can't edit
 
 __all__ = [
     "ArtifactRef",
@@ -30,6 +32,7 @@ __all__ = [
     "FsspecStore",
     "Lab",
     "LocalStore",
+    "NondeterministicStep",
     "NotADraft",
     "Pipeline",
     "artifact_task",
@@ -41,5 +44,7 @@ __all__ = [
     "progress",
     "run",
     "stage",
+    "step",
+    "use",
     "workdir",
 ]

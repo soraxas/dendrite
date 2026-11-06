@@ -39,3 +39,14 @@ it("is disabled, with the reason, when editing is off", () => {
   expect(button.disabled).toBe(true);
   expect(button.title).toMatch(/Editing is off/);
 });
+
+it("can't fork a session of eager calls", () => {
+  const session = {
+    ...dag,
+    experiment: exp({ id: "e-s", name: "train.py · 14:03", status: "completed", pipeline: "session" }),
+  };
+  renderWithQuery(<ForkButton dag={session} canEdit open={vi.fn()} />);
+  const button = screen.getByText("Fork…") as HTMLButtonElement;
+  expect(button.disabled).toBe(true);
+  expect(button.title).toContain("@pipeline");
+});

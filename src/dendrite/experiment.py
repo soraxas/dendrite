@@ -642,7 +642,10 @@ class Experiment:
         return self
 
     # -- running -------------------------------------------------------------------
-    def run(self) -> Experiment:
+    def run(self, rerun: bool | Iterable[str] = False) -> Experiment:
+        """Run the pipeline. ``rerun`` recomputes steps even when a verified result exists:
+        ``True`` for all, or node or step names (``"train"`` covers ``train[3]``). Their new
+        results are published, so later runs reuse them."""
         db = self.lab.db
         pipe = self.pipeline
         start = dict(status="running", started_at=time.time(), finished_at=None, error=None)
@@ -657,6 +660,7 @@ class Experiment:
         refs = {n: self.lab.artifact(h) for n, h in self.inputs.items()}
         db.clear_node_runs(self.id)
         state = runtime.register(self)
+        state.rerun = True if rerun is True else set(rerun or ())
         try:
             pipe.flow.with_options(flow_run_name=self.name or self.id)(run_id=state.run_id, inputs=refs)
         except BaseException as e:

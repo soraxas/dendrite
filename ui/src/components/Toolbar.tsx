@@ -25,13 +25,15 @@ export function ForkButton({ dag, canEdit, open }: { dag: Dag; canEdit: boolean;
     <button
       className={`primary ${err ? "err" : ""}`}
       aria-invalid={!!err}
-      disabled={!canEdit || fork.isPending}
+      disabled={!canEdit || fork.isPending || exp.pipeline === "session"}
       title={
         err
           ? `Fork failed: ${err}`
-          : canEdit
-            ? "Copy these settings into a draft you can change before running"
-            : "Editing is off: start `dendrite ui` on localhost or with --allow-edit"
+          : exp.pipeline === "session"
+            ? "A session records steps called outside a pipeline; put the calls in a @pipeline to fork it"
+            : canEdit
+              ? "Copy these settings into a draft you can change before running"
+              : "Editing is off: start `dendrite ui` on localhost or with --allow-edit"
       }
       onClick={() => fork.mutate()}
     >

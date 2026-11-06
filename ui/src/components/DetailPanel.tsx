@@ -264,18 +264,53 @@ export function ExperimentDetail({
 }
 
 /** Which run's result a reused/frozen step took, with links to that experiment and run. */
+/** How to recompute a reused step anyway, ready to copy. */
+export function RerunHint({ exp, pipeline, step }: { exp: string; pipeline: string; step: string }) {
+  const [copied, setCopied] = useState(false);
+  const base = step.split("[", 1)[0];
+  const cmd =
+    pipeline === "session"
+      ? `${base}.rerun(...)  # in the script that called it`
+      : `dendrite run ${exp} --rerun ${step}`;
+  return (
+    <div className="rerun-hint">
+      <span className="muted">Rerun anyway:</span> <code>{cmd}</code>{" "}
+      {pipeline !== "session" && (
+        <button
+          type="button"
+          className="link"
+          onClick={() => {
+            navigator.clipboard?.writeText(cmd).then(
+              () => setCopied(true),
+              () => {},
+            );
+          }}
+        >
+          {copied ? "copied" : "copy"}
+        </button>
+      )}
+      <div className="muted hint">
+        Recomputes it and keeps the new result; dendrite warns if the output differs (a nondeterministic step).
+        {pipeline !== "session" && " Add --import MODULE if the pipeline isn't imported."}
+      </div>
+    </div>
+  );
+}
+
 function ReusedFrom({
   execId,
   step,
   self,
   frozen,
   nav,
+  pipeline,
 }: {
   execId: string;
   step: string;
   self: string;
   frozen: boolean;
   nav: Nav;
+  pipeline: string;
 }) {
   const { data: ex } = useExecution(execId);
   if (!ex) return null;
@@ -305,6 +340,7 @@ function ReusedFrom({
           shared by {ex.used_by!.length} experiment steps
         </div>
       )}
+      {!frozen && <RerunHint exp={self} pipeline={pipeline} step={step} />}
     </section>
   );
 }
@@ -396,6 +432,7 @@ export function NodeDetail({ n, dag, nav }: { n: DagNode; dag: Dag; nav: Nav }) 
           self={dag.experiment.id}
           frozen={n.status === "pinned"}
           nav={nav}
+          pipeline={dag.experiment.pipeline}
         />
       )}
       {n.execution_id && n.status === "computed" && (

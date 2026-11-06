@@ -280,11 +280,17 @@ def cmd_run(lab: Lab, args) -> None:
     for mod in args.imports or []:
         importlib.import_module(mod)
     exp = lab.get(args.experiment)
-    if exp.status not in ("draft", "created"):
-        sys.exit(f"error: {exp.id} is {exp.status}; fork it to run a variation")
-    print(f"running {exp.name or exp.id} ({exp.id})")
+    rerun = True if getattr(args, "rerun_all", False) else set(getattr(args, "rerun", None) or ())
+    if exp.status not in ("draft", "created") and not rerun:
+        sys.exit(f"error: {exp.id} is {exp.status}; fork it to run a variation, or --rerun NODE to recompute steps")
+    if exp.status == "running":
+        sys.exit(f"error: {exp.id} is running")
+    print(
+        f"running {exp.name or exp.id} ({exp.id})"
+        + (" (rerunning " + ("every step" if rerun is True else ", ".join(sorted(rerun))) + ")" if rerun else "")
+    )
     try:
-        exp.run()
+        exp.run(rerun=rerun)
     finally:
         for nr in exp.node_runs():
             print(f"  {nr['node']:<24} {nr['status']}")
@@ -724,6 +730,8 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("--ignore", action="append", metavar="CODE", help="diagnostic code to skip (repeatable)")
     s = sub.add_parser("run", help="run a draft (or never-run) experiment in this process")
     s.add_argument("experiment")
+    s.add_argument("--rerun", action="append", metavar="NODE", help="recompute this step even if cached (repeatable)")
+    s.add_argument("--rerun-all", action="store_true", help="recompute every step")
     s.add_argument("--import", dest="imports", action="append", help="module to import (registers pipelines)")
     s = sub.add_parser("du", help="storage use: store totals, per experiment, cache entries")
     s.add_argument("--json", action="store_true")

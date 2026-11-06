@@ -228,6 +228,13 @@ The flow of a run spans several modules in `src/dendrite/`:
 - **Artifacts tab.** `#/exp/:id/artifacts?kind=&q=&cmp=node.output` (filters in the URL). `ui/src/artifacts.ts` builds rows from the DAG (inputs, then outputs in `seq` order; source computed/reused/pinned from status and `execution_experiment`), groups stage → step, and picks Compare candidates (self, parent, direct forks, capped at 8). `components/Artifacts.tsx` renders it; Compare fetches each candidate's DAG and `/api/diff`, and collapses identical hashes. No new endpoint.
 - **UI.** `components/Names.tsx`: `NameControl` (★ chips and ☆ Name… with a "Move it here" flow on `name_taken`) in `ArtifactDetailPanel`, and `NamesPage` at `#/names`. Output ports and the node panel show `★ @name`.
 
+17. **Eager steps and cache control** (OpenSpec `easy-adoption`).
+
+- **Eager calls.** `ArtifactTask.__call__` with no `_active_run` goes to `_eager`: arguments are converted (`_eager_input`: `Path` → ingested ref with a (path, size, mtime) memo, paths an eager call returned → their ref via `_CHECKOUTS`, strict JSON → params, anything else → `put_value`), the process's session `RunState` (`runtime.session(lab)`, pipeline `"session"`, created lazily against `runtime.default_lab()` / `dendrite.use`) becomes active for the call, and `_enqueue` + `_execute` run directly, without Prefect. Repeated calls use `named(n)`. Outputs come back loaded (`_eager_output`). `dendrite.step` is `artifact_task`.
+- **Rerun.** `RunState.rerun` (`True` or names; `reruns(node)` matches `step[k]` by its step). `_resolve` skips the lookup for reruns, then compares outputs with the replaced hit and warns `NondeterministicStep` plus a log line.
+- **`DENDRITE_CACHE`** (`runtime.cache_mode()`, read per call): `off`/`bypass` act as rerun-all in pipelines; `readonly` looks up but publishes `cacheable=False` (`find_success` only returns cacheable executions); `bypass` makes eager calls plain function calls.
+- **Builtins** fingerprint as `module.qualname@<dist version>`; positional-only parameters are passed positionally.
+
 ## Invariants to preserve
 
 - Signatures must never include experiment ids or flow-run ids. That is what makes cross-experiment reuse work.
@@ -277,6 +284,7 @@ Spec-driven changes live in `openspec/`:
 - `openspec/changes/hosted-server/` is the proposed hosted mode: a server that owns Postgres and the bucket, login, projects and roles, and presigned blob access. Not implemented yet.
 - `openspec/changes/run-telemetry/` is console capture, live scalars, samples and environment per execution (implemented).
 - `openspec/changes/artifact-organisation/` is artifact names (`@name`, implemented) and the per-experiment Artifacts tab.
+- `openspec/changes/easy-adoption/` is steps outside pipelines (sessions), `dendrite.step(fn)`, rerun and `DENDRITE_CACHE` (implemented).
 - `openspec/changes/react-flow-ui/` is the React Flow UI change. Archive it with `openspec archive react-flow-ui` once it has been reviewed.
 - Use `/opsx:propose`, `/opsx:apply` and `/opsx:archive` for new work.
 - Validate with `openspec validate <change>`.

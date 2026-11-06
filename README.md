@@ -48,6 +48,21 @@ more = base.fork({"top.n": 5}).run()             # count_words is reused; only t
 more.load("top")
 ```
 
+### Already have a codebase?
+
+Decorate one slow function and keep calling it as you do now. No pipeline or `Lab` needed:
+
+```python
+import dendrite
+
+@dendrite.step
+def extract_frames(video: Path, fps: int = 2) -> Path: ...
+
+frames = extract_frames(Path("scan.mp4"))    # cached, logged and in the UI as a session
+```
+
+`dendrite.step(some_library_function)` wraps code you can't edit. See **[Adding dendrite to an existing project](docs/adopting.md)**.
+
 ## A realistic pipeline
 
 ```python
@@ -121,6 +136,18 @@ Other details:
 - `colmap.override(matcher="exhaustive")` builds checked params for `fork()`: a typo raises with a suggestion.
 - A cache hit is only used after its output files are verified to exist, so a deleted blob means a recompute, never a wrong result.
 - Concurrent experiments compute a shared step once. The others wait for it, and a crashed worker's claim expires.
+
+### Controlling the cache
+
+| You want | Do |
+|---|---|
+| Never cache a step | `@artifact_task(cache=False)` |
+| Invalidate after changing a helper | `@artifact_task(version="2")` |
+| Recompute anyway | `exp.run(rerun=["train"])`, `dendrite run EXP --rerun train` (or `--rerun-all`), or `step.rerun(...)` outside a pipeline |
+| Recompute everything, or only reuse | `DENDRITE_CACHE=off` · `DENDRITE_CACHE=readonly` |
+| Turn dendrite off | `DENDRITE_CACHE=bypass`: steps called outside a pipeline run as plain functions |
+
+A rerun keeps its new result. If it differs from the one it replaced, dendrite warns that the step isn't deterministic (`NondeterministicStep`).
 
 ### The step contract
 
@@ -225,7 +252,7 @@ The built UI ships inside the wheel, so using dendrite never needs Node.js.
 |---|---|
 | `dendrite list` · `show EXP` · `tree` | experiments and the fork tree |
 | `dendrite diff A B` · `dag EXP` · `lineage HASH` | compare runs; Mermaid graphs |
-| `dendrite run EXP --import MOD` | run a draft made in the UI |
+| `dendrite run EXP --import MOD [--rerun NODE] [--rerun-all]` | run a draft made in the UI, or recompute steps of one that ran |
 | `dendrite check --import MOD` | static checks; exits 1 on errors |
 | `dendrite name NAME TARGET [--force]` · `names [--history NAME]` · `unname NAME` | name artifacts (`EXP:NODE.OUTPUT`, `EXP:INPUT`, a hash); use as `@NAME` |
 | `dendrite logs EXP NODE [-f]` · `env EXP NODE` | a step's console (follow a running one); where it ran |
@@ -236,6 +263,7 @@ Each run also publishes a Prefect markdown artifact, `dendrite-<exp id>`, so lin
 
 ## Guides
 
+- [Adding dendrite to an existing project](docs/adopting.md)
 - [Watching runs: logs, charts, samples and environment](docs/telemetry.md)
 - [Finding and reusing results: names, the Artifacts tab and Compare](docs/finding-results.md)
 - [Deploying a dendrite server](docs/deploying.md)
@@ -322,6 +350,7 @@ The server is `dendrite server run --config server.toml`, or the `Dockerfile` im
 | `DENDRITE_DB_URL` | SQLite in `$DENDRITE_HOME` | any SQLAlchemy URL, e.g. `postgresql+psycopg://…` (`uv sync --extra postgres`) |
 | `DENDRITE_STORE_URL` | `$DENDRITE_HOME/store` | a directory, or `s3://bucket/prefix` and other fsspec URLs (`uv sync --extra s3`) |
 | `DENDRITE_ENV` | — | an environment fingerprint mixed into every signature, e.g. an image digest |
+| `DENDRITE_CACHE` | `on` | `off` recomputes everything, `readonly` reuses without adding, `bypass` runs steps outside pipelines as plain functions |
 | `DENDRITE_CHECK_READS` | `warn` | the undeclared-read guard: `warn`, `error` or `off` |
 | `DENDRITE_LOG_MAX` | `16777216` | bytes of console output kept per step run (the beginning and the end) |
 | `DENDRITE_SAMPLE_HISTORY` | `100` | logged steps kept per sample title and series |

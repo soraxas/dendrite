@@ -35,6 +35,16 @@ class RunState:
     # id(future) -> (node, outputs) for submitted steps, so a queued step's inputs can name the
     # step they will come from before that step has produced anything.
     future_nodes: dict[int, tuple[str, tuple[str, ...]]] = field(default_factory=dict)
+    # Steps to recompute even when a verified result exists: True for all, or node/step names.
+    rerun: bool | set[str] = False
+    # Eager sessions: how often each step was called, so repeats become step[2], step[3]…
+    session: bool = False
+    calls: dict[str, int] = field(default_factory=dict)
+
+    def reruns(self, node: str) -> bool:
+        if self.rerun is True:
+            return True
+        return bool(self.rerun) and (node in self.rerun or node.split("[", 1)[0] in self.rerun)
 
     @property
     def lab(self) -> Lab:
@@ -113,6 +123,66 @@ def _refresh() -> str | None:
             return f"reloading {name} failed: {type(e).__name__}: {e}"
         _MODULES[name] = _mtime(name) or _MODULES[name]
     return None
+
+
+CACHE_MODES = ("on", "off", "readonly", "bypass")
+
+
+def cache_mode() -> str:
+    """``DENDRITE_CACHE``: ``on`` (default), ``off`` (recompute everything, still record it),
+    ``readonly`` (reuse what exists, never add to the cache) or ``bypass`` (eager calls run the
+    plain function and record nothing; pipelines behave as ``off``)."""
+    mode = os.environ.get("DENDRITE_CACHE", "on").strip().lower() or "on"
+    if mode not in CACHE_MODES:
+        raise ValueError(f"DENDRITE_CACHE={mode!r}: expected one of {', '.join(CACHE_MODES)}")
+    return mode
+
+
+# -- eager steps: calls outside a pipeline run against a default lab, in a session -------
+_default_lab: Lab | None = None
+_sessions: dict[int, RunState] = {}  # id(lab) -> its session in this process
+_session_lock = threading.Lock()
+
+
+def use(lab: Lab) -> Lab:
+    """Make ``lab`` the one that steps called outside a pipeline record to (and start a session)."""
+    global _default_lab
+    _default_lab = lab
+    return lab
+
+
+def default_lab() -> Lab:
+    global _default_lab
+    if _default_lab is None:
+        from .experiment import Lab
+
+        _default_lab = Lab()
+    return _default_lab
+
+
+def session(lab: Lab) -> RunState:
+    """This process's session experiment in ``lab``, created on first use."""
+    with _session_lock:
+        state = _sessions.get(id(lab))
+        if state is not None and state.experiment.lab is lab:
+            return state
+        script = Path(sys.argv[0]).name if sys.argv and sys.argv[0] else "python"
+        exp_id = "e-" + uuid.uuid4().hex[:10]
+        lab.db.create_experiment(
+            id=exp_id,
+            name=f"{script or 'python'} · {time.strftime('%H:%M')}",
+            parent_id=None,
+            pipeline="session",
+            params={},
+            inputs={},
+            pins={},
+            status="completed",
+            created_at=time.time(),
+        )
+        state = register(lab.get(exp_id))
+        state.session = True
+        _sessions[id(lab)] = state
+        return state
 
 
 def register(experiment: Experiment, plan: bool = False) -> RunState:

@@ -832,12 +832,16 @@ class Metadata:
         return dict(row) if row else None
 
     def find_success(self, signature: str) -> list[tuple[dict, dict[str, ArtifactRef]]]:
-        """Successful executions for ``signature``, newest first, with their output refs."""
+        """Reusable successful executions for ``signature``, newest first, with their output refs."""
         with self.ro() as conn:
             rows = (
                 conn.execute(
                     sa.select(executions)
-                    .where(executions.c.signature == signature, executions.c.status == "success")
+                    .where(
+                        executions.c.signature == signature,
+                        executions.c.status == "success",
+                        executions.c.cacheable.is_(True),
+                    )
                     .order_by(executions.c.finished_at.desc())
                 )
                 .mappings()
