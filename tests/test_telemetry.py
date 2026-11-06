@@ -374,6 +374,7 @@ def test_print_is_not_duplicated_under_fd_capture(lab):
     assert text.count("a warning") == 1
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="the step calls libc's printf")
 def test_fd_capture_can_be_turned_off(lab, monkeypatch):
     monkeypatch.setenv("DENDRITE_CAPTURE_FD", "0")
     exp = lab.create(native_pipe).run()
@@ -507,3 +508,34 @@ def test_install_rewraps_a_replaced_stream_once(monkeypatch):
 def test_fd_capture_stays_off_in_a_notebook_kernel(monkeypatch):
     monkeypatch.setitem(sys.modules, "ipykernel", object())
     assert not telemetry._fd_capture_enabled()
+
+
+@artifact_task(outputs=["out"], cache=False)
+def item(i: int = 0) -> int:
+    print(f"item {i} says hello")
+    for step in range(5):
+        log_metric("loss", 1 / (step + 1 + i), step=step)
+    img = workdir() / "frame.png"
+    img.write_bytes(_tiny_png(i % 256))
+    log_image("frame", img)
+    return i
+
+
+@pipeline(name="tele_wide")
+def wide_pipe(n: int = 40):
+    futures = [item.named(str(i)).submit(i=i) for i in range(n)]
+    for f in futures:
+        f.result()
+
+
+def test_a_wide_fan_out_keeps_every_items_telemetry(lab):
+    """Many concurrent steps (through a server and S3 when DENDRITE_TEST_REMOTE=1)."""
+    exp = lab.create(wide_pipe).run()
+    runs = {n["node"]: n["execution_id"] for n in exp.node_runs()}
+    assert len(runs) == 40
+    points = lab.db.scalars(runs.values())
+    for i in range(40):
+        eid = runs[f"item[{i}]"]
+        assert f"item {i} says hello" in _log_text(lab, eid)
+        assert len(points[eid]) == 5
+        assert [s["title"] for s in lab.db.samples(eid)] == ["frame"]
