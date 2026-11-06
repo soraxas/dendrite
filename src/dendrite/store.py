@@ -11,6 +11,7 @@ import json
 import os
 import pickle
 import shutil
+import sys
 import tempfile
 import uuid
 from abc import ABC, abstractmethod
@@ -47,7 +48,10 @@ def remove_tree(path: str | os.PathLike) -> None:
     """Delete a directory tree (or file) if it exists, including read-only files, ignoring the rest."""
     p = Path(path)
     if p.is_dir() and not p.is_symlink():
-        shutil.rmtree(p, onexc=_writable_retry)
+        if sys.version_info >= (3, 12):
+            shutil.rmtree(p, onexc=_writable_retry)
+        else:  # onerror passes (type, value, tb) where onexc passes the exception
+            shutil.rmtree(p, onerror=_writable_retry)
     elif p.exists() or p.is_symlink():
         try:
             p.unlink()

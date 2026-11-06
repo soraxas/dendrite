@@ -29,7 +29,7 @@ permissions:
 
 jobs:
   pytest:
-    name: pytest (${{ matrix.db }})
+    name: pytest (${{ matrix.db }}${{ matrix.python != '3.12' && format(', python {0}', matrix.python) || '' }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -37,13 +37,18 @@ jobs:
         # remote: the whole suite again, with `lab` backed by an in-process dendrite server
         # (Postgres + moto S3), as a teammate's client would use it.
         db: [sqlite, postgres, remote]
+        python: ["3.12"]
+        include:
+          # the oldest supported Python (Prefect's floor); SQLite is enough to catch stdlib differences
+          - db: sqlite
+            python: "3.11"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:
           persist-credentials: false
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e  # v6.8.0
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python }}
       - run: uv sync --locked
       - name: pytest
         # Every job also runs tests/test_postgres.py against a throwaway postgres:17-alpine

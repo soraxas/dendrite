@@ -5,7 +5,7 @@ description = "Artifact-first experiment lineage, global caching and forking on 
 authors = [
     { name = "Tin Lai", email = "tin@tinyiu.com" }
 ]
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.110",
     "fsspec>=2024.1",
@@ -74,7 +74,7 @@ testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 120
-target-version = "py312"
+target-version = "py311"
 
 [tool.ruff.lint]
 # pycodestyle errors, pyflakes, import order, pyupgrade, bugbear
