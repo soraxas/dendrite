@@ -77,3 +77,36 @@ describe("appendLines", () => {
     expect(buf.partial).toBe("done");
   });
 });
+
+describe("overlays and axes", () => {
+  it("merges sources by title, prefixing series with their source", async () => {
+    const { mergeSources } = await import("./telemetry");
+    const charts = mergeSources([
+      {
+        label: "base",
+        points: [
+          { key: "loss/train", step: 0, value: 1 },
+          { key: "psnr", step: 0, value: 30 },
+        ],
+      },
+      { label: "fork", points: [{ key: "loss/train", step: 0, value: 2 }] },
+    ]);
+    expect(charts.map((c) => c.title)).toEqual(["loss", "psnr"]);
+    expect(charts[0].series.map((s) => s.name)).toEqual(["base · train", "fork · train"]);
+    expect(charts[1].series.map((s) => s.name)).toEqual(["base"]);
+    const single = mergeSources([{ label: "base", points: [{ key: "loss/train", step: 0, value: 1 }] }]);
+    expect(single[0].series[0].name).toBe("train");
+  });
+
+  it("measures time from each series' first point and drops untimed points", async () => {
+    const { xOf, fmtSeconds } = await import("./telemetry");
+    const pts = [
+      { step: 0, value: 1, t: 100 },
+      { step: 1, value: 2, t: null },
+      { step: 2, value: 3, t: 160 },
+    ];
+    expect(xOf(pts, "step").map((p) => p.x)).toEqual([0, 1, 2]);
+    expect(xOf(pts, "time").map((p) => p.x)).toEqual([0, 60]);
+    expect([fmtSeconds(45), fmtSeconds(200), fmtSeconds(7500)]).toEqual(["45s", "3m 20s", "2h 5m"]);
+  });
+});

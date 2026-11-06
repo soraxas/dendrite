@@ -317,6 +317,8 @@ export interface ScalarPoint {
   key: string;
   step: number;
   value: number;
+  /** When it was logged (seconds since the epoch); absent for points recorded without a time. */
+  t?: number | null;
 }
 export interface Sample {
   title: string;

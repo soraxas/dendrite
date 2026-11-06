@@ -236,6 +236,16 @@ execution_environments = sa.Table(
     sa.Column("env_hash", sa.String(64), nullable=False),
 )
 
+# When each metric point was logged (for a wall-time axis); points written without one have none.
+metric_times = sa.Table(
+    "metric_times",
+    meta,
+    sa.Column("execution_id", sa.String(32), sa.ForeignKey("executions.id"), primary_key=True),
+    sa.Column("key", sa.String(200), primary_key=True),
+    sa.Column("step", sa.Integer, primary_key=True),
+    sa.Column("t", sa.Float, nullable=False),
+)
+
 # When an execution last wrote telemetry, so pushed updates notice live logs and metrics.
 execution_activity = sa.Table(
     "execution_activity",
@@ -1092,8 +1102,10 @@ class Metadata:
         logs: list[dict] | None = None,
         tail: str | None = None,
         metric_values: list[tuple[str, int, float]] | None = None,
+        times: list[tuple[str, int, float]] | None = None,
     ) -> None:
-        """Append log chunks (``{seq, stream, t, text}``), replace the rolling tail, upsert metrics."""
+        """Append log chunks (``{seq, stream, t, text}``), replace the rolling tail, upsert metrics
+        and when each was logged (``(key, step, t)``)."""
         if not (logs or tail is not None or metric_values):
             return
         with self.tx() as conn:
@@ -1111,6 +1123,24 @@ class Metadata:
                     )
             if metric_values:
                 self._write_metrics(conn, exec_id, metric_values)
+            if times:
+                latest = {(k, st): t for k, st, t in times}
+                by_key: dict[str, list[int]] = {}
+                for k, st in latest:
+                    by_key.setdefault(k, []).append(st)
+                for k, steps in by_key.items():
+                    for i in range(0, len(steps), 500):
+                        conn.execute(
+                            metric_times.delete().where(
+                                metric_times.c.execution_id == exec_id,
+                                metric_times.c.key == k,
+                                metric_times.c.step.in_(steps[i : i + 500]),
+                            )
+                        )
+                conn.execute(
+                    metric_times.insert(),
+                    [{"execution_id": exec_id, "key": k, "step": st, "t": t} for (k, st), t in latest.items()],
+                )
             self._touch(conn, exec_id)
 
     def attach_log(self, exec_id: str, ref: ArtifactRef) -> None:
@@ -1159,19 +1189,29 @@ class Metadata:
         return out
 
     def scalars(self, exec_ids: Iterable[str]) -> dict[str, list[dict]]:
-        """Every metric point per execution: ``{exec_id: [{key, step, value}]}`` ordered by key, step."""
+        """Every metric point per execution: ``{exec_id: [{key, step, value, t}]}`` ordered by key, step.
+        ``t`` is when it was logged, or ``None`` for points recorded without a time."""
         ids = [i for i in set(exec_ids) if i]
         if not ids:
             return {}
         with self.ro() as conn:
             rows = conn.execute(
-                sa.select(metrics.c.execution_id, metrics.c.key, metrics.c.step, metrics.c.value)
+                sa.select(metrics.c.execution_id, metrics.c.key, metrics.c.step, metrics.c.value, metric_times.c.t)
+                .join(
+                    metric_times,
+                    sa.and_(
+                        metric_times.c.execution_id == metrics.c.execution_id,
+                        metric_times.c.key == metrics.c.key,
+                        metric_times.c.step == metrics.c.step,
+                    ),
+                    isouter=True,
+                )
                 .where(metrics.c.execution_id.in_(ids))
                 .order_by(metrics.c.key, metrics.c.step)
             ).all()
         out: dict[str, list[dict]] = {i: [] for i in ids}
-        for eid, key, step, value in rows:
-            out[eid].append({"key": key, "step": step, "value": value})
+        for eid, key, step, value, t in rows:
+            out[eid].append({"key": key, "step": step, "value": value, "t": t})
         return out
 
     def record_sample(
@@ -1426,6 +1466,7 @@ class Metadata:
                 "execution_inputs": rows(execution_inputs, execution_inputs.c.execution_id.in_(exec_ids)),
                 "execution_outputs": rows(execution_outputs, execution_outputs.c.execution_id.in_(exec_ids)),
                 "metrics": rows(metrics, metrics.c.execution_id.in_(exec_ids)),
+                "metric_times": rows(metric_times, metric_times.c.execution_id.in_(exec_ids)),
                 "execution_sources": rows(execution_sources, execution_sources.c.execution_id.in_(exec_ids)),
             }
             src_hashes = {r["source_hash"] for r in out["execution_sources"]}
@@ -1487,9 +1528,9 @@ class Metadata:
                 exec_map[ex["id"]] = ex["id"]
                 inserted.append(ex["id"])
             fresh = set(inserted)
-            for table in (execution_inputs, execution_outputs, metrics, execution_sources):
+            for table in (execution_inputs, execution_outputs, metrics, metric_times, execution_sources):
                 key = table.name
-                for r in bundle[key]:
+                for r in bundle.get(key, []):
                     if r["execution_id"] in fresh:
                         conn.execute(table.insert().values(**r))
             # Experiments, parents first; a parent that isn't here or in the bundle is dropped.

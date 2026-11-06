@@ -96,7 +96,7 @@ export function ParamsPage({ dag, onArtifact }: { dag: Dag; onArtifact: (h: stri
   );
 }
 
-export function MetricsPage({ dag }: { dag: Dag }) {
+export function MetricsPage({ dag, nameOf }: { dag: Dag; nameOf?: (id: string) => string }) {
   const rows = dag.nodes
     .filter((n) => n.kind === "node")
     .flatMap((n) =>
@@ -126,7 +126,7 @@ export function MetricsPage({ dag }: { dag: Dag }) {
         </button>
       </div>
       {!asTable ? (
-        <ExperimentScalars expId={dag.experiment.id} live={dag.experiment.status === "running"} />
+        <ExperimentScalars expId={dag.experiment.id} live={dag.experiment.status === "running"} nameOf={nameOf} />
       ) : (
         <table>
           <thead>

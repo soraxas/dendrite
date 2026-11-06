@@ -68,9 +68,16 @@ export function collapseCR(text: string): string {
     .join("\n");
 }
 
+export interface Point {
+  step: number;
+  value: number;
+  t?: number | null;
+}
 export interface Series {
   name: string;
-  points: { step: number; value: number }[];
+  points: Point[];
+  /** Which source (experiment) it came from, when charts overlay several. */
+  source?: string;
 }
 export interface Chart {
   title: string;
@@ -87,7 +94,7 @@ export function groupScalars(points: ScalarPoint[]): Chart[] {
     charts.set(title, c);
     const s = c.get(name) ?? { name, points: [] };
     c.set(name, s);
-    s.points.push({ step: p.step, value: p.value });
+    s.points.push({ step: p.step, value: p.value, t: p.t });
   }
   return [...charts].map(([title, c]) => ({
     title,
@@ -140,4 +147,42 @@ export function appendLines(buf: LineBuffer, text: string): LineBuffer {
   const partial = parts.pop() ?? "";
   if (!parts.length) return { lines: buf.lines, partial };
   return { lines: buf.lines.concat(parts.map(collapseCR)), partial };
+}
+
+/** Charts from several sources (e.g. experiments), merged by title; series are prefixed with the
+ *  source's label when there is more than one source. */
+export function mergeSources(sources: { label: string; points: ScalarPoint[] }[]): Chart[] {
+  const many = sources.length > 1;
+  const byTitle = new Map<string, Series[]>();
+  for (const src of sources) {
+    for (const c of groupScalars(src.points)) {
+      const list = byTitle.get(c.title) ?? [];
+      byTitle.set(c.title, list);
+      for (const s of c.series)
+        list.push({
+          ...s,
+          source: src.label,
+          name: many ? (s.name === c.title ? src.label : `${src.label} · ${s.name}`) : s.name,
+        });
+    }
+  }
+  return [...byTitle].map(([title, series]) => ({ title, series }));
+}
+
+export type XAxis = "step" | "time";
+
+/** The x of each point: its step, or seconds since the series' first logged point. Points without
+ *  a time are dropped on the time axis. */
+export function xOf(points: Point[], axis: XAxis): { x: number; value: number; step: number }[] {
+  if (axis === "step") return points.map((p) => ({ x: p.step, value: p.value, step: p.step }));
+  const timed = points.filter((p) => p.t != null);
+  const t0 = Math.min(...timed.map((p) => p.t as number));
+  return timed.map((p) => ({ x: (p.t as number) - t0, value: p.value, step: p.step }));
+}
+
+/** Seconds as a short duration for axis ticks: 45s, 3m 20s, 2h 5m. */
+export function fmtSeconds(s: number): string {
+  if (s < 60) return `${Math.round(s)}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m${s % 60 >= 1 ? ` ${Math.round(s % 60)}s` : ""}`;
+  return `${Math.floor(s / 3600)}h ${Math.round((s % 3600) / 60)}m`;
 }

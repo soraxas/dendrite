@@ -78,3 +78,27 @@ it("shows the end of a log kept in the store, with the whole file a download awa
   expect(screen.getByText(/Showing the last/).textContent).toContain("of 4.8 MB");
   expect(screen.getByText("Download the whole log").getAttribute("href")).toContain(`${"f".repeat(64)}/download`);
 });
+
+it("offers log scale only for positive values, time only when points have times, and drag to zoom", async () => {
+  const { ScalarCharts } = await import("./Telemetry");
+  const { groupScalars } = await import("../telemetry");
+  const pts = (key: string, f: (i: number) => number, timed = true) =>
+    Array.from({ length: 10 }, (_, i) => ({ key, step: i, value: f(i), t: timed ? 1000 + i : null }));
+  const { container, unmount } = renderWithQuery(
+    <ScalarCharts charts={groupScalars([...pts("loss", (i) => 1 / (i + 1)), ...pts("delta", (i) => i - 5)])} />,
+  );
+  expect((screen.getByRole("checkbox") as HTMLInputElement).disabled).toBe(true); // delta goes negative
+  expect((screen.getByText("Time") as HTMLButtonElement).disabled).toBe(false);
+  const svg = container.querySelector("svg")!;
+  svg.getBoundingClientRect = () => ({ left: 0, width: 320, top: 0, height: 150 }) as DOMRect;
+  fireEvent.mouseDown(svg, { clientX: 100 });
+  fireEvent.mouseMove(svg, { clientX: 220 });
+  fireEvent.mouseUp(svg, { clientX: 220 });
+  expect(screen.getByText("Reset zoom")).toBeTruthy();
+  fireEvent.doubleClick(svg);
+  expect(screen.queryByText("Reset zoom")).toBeNull();
+  unmount();
+  renderWithQuery(<ScalarCharts charts={groupScalars(pts("loss", (i) => i + 1, false))} />);
+  expect((screen.getByText("Time") as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByRole("checkbox") as HTMLInputElement).disabled).toBe(false);
+});

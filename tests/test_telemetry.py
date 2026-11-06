@@ -141,6 +141,7 @@ def test_scalars_are_kept_with_title_and_series(lab):
     keys = {p["key"] for p in points}
     assert keys == {"loss/train", "loss/val"}
     assert [p["step"] for p in points if p["key"] == "loss/train"] == [0, 1, 2, 3]
+    assert all(p["t"] is not None for p in points)  # when each was logged, for a wall-time axis
     assert telemetry.split_key("loss/train") == ("loss", "train")
     assert telemetry.split_key("score") == ("score", "score")
 
@@ -194,7 +195,7 @@ def test_truncation_keeps_head_and_tail():
             self.chunks = []
             self.tail = None
 
-        def write_telemetry(self, exec_id, logs=None, tail=None, metric_values=None):
+        def write_telemetry(self, exec_id, logs=None, tail=None, metric_values=None, times=None):
             self.chunks += logs or []
             if tail is not None:
                 self.tail = tail
@@ -445,3 +446,64 @@ def test_stored_logs_are_cleaned_up_with_their_experiment(lab, monkeypatch):
     exp.delete()
     lab.gc(dry_run=False, grace=0)
     assert not lab.store.verify(ref)
+
+
+@artifact_task(outputs=["out"], cache=False)
+def fancy() -> int:
+    import contextlib
+    import io
+
+    import click
+    from rich.console import Console
+
+    Console(file=sys.stdout, force_terminal=True).print("[bold red]rich says hi[/]")
+    click.echo("click says hi")
+    click.secho("styled by click", fg="green")
+    sink = io.StringIO()
+    with contextlib.redirect_stdout(sink):  # the step's own redirect wins
+        print("kept private")
+    assert sink.getvalue() == "kept private\n"
+    print("encoding", sys.stdout.encoding is not None, "isatty", isinstance(sys.stdout.isatty(), bool))
+    return 1
+
+
+@pipeline(name="tele_fancy")
+def fancy_pipe():
+    fancy()
+
+
+def test_common_console_libraries_work_and_are_captured(lab):
+    exp = lab.create(fancy_pipe).run()
+    text = _log_text(lab, _exec(exp, "fancy"))
+    for line in ("rich says hi", "click says hi", "styled by click", "encoding True isatty True"):
+        assert line in text, line
+    assert "kept private" not in text
+    assert "\x1b[" in text  # colours survive for the UI to render
+
+
+def test_the_proxy_behaves_like_the_stream_it_wraps():
+    import io
+
+    inner = io.StringIO()
+    tee = telemetry._Tee(inner, "stdout")
+    tee.write("x")
+    tee.writelines(["y", "z"])
+    tee.flush()
+    assert inner.getvalue() == "xyz"
+    assert tee.getvalue() == "xyz"  # anything else is the wrapped stream's
+    assert not telemetry._fd_backed(inner)
+
+
+def test_install_rewraps_a_replaced_stream_once(monkeypatch):
+    import io
+
+    monkeypatch.setattr(sys, "stdout", io.StringIO())
+    telemetry.install()
+    first = sys.stdout
+    telemetry.install()
+    assert sys.stdout is first and isinstance(first, telemetry._Tee)
+
+
+def test_fd_capture_stays_off_in_a_notebook_kernel(monkeypatch):
+    monkeypatch.setitem(sys.modules, "ipykernel", object())
+    assert not telemetry._fd_capture_enabled()

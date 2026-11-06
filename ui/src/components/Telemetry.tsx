@@ -1,18 +1,23 @@
 // Run telemetry of one execution: console, scalar charts, logged samples and environment.
-import { useQuery } from "@tanstack/react-query";
-import { memo, useEffect, useMemo, useRef, useState } from "react";
-import { api, direct, type LogChunk, type LogPage, type NodeScalars, type Sample, type ScalarPoint } from "../api";
+import { useQueries, useQuery } from "@tanstack/react-query";
+import { type MouseEvent, memo, useEffect, useMemo, useRef, useState } from "react";
+import { api, direct, type LogChunk, type LogPage, type NodeScalars, type Sample } from "../api";
 import { fmtSize, short } from "../format";
+import { useExperiments } from "../queries";
 import {
   appendLines,
   type Chart,
   collapseCR,
   downsample,
+  fmtSeconds,
   groupScalars,
   type LineBuffer,
+  mergeSources,
   parseAnsi,
   SERIES_COLORS,
   smooth,
+  type XAxis,
+  xOf,
 } from "../telemetry";
 
 type Tab = "console" | "scalars" | "samples" | "environment";
@@ -171,8 +176,8 @@ function Console({ execId }: { execId: string }) {
 }
 
 const W = 320,
-  H = 140,
-  PAD = { l: 44, r: 8, t: 8, b: 20 };
+  H = 150,
+  PAD = { l: 46, r: 8, t: 8, b: 22 };
 
 function fmtTick(v: number): string {
   const a = Math.abs(v);
@@ -181,86 +186,140 @@ function fmtTick(v: number): string {
   return Number(v.toPrecision(3)).toString();
 }
 
-export function ScalarChart({ chart, weight }: { chart: Chart; weight: number }) {
+export interface ChartView {
+  weight: number;
+  axis: XAxis;
+  logY: boolean;
+  /** The x range zoomed into, shared by every chart in a group. */
+  zoom: [number, number] | null;
+}
+
+/** One chart: a line per series, hover readout, drag to zoom, double-click to reset. */
+export function ScalarChart({
+  chart,
+  view,
+  onZoom,
+}: {
+  chart: Chart;
+  view: ChartView;
+  onZoom: (z: [number, number] | null) => void;
+}) {
   const [hover, setHover] = useState<number | null>(null);
-  const drawn = chart.series.map((s) => {
+  const [drag, setDrag] = useState<[number, number] | null>(null);
+  const drawn = chart.series.map((s, i) => {
+    const pts = xOf(s.points, view.axis);
     const sm = smooth(
-      s.points.map((p) => p.value),
-      weight,
+      pts.map((p) => p.value),
+      view.weight,
     );
-    return {
-      name: s.name,
-      raw: s.points,
-      points: downsample(s.points.map((p, i) => ({ step: p.step, value: sm[i] }))),
-    };
+    const all = pts.map((p, j) => ({ ...p, value: sm[j] }));
+    const visible = view.zoom ? all.filter((p) => p.x >= view.zoom![0] && p.x <= view.zoom![1]) : all;
+    return { name: s.name, color: SERIES_COLORS[i % SERIES_COLORS.length], raw: pts, points: downsample(visible) };
   });
   const all = drawn.flatMap((s) => s.points);
-  if (!all.length) return null;
-  const xs = all.map((p) => p.step),
-    ys = all.map((p) => p.value);
-  const [x0, x1] = [Math.min(...xs), Math.max(...xs)];
+  const single = drawn.every((s) => s.raw.length <= 1);
+  const logY = view.logY && all.every((p) => p.value > 0);
+  const fy = (v: number) => (logY ? Math.log10(v) : v);
+  const xs = all.map((p) => p.x),
+    ys = all.map((p) => fy(p.value));
+  const [x0, x1] = view.zoom ?? [Math.min(...xs), Math.max(...xs)];
   let [y0, y1] = [Math.min(...ys), Math.max(...ys)];
   if (y0 === y1) [y0, y1] = [y0 - 1, y1 + 1];
   const X = (x: number) => PAD.l + ((x - x0) / (x1 - x0 || 1)) * (W - PAD.l - PAD.r);
-  const Y = (y: number) => PAD.t + (1 - (y - y0) / (y1 - y0)) * (H - PAD.t - PAD.b);
-  const single = all.length === drawn.length; // one point per series: show values, not a chart
-  const at = (s: (typeof drawn)[number]) =>
-    hover == null
-      ? s.raw[s.raw.length - 1]
-      : s.raw.reduce((b, p) => (Math.abs(p.step - hover) < Math.abs(b.step - hover) ? p : b));
+  const Y = (v: number) => PAD.t + (1 - (fy(v) - y0) / (y1 - y0)) * (H - PAD.t - PAD.b);
+  const toX = (e: MouseEvent<SVGSVGElement>) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    const px = ((e.clientX - r.left) / r.width) * W;
+    return x0 + ((px - PAD.l) / (W - PAD.l - PAD.r)) * (x1 - x0);
+  };
+  const fmtX = (x: number) => (view.axis === "time" ? fmtSeconds(x) : fmtTick(Math.round(x)));
+  const nearest = (s: (typeof drawn)[number]) => {
+    if (!s.raw.length) return null;
+    if (hover == null) return s.raw[s.raw.length - 1];
+    return s.raw.reduce((b, p) => (Math.abs(p.x - hover) < Math.abs(b.x - hover) ? p : b));
+  };
   return (
     <figure className="scalar-chart">
       <figcaption className="mono">{chart.title}</figcaption>
-      {!single && (
+      {!single && all.length > 0 && (
         <svg
           viewBox={`0 0 ${W} ${H}`}
           width="100%"
           role="img"
           aria-label={`${chart.title} chart`}
-          onMouseMove={(e) => {
-            const r = e.currentTarget.getBoundingClientRect();
-            const px = ((e.clientX - r.left) / r.width) * W;
-            setHover(x0 + ((px - PAD.l) / (W - PAD.l - PAD.r)) * (x1 - x0));
+          className={drag ? "dragging" : undefined}
+          onMouseDown={(e) => {
+            const x = toX(e);
+            setDrag([x, x]);
           }}
-          onMouseLeave={() => setHover(null)}
+          onMouseMove={(e) => {
+            const x = toX(e);
+            setHover(x);
+            if (drag) setDrag([drag[0], x]);
+          }}
+          onMouseUp={() => {
+            if (drag && Math.abs(X(drag[1]) - X(drag[0])) > 6)
+              onZoom([Math.min(...drag), Math.max(...drag)] as [number, number]);
+            setDrag(null);
+          }}
+          onMouseLeave={() => {
+            setHover(null);
+            setDrag(null);
+          }}
+          onDoubleClick={() => onZoom(null)}
         >
-          {[y0, (y0 + y1) / 2, y1].map((v) => (
-            <g key={v}>
-              <line x1={PAD.l} x2={W - PAD.r} y1={Y(v)} y2={Y(v)} stroke="var(--line)" />
-              <text x={PAD.l - 4} y={Y(v) + 3} textAnchor="end" className="tick">
-                {fmtTick(v)}
-              </text>
-            </g>
-          ))}
-          <text x={PAD.l} y={H - 4} className="tick">
-            {x0}
+          {[0, 0.5, 1].map((f) => {
+            const v = y0 + (y1 - y0) * f;
+            const label = logY ? 10 ** v : v;
+            const y = PAD.t + (1 - f) * (H - PAD.t - PAD.b);
+            return (
+              <g key={f}>
+                <line x1={PAD.l} x2={W - PAD.r} y1={y} y2={y} stroke="var(--line)" />
+                <text x={PAD.l - 4} y={y + 3} textAnchor="end" className="tick">
+                  {fmtTick(label)}
+                </text>
+              </g>
+            );
+          })}
+          <text x={PAD.l} y={H - 6} className="tick">
+            {fmtX(x0)}
           </text>
-          <text x={W - PAD.r} y={H - 4} textAnchor="end" className="tick">
-            {x1}
+          <text x={W - PAD.r} y={H - 6} textAnchor="end" className="tick">
+            {fmtX(x1)}
           </text>
-          {drawn.map((s, i) => (
+          {drawn.map((s) => (
             <polyline
               key={s.name}
               fill="none"
-              stroke={SERIES_COLORS[i % SERIES_COLORS.length]}
+              stroke={s.color}
               strokeWidth={1.6}
-              points={s.points.map((p) => `${X(p.step).toFixed(1)},${Y(p.value).toFixed(1)}`).join(" ")}
+              points={s.points.map((p) => `${X(p.x).toFixed(1)},${Y(p.value).toFixed(1)}`).join(" ")}
             />
           ))}
-          {hover != null && hover >= x0 && hover <= x1 && (
+          {hover != null && hover >= x0 && hover <= x1 && !drag && (
             <line x1={X(hover)} x2={X(hover)} y1={PAD.t} y2={H - PAD.b} stroke="var(--line-strong)" />
+          )}
+          {drag && (
+            <rect
+              x={Math.min(X(drag[0]), X(drag[1]))}
+              y={PAD.t}
+              width={Math.abs(X(drag[1]) - X(drag[0]))}
+              height={H - PAD.t - PAD.b}
+              className="zoom-box"
+            />
           )}
         </svg>
       )}
       <div className="scalar-legend">
-        {drawn.map((s, i) => {
-          const p = at(s);
+        {drawn.map((s) => {
+          const p = nearest(s);
+          if (!p) return null;
           return (
             <span key={s.name}>
-              <i style={{ background: SERIES_COLORS[i % SERIES_COLORS.length] }} />
+              <i style={{ background: s.color }} />
               {chart.series.length > 1 || s.name !== chart.title ? `${s.name} ` : ""}
               <b className="num">{fmtTick(p.value)}</b>
-              {!single && <span className="muted"> @ {p.step}</span>}
+              {!single && <span className="muted"> @ {view.axis === "time" ? fmtSeconds(p.x) : `step ${p.step}`}</span>}
             </span>
           );
         })}
@@ -269,28 +328,66 @@ export function ScalarChart({ chart, weight }: { chart: Chart; weight: number })
   );
 }
 
-export function ScalarCharts({ points }: { points: ScalarPoint[] }) {
-  const [weight, setWeight] = useState(0);
-  const charts = useMemo(() => groupScalars(points), [points]);
+/** A grid of charts with shared controls: smoothing, step or time axis, log scale and zoom. */
+export function ScalarCharts({ charts }: { charts: Chart[] }) {
+  const [view, setView] = useState<ChartView>({ weight: 0, axis: "step", logY: false, zoom: null });
   if (!charts.length) return <div className="muted">No metrics logged. Call log_metric("loss/train", v, step=i).</div>;
+  const points = charts.flatMap((c) => c.series.flatMap((s) => s.points));
+  const timed = points.some((p) => p.t != null);
+  const positive = points.every((p) => p.value > 0);
+  const many = charts.some((c) => c.series.some((s) => s.points.length > 2));
   return (
     <div>
-      {charts.some((c) => c.series.some((s) => s.points.length > 2)) && (
-        <label className="muted smoothing">
-          smoothing {weight.toFixed(2)}
-          <input
-            type="range"
-            min={0}
-            max={0.99}
-            step={0.01}
-            value={weight}
-            onChange={(e) => setWeight(Number(e.target.value))}
-          />
-        </label>
+      {many && (
+        <div className="chart-controls">
+          <label className="muted smoothing">
+            smoothing {view.weight.toFixed(2)}
+            <input
+              type="range"
+              min={0}
+              max={0.99}
+              step={0.01}
+              value={view.weight}
+              aria-label="Smoothing"
+              onChange={(e) => setView({ ...view, weight: Number(e.target.value) })}
+            />
+          </label>
+          <div className="tabs" role="group" aria-label="X axis">
+            {(["step", "time"] as const).map((a) => (
+              <button
+                key={a}
+                type="button"
+                aria-pressed={view.axis === a}
+                className={view.axis === a ? "active" : ""}
+                disabled={a === "time" && !timed}
+                title={a === "time" && !timed ? "These points were recorded without a time" : undefined}
+                onClick={() => setView({ ...view, axis: a, zoom: null })}
+              >
+                {a === "step" ? "Step" : "Time"}
+              </button>
+            ))}
+          </div>
+          <label className="muted" title={positive ? undefined : "A log scale needs positive values"}>
+            <input
+              type="checkbox"
+              checked={view.logY && positive}
+              disabled={!positive}
+              onChange={(e) => setView({ ...view, logY: e.target.checked })}
+            />{" "}
+            log scale
+          </label>
+          {view.zoom ? (
+            <button type="button" onClick={() => setView({ ...view, zoom: null })}>
+              Reset zoom
+            </button>
+          ) : (
+            <span className="muted hint">drag across a chart to zoom</span>
+          )}
+        </div>
       )}
       <div className="scalar-grid">
         {charts.map((c) => (
-          <ScalarChart key={c.title} chart={c} weight={weight} />
+          <ScalarChart key={c.title} chart={c} view={view} onZoom={(zoom) => setView({ ...view, zoom })} />
         ))}
       </div>
     </div>
@@ -304,7 +401,7 @@ function Scalars({ execId, running }: { execId: string; running: boolean }) {
     refetchInterval: running ? 2000 : false,
   });
   if (!data) return <div className="muted">Loading…</div>;
-  return <ScalarCharts points={data.points} />;
+  return <ScalarCharts charts={groupScalars(data.points)} />;
 }
 
 function SampleGroup({ items }: { items: Sample[] }) {
@@ -507,21 +604,88 @@ export function RunTelemetry({
 }
 
 /** Every step's charts of an experiment (the Metrics page). */
-export function ExperimentScalars({ expId, live }: { expId: string; live: boolean }) {
+/** Every step's charts of an experiment (the Metrics page), optionally overlaid with others. */
+export function ExperimentScalars({
+  expId,
+  live,
+  nameOf = (id) => id,
+}: {
+  expId: string;
+  live: boolean;
+  nameOf?: (id: string) => string;
+}) {
   const { data } = useQuery({
     queryKey: ["experiment-scalars", expId, live],
     queryFn: () => api.experimentScalars(expId),
     refetchInterval: live ? 3000 : false,
   });
+  const { data: tree = [] } = useExperiments();
+  const [overlay, setOverlay] = useState<string[]>([]);
+  const others = useQueries({
+    queries: overlay.map((id) => ({
+      queryKey: ["experiment-scalars", id, false],
+      queryFn: () => api.experimentScalars(id),
+      staleTime: 10000,
+    })),
+  });
   if (!data) return <div className="muted">Loading…</div>;
-  const nodes: NodeScalars[] = data.nodes;
-  if (!nodes.length) return <div className="muted">No step logged metrics yet.</div>;
+  const me = tree.find((e) => e.id === expId);
+  const related = tree.filter((e) => e.id !== expId && (e.id === me?.parent_id || e.parent_id === expId));
+  const rest = tree.filter((e) => e.id !== expId && !related.includes(e));
+  const sources = [
+    { id: expId, nodes: data.nodes },
+    ...overlay.map((id, i) => ({ id, nodes: others[i].data?.nodes ?? [] })),
+  ];
+  const nodeNames = [...new Set(sources.flatMap((s) => s.nodes.map((n: NodeScalars) => n.node)))];
+  const toggle = (id: string) => setOverlay(overlay.includes(id) ? overlay.filter((x) => x !== id) : [...overlay, id]);
   return (
     <div>
-      {nodes.map((n) => (
-        <section key={n.node}>
-          <h3 className="mono">{n.node}</h3>
-          <ScalarCharts points={n.points} />
+      {tree.length > 1 && (
+        <div className="overlay-picker">
+          <span className="muted">Overlay</span>
+          {related.map((e) => (
+            <button
+              key={e.id}
+              type="button"
+              aria-pressed={overlay.includes(e.id)}
+              className={overlay.includes(e.id) ? "active" : ""}
+              onClick={() => toggle(e.id)}
+              title={e.id === me?.parent_id ? "the parent of this experiment" : "a fork of this experiment"}
+            >
+              {nameOf(e.id)}
+            </button>
+          ))}
+          {rest.length > 0 && (
+            <select
+              aria-label="Overlay another experiment"
+              value=""
+              onChange={(e) => e.target.value && toggle(e.target.value)}
+            >
+              <option value="">other experiment…</option>
+              {rest.map((e) => (
+                <option key={e.id} value={e.id}>
+                  {overlay.includes(e.id) ? "✓ " : ""}
+                  {nameOf(e.id)}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+      )}
+      {!nodeNames.length && <div className="muted">No step logged metrics yet.</div>}
+      {nodeNames.map((node) => (
+        <section key={node}>
+          <h3 className="mono">{node}</h3>
+          <ScalarCharts
+            charts={mergeSources(
+              sources
+                .map((src) => ({
+                  label: nameOf(src.id),
+                  points: src.nodes.find((n: NodeScalars) => n.node === node)?.points ?? [],
+                }))
+                .filter((src, i) => i === 0 || src.points.length || overlay.length),
+            )}
+          />
         </section>
       ))}
     </div>

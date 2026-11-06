@@ -83,6 +83,7 @@ class Telemetry:
         self._dropped = 0
         self._tail_dirty = False
         self._metrics: list[tuple[str, int, float]] = []
+        self._times: list[tuple[str, int, float]] = []  # when each metric point was logged
         self._last = time.monotonic()
         self.closed = False
 
@@ -114,6 +115,7 @@ class Telemetry:
     def metric(self, key: str, step: int, value: float) -> None:
         with self._lock:
             self._metrics.append((key, step, value))
+            self._times.append((key, step, time.time()))
         self.maybe_flush()
 
     def _seal(self) -> None:
@@ -139,6 +141,7 @@ class Telemetry:
                 self._seal()
                 chunks, self._chunks = self._chunks, []
                 metric_values, self._metrics = self._metrics, []
+                times, self._times = self._times, []
                 tail = None
                 blob_text = None
                 if final and self.store is not None and self._head + self._tail_bytes > log_inline_max():
@@ -161,7 +164,7 @@ class Telemetry:
                     self.closed = True
             if blob_text is not None:
                 try:
-                    self._to_store(blob_text, metric_values, had_tail)
+                    self._to_store(blob_text, metric_values, times, had_tail)
                     return
                 except Exception as e:  # fall back to keeping it in the database
                     _log.warning("could not store the log of execution %s: %r", self.exec_id, e)
@@ -170,13 +173,13 @@ class Telemetry:
             prev = getattr(_local, "busy", False)
             _local.busy = True  # the database layer may log; don't capture that into this log
             try:
-                self.db.write_telemetry(self.exec_id, logs=chunks, tail=tail, metric_values=metric_values)
+                self.db.write_telemetry(self.exec_id, logs=chunks, tail=tail, metric_values=metric_values, times=times)
             except Exception as e:  # pragma: no cover - depends on the backend failing
                 _log.warning("could not write telemetry for execution %s: %r", self.exec_id, e)
             finally:
                 _local.busy = prev
 
-    def _to_store(self, text: str, metric_values: list, had_tail: bool) -> None:
+    def _to_store(self, text: str, metric_values: list, times: list, had_tail: bool) -> None:
         import tempfile
 
         prev = getattr(_local, "busy", False)
@@ -187,7 +190,9 @@ class Telemetry:
                 path.write_text(text, encoding="utf-8")
                 ref = self.store.put_path(path)
             if metric_values or had_tail:
-                self.db.write_telemetry(self.exec_id, tail="" if had_tail else None, metric_values=metric_values)
+                self.db.write_telemetry(
+                    self.exec_id, tail="" if had_tail else None, metric_values=metric_values, times=times
+                )
             self.db.attach_log(self.exec_id, ref)  # replaces the chunks written while it ran
         finally:
             _local.busy = prev

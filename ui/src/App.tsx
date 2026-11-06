@@ -332,7 +332,7 @@ export function App() {
     if (route.view === "params") body = <ParamsPage dag={dag} onArtifact={nav.selectArtifact} />;
     else if (route.view === "code")
       body = <CodeView key={dag.experiment.pipeline} pipeline={dag.experiment.pipeline} dag={dag} canEdit={canEdit} />;
-    else if (route.view === "metrics") body = <MetricsPage dag={dag} />;
+    else if (route.view === "metrics") body = <MetricsPage dag={dag} nameOf={nameOf} />;
     else if (route.view === "artifacts")
       body = (
         <ArtifactsPage

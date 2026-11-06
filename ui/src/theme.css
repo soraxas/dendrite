@@ -2175,3 +2175,32 @@ button.top-link.active {
   font-size: 12px;
   margin-bottom: 4px;
 }
+.chart-controls,
+.overlay-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  align-items: center;
+  margin-bottom: 10px;
+  font-size: 12px;
+}
+.chart-controls .smoothing {
+  margin: 0;
+}
+.chart-controls .hint {
+  font-size: 11.5px;
+}
+.overlay-picker button.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.scalar-chart svg {
+  cursor: crosshair;
+  user-select: none;
+}
+.zoom-box {
+  fill: var(--accent);
+  fill-opacity: 0.12;
+  stroke: var(--accent);
+  stroke-width: 0.5;
+}
