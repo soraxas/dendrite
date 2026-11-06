@@ -2081,3 +2081,93 @@ button.top-link.active {
 .names-table td:nth-child(4) {
   white-space: nowrap;
 }
+
+/* Artifacts tab and Compare */
+.art-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+.art-filters .item-search {
+  max-width: 280px;
+}
+.art-stage h3 {
+  margin: 16px 0 6px;
+}
+.art-table {
+  width: 100%;
+}
+.art-table tr.art-step td {
+  padding-top: 12px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--line);
+}
+.art-table tbody tr:not(.art-step) {
+  cursor: pointer;
+}
+.art-table tbody tr:not(.art-step):hover {
+  background: var(--hover);
+}
+.art-table tr.selected {
+  background: var(--accent-bg);
+}
+.art-table td.thumb {
+  width: 52px;
+}
+.art-thumb {
+  width: 48px;
+  height: 36px;
+  object-fit: cover;
+  border-radius: 3px;
+  border: 1px solid var(--line);
+  background: var(--chip);
+}
+.src {
+  font-size: 12px;
+  padding: 1px 6px;
+  border-radius: 999px;
+}
+.src-computed {
+  color: var(--computed);
+  background: var(--computed-bg);
+}
+.src-reused {
+  color: var(--cached);
+  background: var(--cached-bg);
+}
+.src-pinned {
+  color: var(--pinned);
+  background: var(--pinned-bg);
+}
+.src-input {
+  color: var(--muted);
+  background: var(--chip);
+}
+.compare-panel {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 16px;
+  background: var(--panel);
+}
+.cmp-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.cmp-cols {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+}
+.cmp-col {
+  min-width: 0;
+}
+.cmp-head {
+  margin-bottom: 6px;
+}
+.cmp-sub {
+  font-size: 12px;
+}

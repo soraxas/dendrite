@@ -1,9 +1,19 @@
-// Hash routing: #/exp/:id[/params|metrics|diff/:other], #/artifact/:hash[/from/:exp] and
+// Hash routing: #/exp/:id[/params|metrics|artifacts|diff/:other], #/artifact/:hash[/from/:exp] and
 // #/storage[/cache|largest], #/names,
 // with the graph selection in a `sel` query param so it survives polling, reloads and links.
 import { useCallback, useSyncExternalStore } from "react";
 
-export type View = "home" | "dag" | "code" | "params" | "metrics" | "diff" | "lineage" | "storage" | "names";
+export type View =
+  | "home"
+  | "dag"
+  | "code"
+  | "params"
+  | "metrics"
+  | "artifacts"
+  | "diff"
+  | "lineage"
+  | "storage"
+  | "names";
 export type StorageTab = "experiments" | "cache" | "largest";
 
 export interface Route {
@@ -13,15 +23,28 @@ export interface Route {
   artifact?: string;
   sel?: string; // "<kind>:<id>" — node:<name> | input:<name> | artifact:<hash> | exec:<id>
   tab?: StorageTab;
+  /** Artifacts tab: kind filter, text filter, and the ``node.output`` being compared across forks. */
+  kind?: string;
+  q?: string;
+  cmp?: string;
 }
 
 export function parse(hash: string): Route {
   const [path, query = ""] = hash.replace(/^#\/?/, "").split("?");
   const parts = path.split("/").filter(Boolean).map(decodeURIComponent);
-  const sel = new URLSearchParams(query).get("sel") ?? undefined;
+  const qs = new URLSearchParams(query);
+  const sel = qs.get("sel") ?? undefined;
   if (parts[0] === "exp" && parts[1]) {
     const sub = parts[2] as View | undefined;
     if (sub === "diff") return { view: "diff", exp: parts[1], other: parts[3], sel };
+    if (sub === "artifacts") {
+      const r: Route = { view: "artifacts", exp: parts[1], sel };
+      for (const k of ["kind", "q", "cmp"] as const) {
+        const v = qs.get(k);
+        if (v) r[k] = v;
+      }
+      return r;
+    }
     if (sub === "params" || sub === "metrics" || sub === "code") return { view: sub, exp: parts[1], sel };
     return { view: "dag", exp: parts[1], sel };
   }
@@ -45,10 +68,14 @@ export function href(r: Route): string {
     path = `#/artifact/${enc(r.artifact)}${r.exp ? `/from/${enc(r.exp)}` : ""}`;
   else if (r.exp) {
     path = `#/exp/${enc(r.exp)}`;
-    if (r.view === "params" || r.view === "metrics" || r.view === "code") path += `/${r.view}`;
+    if (r.view === "params" || r.view === "metrics" || r.view === "code" || r.view === "artifacts")
+      path += `/${r.view}`;
     if (r.view === "diff" && r.other) path += `/diff/${enc(r.other)}`;
   }
-  return r.sel ? `${path}?sel=${enc(r.sel)}` : path;
+  const query: [string, string | undefined][] = [["sel", r.sel]];
+  if (r.view === "artifacts") query.push(["kind", r.kind], ["q", r.q], ["cmp", r.cmp]);
+  const qs = query.filter(([, v]) => v).map(([k, v]) => `${k}=${enc(v!)}`);
+  return qs.length ? `${path}?${qs.join("&")}` : path;
 }
 
 function subscribe(cb: () => void) {

@@ -52,13 +52,13 @@
 
 ## 8. UI: Artifacts tab and Compare
 
-- [ ] 8.1 `#/exp/:id/artifacts` route and tab, with `kind` and `q` filters in the URL (`router.ts`)
-- [ ] 8.2 `components/Artifacts.tsx`: rows from `dag()` grouped by stage and then step, fan-out groups collapsed with counts, computed/reused/pinned source with links, lazy thumbnails, and row click sets `sel=artifact:`
-- [ ] 8.3 `components/Compare.tsx`: base, parent and forks (capped at 8) for one `node.output`, param differences from `/api/diff`, identical hashes collapsed
-- [ ] 8.4 Vitest coverage for grouping, filters and Compare's identical-hash handling
+- [x] 8.1 `#/exp/:id/artifacts` route and tab, with `kind` and `q` filters in the URL (`router.ts`)
+- [x] 8.2 `components/Artifacts.tsx`: rows from `dag()` grouped by stage and then step, fan-out groups collapsed with counts, computed/reused/pinned source with links, lazy thumbnails, and row click sets `sel=artifact:`
+- [x] 8.3 `components/Compare.tsx`: base, parent and forks (capped at 8) for one `node.output`, param differences from `/api/diff`, identical hashes collapsed
+- [x] 8.4 Vitest coverage for grouping, filters and Compare's identical-hash handling
 
 ## 9. Docs and wrap-up
 
-- [ ] 9.1 README: names (`@name`, CLI, GC protection) and the Artifacts tab
-- [ ] 9.2 Update CLAUDE.md's architecture notes for names and the Artifacts tab
+- [x] 9.1 README: names (`@name`, CLI, GC protection) and the Artifacts tab
+- [x] 9.2 Update CLAUDE.md's architecture notes for names and the Artifacts tab
 - [ ] 9.3 Run `prek run --all-files`, the full pytest suite on SQLite and Postgres, and `npm test`/`npm run build`

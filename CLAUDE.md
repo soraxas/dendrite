@@ -221,6 +221,7 @@ The flow of a run spans several modules in `src/dendrite/`:
 - **Storage.** `storage.NAMED` (`"@names"`) is a root group of every named hash: never collected, excluded from "exclusive"/"shared", and `evict` refuses named outputs unless forced.
 - **API.** `GET/PUT/DELETE /api/names/{name}`, `GET /api/names/{name}/history`; DAG, artifact and lineage responses carry a `names` map (hash → names) from `_with_names`. Names change the tree change-token, so SSE refreshes names, DAGs and artifacts.
 - **Hosted.** `ServerMetadata.set_name/remove_name` record the caller's label as `set_by` and require the setter or an admin to move, re-note or remove a name. `export_bundle` carries current names; `import_bundle` adds missing ones and reports conflicts (`names_skipped`) without overwriting.
+- **Artifacts tab.** `#/exp/:id/artifacts?kind=&q=&cmp=node.output` (filters in the URL). `ui/src/artifacts.ts` builds rows from the DAG (inputs, then outputs in `seq` order; source computed/reused/pinned from status and `execution_experiment`), groups stage → step, and picks Compare candidates (self, parent, direct forks, capped at 8). `components/Artifacts.tsx` renders it; Compare fetches each candidate's DAG and `/api/diff`, and collapses identical hashes. No new endpoint.
 - **UI.** `components/Names.tsx`: `NameControl` (★ chips and ☆ Name… with a "Move it here" flow on `name_taken`) in `ArtifactDetailPanel`, and `NamesPage` at `#/names`. Output ports and the node panel show `★ @name`.
 
 ## Invariants to preserve

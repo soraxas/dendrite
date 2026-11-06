@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import type { ArtifactRef } from "../api";
 
-type Category =
+export type Category =
   | "image"
   | "video"
   | "audio"

@@ -212,6 +212,8 @@ def train(frames: Path, iterations: int = 30_000):
 
 - **Run telemetry:** each step's Console (live, searchable), Scalars (charts with smoothing), Samples (with a step slider) and Environment tabs. The Metrics page charts every step of an experiment.
 
+- **Artifacts:** each experiment's inputs and outputs grouped by stage and step, with thumbnails, whether each was computed, reused (and from where) or frozen, and filters by kind. **Compare** shows one output side by side across the experiment, its parent and its forks, with what changed.
+
 - **Names:** ☆ Name… on any artifact, badges on the graph, and a Names tab listing every name with its history.
 
 - **Lineage:** trace any artifact back to its inputs and forward to what used it.

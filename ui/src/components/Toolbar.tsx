@@ -128,6 +128,7 @@ export function Toolbar({
         {tab("code", "Code")}
         {tab("params", "Parameters")}
         {tab("metrics", "Metrics")}
+        {tab("artifacts", "Artifacts")}
       </div>
       {others.length > 0 && (
         <label className="compare">

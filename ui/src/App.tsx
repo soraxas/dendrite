@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ApiError, type Dag, type Lineage, type PlanNode, setCsrf } from "./api";
+import { ArtifactsPage } from "./components/Artifacts";
 import { CodeView } from "./components/CodeView";
 import { DagView } from "./components/DagView";
 import {
@@ -332,6 +333,17 @@ export function App() {
     else if (route.view === "code")
       body = <CodeView key={dag.experiment.pipeline} pipeline={dag.experiment.pipeline} dag={dag} canEdit={canEdit} />;
     else if (route.view === "metrics") body = <MetricsPage dag={dag} />;
+    else if (route.view === "artifacts")
+      body = (
+        <ArtifactsPage
+          dag={dag}
+          route={route}
+          go={(r) => navigate(r, { replace: true })}
+          select={nav.selectArtifact}
+          nameOf={nameOf}
+          openExp={nav.openExp}
+        />
+      );
     else if (route.view === "diff") body = <DiffPage diff={diffQ.data} nameOf={nameOf} openExp={nav.openExp} />;
     else
       body = (
