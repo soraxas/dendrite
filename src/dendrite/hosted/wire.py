@@ -51,6 +51,8 @@ READS = {
     "scalars",
     "samples",
     "sample_hashes",
+    "attachment_hashes",
+    "log_blob",
     "environment",
     "name",
     "names",
@@ -83,6 +85,7 @@ WRITES = {
     "write_telemetry",
     "record_sample",
     "record_environment",
+    "attach_log",
     "set_name",
     "remove_name",
 }

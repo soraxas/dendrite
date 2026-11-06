@@ -2171,3 +2171,7 @@ button.top-link.active {
 .cmp-sub {
   font-size: 12px;
 }
+.console-note {
+  font-size: 12px;
+  margin-bottom: 4px;
+}

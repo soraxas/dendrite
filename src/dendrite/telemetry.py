@@ -43,6 +43,11 @@ def log_max() -> int:
     return int(os.environ.get("DENDRITE_LOG_MAX", 16 * 1024 * 1024))
 
 
+def log_inline_max() -> int:
+    """Logs larger than this move to the artifact store when the step ends (the database keeps small ones)."""
+    return int(os.environ.get("DENDRITE_LOG_INLINE", 1024 * 1024))
+
+
 def sample_history() -> int:
     return int(os.environ.get("DENDRITE_SAMPLE_HISTORY", 100))
 
@@ -53,11 +58,17 @@ class Telemetry:
     The stored log keeps its first ``max_bytes / 2``; after that, output goes to a rolling tail
     of at most the other half (written to a single overwritten row while running), and the final
     flush writes a truncation marker followed by the tail.
+
+    While the step runs, chunks go to the database so the UI can follow them. When it ends, a log
+    larger than ``DENDRITE_LOG_INLINE`` is written to the artifact ``store`` as one file instead,
+    and its chunks leave the database: big logs then live, and get cleaned up, like other blobs.
     """
 
-    def __init__(self, db: Any, exec_id: str, max_bytes: int | None = None):
+    def __init__(self, db: Any, exec_id: str, max_bytes: int | None = None, store: Any = None):
         self.db = db
+        self.store = store
         self.exec_id = exec_id
+        self._kept: list[str] = []  # the head, again, for writing a big log to the store
         self.half = max(1, (log_max() if max_bytes is None else max_bytes) // 2)
         self._lock = threading.Lock()  # guards buffers
         self._flush_lock = threading.Lock()  # keeps flushes in order
@@ -88,6 +99,8 @@ class Telemetry:
                     self._stream = stream
                 self._parts.append(text)
                 self._size += len(text)
+                if self.store is not None:
+                    self._kept.append(text)
             else:
                 self._tail.append(text)
                 self._tail_bytes += n
@@ -127,6 +140,11 @@ class Telemetry:
                 chunks, self._chunks = self._chunks, []
                 metric_values, self._metrics = self._metrics, []
                 tail = None
+                blob_text = None
+                if final and self.store is not None and self._head + self._tail_bytes > log_inline_max():
+                    marker = f"\n… {self._dropped} bytes truncated …\n" if self._dropped else ""
+                    blob_text = "".join(self._kept) + marker + "".join(self._tail)
+                    had_tail = bool(self._tail)
                 if final and self._tail:
                     parts = [("stdout", "".join(self._tail))]
                     if self._dropped:
@@ -141,6 +159,12 @@ class Telemetry:
                 self._tail_dirty = False
                 if final:
                     self.closed = True
+            if blob_text is not None:
+                try:
+                    self._to_store(blob_text, metric_values, had_tail)
+                    return
+                except Exception as e:  # fall back to keeping it in the database
+                    _log.warning("could not store the log of execution %s: %r", self.exec_id, e)
             if not (chunks or metric_values or tail is not None):
                 return
             prev = getattr(_local, "busy", False)
@@ -151,6 +175,22 @@ class Telemetry:
                 _log.warning("could not write telemetry for execution %s: %r", self.exec_id, e)
             finally:
                 _local.busy = prev
+
+    def _to_store(self, text: str, metric_values: list, had_tail: bool) -> None:
+        import tempfile
+
+        prev = getattr(_local, "busy", False)
+        _local.busy = True
+        try:
+            with tempfile.TemporaryDirectory(prefix="dendrite-log-") as d:
+                path = Path(d) / "console.log"
+                path.write_text(text, encoding="utf-8")
+                ref = self.store.put_path(path)
+            if metric_values or had_tail:
+                self.db.write_telemetry(self.exec_id, tail="" if had_tail else None, metric_values=metric_values)
+            self.db.attach_log(self.exec_id, ref)  # replaces the chunks written while it ran
+        finally:
+            _local.busy = prev
 
 
 # -- console capture --------------------------------------------------------------------
@@ -173,7 +213,7 @@ class _Tee:
     def write(self, s: str) -> int:
         n = self._dendrite_stream.write(s)
         t = _current()
-        if t is not None and isinstance(s, str):
+        if t is not None and isinstance(s, str) and not (_FD.capturing(t) and _fd_backed(self._dendrite_stream)):
             t.write(self._dendrite_name, s)
         return n
 
@@ -197,7 +237,7 @@ class _Handler(logging.Handler):
 
     def emit(self, record: logging.LogRecord) -> None:
         t = _current()
-        if t is None or _prints_via_tee(record.name):
+        if t is None or _prints_to_console(record.name, _FD.capturing(t)):
             return
         try:
             t.write("log", self.format(record) + "\n")
@@ -205,16 +245,162 @@ class _Handler(logging.Handler):
             self.handleError(record)
 
 
-def _prints_via_tee(name: str) -> bool:
+def _fd_backed(stream: Any) -> bool:
+    """Whether writes to ``stream`` end up on file descriptor 1 or 2."""
+    try:
+        return stream.fileno() in (1, 2)
+    except (AttributeError, OSError, ValueError):
+        return False
+
+
+def _prints_to_console(name: str, fd_capturing: bool) -> bool:
+    """Whether a record from logger ``name`` is already captured on its way to the console."""
     c: logging.Logger | None = logging.getLogger(name)
     while c is not None:
         for h in c.handlers:
-            if isinstance(h, logging.StreamHandler) and isinstance(getattr(h, "stream", None), _Tee):
+            stream = getattr(h, "stream", None) if isinstance(h, logging.StreamHandler) else None
+            if isinstance(stream, _Tee) or (fd_capturing and stream is not None and _fd_backed(stream)):
                 return True
         if not c.propagate:
             break
         c = c.parent
     return False
+
+
+def _fd_capture_enabled() -> bool:
+    # A notebook kernel forwards fds itself; Windows consoles don't take dup2 well.
+    return os.environ.get("DENDRITE_CAPTURE_FD", "1") != "0" and os.name == "posix" and "ipykernel" not in sys.modules
+
+
+def _flush_c_stdio() -> None:
+    """Push out what C code buffered in stdio, so it lands while the pipes are still in place."""
+    try:
+        import ctypes
+
+        ctypes.CDLL(None).fflush(None)
+    except Exception:  # pragma: no cover - no libc to call
+        pass
+
+
+class _FdSession:
+    """Routes file descriptors 1 and 2 through pipes into one step's log (and on to the terminal)."""
+
+    def __init__(self, tel: Telemetry):
+        self.tel = tel
+        self.saved: dict[int, int] = {}
+        self.readers: list[threading.Thread] = []
+
+    def start(self) -> None:
+        for stream in (sys.stdout, sys.stderr):
+            try:
+                stream.flush()
+            except Exception:  # pragma: no cover
+                pass
+        _flush_c_stdio()
+        try:
+            for fd, name in ((1, "stdout"), (2, "stderr")):
+                saved = os.dup(fd)
+                r, w = os.pipe()
+                os.dup2(w, fd)
+                os.close(w)
+                self.saved[fd] = saved
+                t = threading.Thread(target=self._pump, args=(r, saved, name), daemon=True, name=f"dendrite-fd{fd}")
+                t.start()
+                self.readers.append(t)
+        except OSError:
+            self.stop()
+            raise
+
+    def _pump(self, r: int, out: int, name: str) -> None:
+        decode = codecs.getincrementaldecoder("utf-8")("replace")
+        try:
+            while True:
+                data = os.read(r, 65536)
+                if not data:
+                    break
+                view = memoryview(data)
+                while view:  # the terminal (or whatever fd 1/2 was) still gets everything
+                    try:
+                        view = view[os.write(out, view) :]
+                    except OSError:
+                        break
+                text = decode.decode(data)
+                if text:
+                    self.tel.write(name, text)
+            rest = decode.decode(b"", final=True)
+            if rest:
+                self.tel.write(name, rest)
+        finally:
+            os.close(r)
+
+    def stop(self) -> None:
+        for stream in (sys.stdout, sys.stderr):
+            try:
+                stream.flush()
+            except Exception:  # pragma: no cover
+                pass
+        _flush_c_stdio()
+        for fd, saved in self.saved.items():
+            os.dup2(saved, fd)  # drops the last write end of the pipe: its reader sees EOF
+        for t in self.readers:
+            t.join(timeout=5)
+        for saved in self.saved.values():
+            os.close(saved)
+        self.saved.clear()
+        self.readers.clear()
+
+
+class _FdCapture:
+    """Captures C-level and subprocess output into a step's log while it's the only step running.
+
+    Output on file descriptors can't be told apart between concurrent steps, so while several
+    run, only Python-level output (``sys.stdout``, ``logging``, ``dendrite.run``) is captured.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._active: list[Telemetry] = []
+        self._session: _FdSession | None = None
+
+    def enter(self, tel: Telemetry) -> None:
+        with self._lock:
+            self._active.append(tel)
+            self._reconcile()
+
+    def leave(self, tel: Telemetry) -> None:
+        with self._lock:
+            if tel in self._active:
+                self._active.remove(tel)
+            self._reconcile()
+
+    def capturing(self, tel: Telemetry) -> bool:
+        s = self._session
+        return s is not None and s.tel is tel
+
+    def _reconcile(self) -> None:
+        want = self._active[0] if len(self._active) == 1 and _fd_capture_enabled() else None
+        if self._session is not None and self._session.tel is not want:
+            self._session.stop()
+            self._session = None
+        if want is not None and self._session is None:
+            session = _FdSession(want)
+            try:
+                session.start()
+                self._session = session
+            except OSError as e:  # pragma: no cover - fds unavailable (closed, sandboxed)
+                _log.debug("fd capture unavailable: %r", e)
+
+
+_FD = _FdCapture()
+
+
+def step_started(tel: Telemetry) -> None:
+    install()
+    _FD.enter(tel)
+
+
+def step_finished(tel: Telemetry) -> None:
+    _FD.leave(tel)
 
 
 _install_lock = threading.Lock()

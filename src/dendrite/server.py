@@ -58,6 +58,28 @@ def _experiment(lab: Lab, key: str) -> Experiment:
         raise HTTPException(404, f"no experiment {key!r}") from None
 
 
+LOG_TAIL_BYTES = 256 * 1024  # how much of a stored log the console shows
+
+
+def _read_tail(lab: Lab, h: str, size: int, n: int) -> str:
+    """The last ``n`` bytes of a stored text blob, starting at a line boundary."""
+    start = max(0, size - n)
+    local = lab.store.local_path(h)
+    if local is not None:
+        with open(local, "rb") as f:
+            f.seek(start)
+            data = f.read()
+    else:
+        with lab.store.open_object(h) as f:
+            if start:
+                f.seek(start)
+            data = f.read()
+    text = data.decode("utf-8", "replace")
+    if start and "\n" in text:
+        text = f"… {start} earlier bytes: download the log for all of it …\n" + text.split("\n", 1)[1]
+    return text
+
+
 def _hashes_in(obj: Any, out: set[str] | None = None) -> set[str]:
     """Every artifact hash mentioned in a response (``hash``, or a lineage node's ``id``)."""
     out = set() if out is None else out
@@ -708,8 +730,18 @@ def create_app(
     @app.get("/api/executions/{exec_id}/logs")
     def execution_logs(exec_id: str, after: int = -1, limit: int = 2000) -> dict[str, Any]:
         ex = _exec_or_404(exec_id)
-        chunks = lab.db.logs(exec_id, after=after, limit=max(1, min(limit, 5000)))
-        return {"chunks": chunks, "running": ex["status"] == "running", "status": ex["status"]}
+        out: dict[str, Any] = {"running": ex["status"] == "running", "status": ex["status"], "stored": None}
+        blob = lab.db.log_blob(exec_id)
+        if blob is None:
+            out["chunks"] = lab.db.logs(exec_id, after=after, limit=max(1, min(limit, 5000)))
+            return out
+        # A big finished log lives in the store: send its end; the whole file is a download away.
+        out["stored"] = {"hash": blob["hash"], "size": blob["size"], "shown": min(blob["size"], LOG_TAIL_BYTES)}
+        out["chunks"] = []
+        if after < 0:
+            text = _read_tail(lab, blob["hash"], blob["size"], LOG_TAIL_BYTES)
+            out["chunks"] = [{"seq": 0, "stream": "stdout", "t": ex["finished_at"] or 0, "text": text}]
+        return out
 
     @app.get("/api/executions/{exec_id}/scalars")
     def execution_scalars(exec_id: str) -> dict[str, Any]:

@@ -62,7 +62,12 @@ def _node_execution(lab: Lab, exp_ref: str, node: str) -> str:
 
 def cmd_logs(lab: Lab, args) -> None:
     exec_id = _node_execution(lab, args.experiment, args.node)
+    blob = lab.db.log_blob(exec_id)
+    if blob is not None:  # a big finished log, kept as a file in the store
+        sys.stdout.write(lab.load(blob["hash"]).read_text(encoding="utf-8", errors="replace"))
+        return
     after = -1
+    printed = 0  # characters of the head printed, so a log moved to the store continues where it was
     while True:
         chunks = lab.db.logs(exec_id, after=after)
         for c in chunks:
@@ -71,11 +76,16 @@ def cmd_logs(lab: Lab, args) -> None:
             elif args.follow:
                 continue  # the live tail of an oversized log; the final flush rewrites it in order
             sys.stdout.write(c["text"])
+            printed += len(c["text"]) if c["seq"] >= 0 else 0
         sys.stdout.flush()
         if not args.follow:
             return
         ex = lab.db.execution(exec_id)
         if ex is None or ex["status"] != "running":
+            blob = lab.db.log_blob(exec_id)
+            if blob is not None:
+                sys.stdout.write(lab.load(blob["hash"]).read_text(encoding="utf-8", errors="replace")[printed:])
+                return
             for c in lab.db.logs(exec_id, after=after):  # what the final flush wrote
                 if c["seq"] >= 0:
                     sys.stdout.write(c["text"])

@@ -310,6 +310,8 @@ export interface LogPage {
   chunks: LogChunk[];
   running: boolean;
   status: string;
+  /** A big finished log kept as a file in the store; ``chunks`` then hold its last ``shown`` bytes. */
+  stored?: { hash: string; size: number; shown: number } | null;
 }
 export interface ScalarPoint {
   key: string;
@@ -456,8 +458,9 @@ export interface Inventory {
     live: boolean;
     experiments: number;
     names?: string[];
-    /** A sample logged by this step (log_image/log_media), not an input or output. */
+    /** The step that attached it besides its outputs: a logged sample or a stored console log. */
     sample_of?: string | null;
+    attached?: "sample" | "log" | null;
   }[];
   scratch: Record<string, number>;
   busy: string[];

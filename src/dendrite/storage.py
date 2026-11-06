@@ -40,7 +40,8 @@ class _Graph:
     experiments: list[dict]
     node_runs: list[dict]
     executions: list[dict]
-    samples: list[tuple[str, str, str | None, str]] = field(default_factory=list)  # (execution, hash, exp, node)
+    # (execution, hash, experiment, node, "sample" | "log"): blobs a run attached besides its outputs
+    samples: list[tuple[str, str, str | None, str, str]] = field(default_factory=list)
     names: dict[str, list[str]] = field(default_factory=dict)  # hash -> names pointing at it
     manifests: dict[str, list[str]] = field(default_factory=dict)  # dir hash -> member hashes
 
@@ -70,7 +71,7 @@ class Storage:
             experiments=db.experiments(),
             node_runs=db.all_node_runs(),
             executions=db.successful_executions(),
-            samples=db.sample_hashes(),
+            samples=db.attachment_hashes(),
             names={},
         )
         for n in db.names():
@@ -114,7 +115,7 @@ class Storage:
         for nr in g.node_runs:
             if nr["execution_id"]:
                 users.setdefault(nr["execution_id"], set()).add(nr["experiment_id"])
-        for eid, h, exp, _node in g.samples:
+        for eid, h, exp, _node, _kind in g.samples:
             for owner in users.get(eid, set()) | ({exp} if exp else set()):
                 if owner in roots:
                     roots[owner].add(h)
@@ -247,7 +248,7 @@ class Storage:
             for h in ex["outputs"].values():
                 producer.setdefault(h, ex["node"])
         top = sorted(g.artifacts.values(), key=lambda a: -self._artifact_bytes(g, a["hash"]))[:largest]
-        sampled = {h: node for _, h, _, node in g.samples}  # logged samples aren't inputs or outputs
+        attached = {h: (node, kind) for _, h, _, node, kind in g.samples}  # not inputs or outputs
         largest_rows = [
             {
                 "hash": a["hash"],
@@ -259,7 +260,8 @@ class Storage:
                 "live": a["hash"] in reached,
                 "experiments": len(reachers.get(a["hash"], set()) - {NAMED}),
                 "names": g.names.get(a["hash"], []),
-                "sample_of": sampled.get(a["hash"]),
+                "sample_of": attached[a["hash"]][0] if a["hash"] in attached else None,
+                "attached": attached[a["hash"]][1] if a["hash"] in attached else None,
             }
             for a in top
             if self._artifact_bytes(g, a["hash"])

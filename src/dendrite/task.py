@@ -671,10 +671,10 @@ class ArtifactTask:
                 kwargs[pname] = _map_refs(call[pname], lab.store.load)
         wd = lab.home / "tmp" / exec_id
         wd.mkdir(parents=True, exist_ok=True)
-        tel = telemetry.Telemetry(lab.db, exec_id)
+        tel = telemetry.Telemetry(lab.db, exec_id, store=lab.store)
         ctx = runtime.ExecContext(workdir=wd, execution_id=exec_id, db=lab.db, telemetry=tel, store=lab.store)
-        telemetry.install()
         token = runtime._exec.set(ctx)
+        telemetry.step_started(tel)
         settings = lab.settings
         allowed = [wd, lab.home, lab.store.cache_dir, getattr(lab.store, "root", lab.home)]
         reads = guard.start(self.name, settings.check_reads, settings.project_root, allowed)
@@ -698,6 +698,7 @@ class ArtifactTask:
                 else:
                     refs[name] = lab.store.put_value(value)
         finally:
+            telemetry.step_finished(tel)  # waits for captured fd output to be read
             tel.flush(final=True)
             runtime._exec.reset(token)
             shutil.rmtree(wd, ignore_errors=True)

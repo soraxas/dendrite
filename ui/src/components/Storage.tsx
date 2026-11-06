@@ -584,7 +584,10 @@ function LargestTab({
                 </span>
               ))}
             </td>
-            <td>{a.producer_node ?? (a.sample_of ? `${a.sample_of} (logged sample)` : "input")}</td>
+            <td>
+              {a.producer_node ??
+                (a.sample_of ? `${a.sample_of} (${a.attached === "log" ? "console log" : "logged sample"})` : "input")}
+            </td>
             <td className="num">{fmtSize(a.size)}</td>
             <td className="num">{a.experiments}</td>
             <td className="actions">

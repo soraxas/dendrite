@@ -201,6 +201,15 @@ execution_logs = sa.Table(
     sa.Column("text", sa.Text, nullable=False),
 )
 
+# A finished log too big for the database, stored as one file in the artifact store.
+execution_log_blobs = sa.Table(
+    "execution_log_blobs",
+    meta,
+    sa.Column("execution_id", sa.String(32), sa.ForeignKey("executions.id"), primary_key=True),
+    sa.Column("hash", sa.String(64), nullable=False, index=True),
+    sa.Column("size", sa.BigInteger, nullable=False),
+)
+
 # Intermediate images/media a step logged (`log_image`, `log_media`): artifacts, never outputs.
 execution_samples = sa.Table(
     "execution_samples",
@@ -1104,6 +1113,24 @@ class Metadata:
                 self._write_metrics(conn, exec_id, metric_values)
             self._touch(conn, exec_id)
 
+    def attach_log(self, exec_id: str, ref: ArtifactRef) -> None:
+        """Point an execution's log at a stored file, dropping the chunks it replaces."""
+        with self.tx() as conn:
+            self._register_artifacts(conn, [ref])
+            conn.execute(execution_log_blobs.delete().where(execution_log_blobs.c.execution_id == exec_id))
+            conn.execute(execution_log_blobs.insert().values(execution_id=exec_id, hash=ref.hash, size=ref.size))
+            conn.execute(execution_logs.delete().where(execution_logs.c.execution_id == exec_id))
+            self._touch(conn, exec_id)
+
+    def log_blob(self, exec_id: str) -> dict | None:
+        with self.ro() as conn:
+            row = (
+                conn.execute(sa.select(execution_log_blobs).where(execution_log_blobs.c.execution_id == exec_id))
+                .mappings()
+                .first()
+            )
+        return dict(row) if row else None
+
     def logs(self, exec_id: str, after: int = -1, limit: int = 2000) -> list[dict]:
         """Log chunks with ``seq > after`` in order; the rolling tail (seq -1) comes last, if any."""
         with self.ro() as conn:
@@ -1198,8 +1225,36 @@ class Metadata:
             )
         return [dict(r) for r in rows]
 
+    def attachment_hashes(self) -> list[tuple[str, str, str | None, str, str]]:
+        """``(execution, hash, experiment that ran it, node, "sample" | "log")`` of every blob a run
+        attached besides its outputs: logged samples and stored logs (storage accounting)."""
+        with self.ro() as conn:
+            rows = [
+                (*r, "sample")
+                for r in conn.execute(
+                    sa.select(
+                        execution_samples.c.execution_id,
+                        execution_samples.c.hash,
+                        executions.c.experiment_id,
+                        executions.c.node,
+                    ).join(executions, executions.c.id == execution_samples.c.execution_id)
+                )
+            ]
+            rows += [
+                (*r, "log")
+                for r in conn.execute(
+                    sa.select(
+                        execution_log_blobs.c.execution_id,
+                        execution_log_blobs.c.hash,
+                        executions.c.experiment_id,
+                        executions.c.node,
+                    ).join(executions, executions.c.id == execution_log_blobs.c.execution_id)
+                )
+            ]
+        return rows
+
     def sample_hashes(self) -> list[tuple[str, str, str | None, str]]:
-        """``(execution_id, hash, experiment that ran it, node)`` of every logged sample (storage accounting)."""
+        """``(execution_id, hash, experiment that ran it, node)`` of every logged sample."""
         with self.ro() as conn:
             rows = conn.execute(
                 sa.select(

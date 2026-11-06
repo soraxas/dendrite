@@ -1,7 +1,7 @@
 // Run telemetry of one execution: console, scalar charts, logged samples and environment.
 import { useQuery } from "@tanstack/react-query";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
-import { api, direct, type LogChunk, type NodeScalars, type Sample, type ScalarPoint } from "../api";
+import { api, direct, type LogChunk, type LogPage, type NodeScalars, type Sample, type ScalarPoint } from "../api";
 import { fmtSize, short } from "../format";
 import {
   appendLines,
@@ -24,6 +24,7 @@ export function useLog(execId: string) {
   const [buf, setBuf] = useState<LineBuffer>({ lines: [], partial: "" });
   const [tail, setTail] = useState<LogChunk | null>(null);
   const [running, setRunning] = useState(false);
+  const [stored, setStored] = useState<LogPage["stored"]>(null);
   const raw = useRef<string[]>([]); // for "Download"
   useEffect(() => {
     let stop = false;
@@ -45,6 +46,15 @@ export function useLog(execId: string) {
         }
         setTail(page.chunks.find((c) => c.seq < 0) ?? null);
         setRunning(page.running);
+        setStored(page.stored ?? null);
+        if (page.stored && !page.running && after >= 0 && !fresh.length && raw.current.length) {
+          // The run just ended and its log moved to the store: start over from the stored copy.
+          after = -1;
+          raw.current = [];
+          setBuf({ lines: [], partial: "" });
+          timer = setTimeout(tick, 0);
+          return;
+        }
         if (page.running || page.chunks.length >= 2000) timer = setTimeout(tick, page.running ? POLL_MS : 0);
       } catch {
         if (!stop) timer = setTimeout(tick, POLL_MS * 5);
@@ -56,7 +66,7 @@ export function useLog(execId: string) {
       clearTimeout(timer);
     };
   }, [execId]);
-  return { buf, tail, running, raw };
+  return { buf, tail, running, raw, stored };
 }
 
 const Line = memo(function Line({ text }: { text: string }) {
@@ -73,7 +83,7 @@ const Line = memo(function Line({ text }: { text: string }) {
 });
 
 function Console({ execId }: { execId: string }) {
-  const { buf, tail, running, raw } = useLog(execId);
+  const { buf, tail, running, raw, stored } = useLog(execId);
   const [query, setQuery] = useState("");
   const [follow, setFollow] = useState(true);
   const [showAll, setShowAll] = useState(false);
@@ -95,6 +105,10 @@ function Console({ execId }: { execId: string }) {
     if (follow && box.current) box.current.scrollTop = box.current.scrollHeight;
   }, [shown, follow]);
   const download = () => {
+    if (stored) {
+      window.open(direct(api.downloadUrl(stored.hash)), "_blank", "noopener");
+      return;
+    }
     const url = URL.createObjectURL(new Blob(raw.current, { type: "text/plain" }));
     const a = document.createElement("a");
     a.href = url;
@@ -126,6 +140,14 @@ function Console({ execId }: { execId: string }) {
           </span>
         )}
       </div>
+      {stored && stored.shown < stored.size && (
+        <div className="muted console-note">
+          Showing the last {fmtSize(stored.shown)} of {fmtSize(stored.size)}.{" "}
+          <a href={direct(api.downloadUrl(stored.hash))} target="_blank" rel="noreferrer">
+            Download the whole log
+          </a>
+        </div>
+      )}
       <pre
         ref={box}
         className="console-text"

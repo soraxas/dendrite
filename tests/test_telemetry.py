@@ -330,3 +330,118 @@ def test_cli_logs_and_env(lab, capsys):
     assert "python:" in out and "packages:" in out
     with pytest.raises(SystemExit):
         main([*home, "logs", exp.id, "missing"])
+
+
+@artifact_task(outputs=["out"], cache=False)
+def native() -> int:
+    import ctypes
+    import os as _os
+    import subprocess as _sp
+
+    ctypes.CDLL(None).printf(b"from C printf\n")  # C stdio, as a compiled extension would
+    _os.write(2, b"raw fd 2\n")
+    _sp.run([sys.executable, "-c", "print('plain subprocess')"], check=True)
+    t = threading.Thread(target=lambda: print("from a thread the step started", flush=True))
+    t.start()
+    t.join()
+    return 1
+
+
+@pipeline(name="tele_native")
+def native_pipe():
+    native()
+
+
+@pytest.mark.local_only("file descriptor capture is a property of the process running the step")
+@pytest.mark.skipif(sys.platform == "win32", reason="fd capture is POSIX only")
+def test_fd_level_output_is_captured_when_one_step_runs(lab, monkeypatch):
+    # As in a terminal: sys.stdout writes to fd 1 (pytest otherwise swaps in its own file).
+    terminal = open(1, "w", buffering=1, closefd=False)  # noqa: SIM115
+    monkeypatch.setattr(sys, "stdout", terminal)
+    exp = lab.create(native_pipe).run()
+    text = _log_text(lab, _exec(exp, "native"))
+    for line in ("from C printf", "raw fd 2", "plain subprocess", "from a thread the step started"):
+        assert line in text, line
+    assert text.count("plain subprocess") == 1  # never twice (tee and fd)
+
+
+@pytest.mark.local_only("file descriptor capture is a property of the process running the step")
+def test_print_is_not_duplicated_under_fd_capture(lab):
+    exp = lab.create(chatty_pipe).run()
+    text = _log_text(lab, _exec(exp, "chatty"))
+    assert text.count("hello from chatty") == 1
+    assert text.count("a warning") == 1
+
+
+def test_fd_capture_can_be_turned_off(lab, monkeypatch):
+    monkeypatch.setenv("DENDRITE_CAPTURE_FD", "0")
+    exp = lab.create(native_pipe).run()
+    text = _log_text(lab, _exec(exp, "native"))
+    assert "raw fd 2" not in text
+
+
+@artifact_task(outputs=["out"], cache=False)
+def verbose(lines: int = 3000) -> int:
+    for i in range(lines):
+        print(f"line {i:05d} " + "y" * 60)
+    return lines
+
+
+@pipeline(name="tele_verbose")
+def verbose_pipe():
+    verbose()
+
+
+def test_big_logs_move_to_the_store(lab, monkeypatch, tmp_path):
+    monkeypatch.setenv("DENDRITE_LOG_INLINE", "20000")  # ~200 KB of output is "big" here
+    exp = lab.create(verbose_pipe).run()
+    eid = _exec(exp, "verbose")
+    blob = lab.db.log_blob(eid)
+    assert blob is not None and blob["size"] > 20000
+    assert lab.db.logs(eid) == []  # the chunks left the database
+    text = lab.load(blob["hash"]).read_text()
+    assert text.startswith("line 00000") and "line 02999" in text
+
+    from fastapi.testclient import TestClient
+
+    from dendrite.server import create_app
+
+    from .test_api import no_bundle
+
+    c = TestClient(create_app(lab, ui_dir=no_bundle(tmp_path)))
+    page = c.get(f"/api/executions/{eid}/logs").json()
+    assert page["stored"]["hash"] == blob["hash"] and page["stored"]["size"] == blob["size"]
+    assert page["chunks"][0]["text"].rstrip().endswith("y" * 60) and "line 02999" in page["chunks"][0]["text"]
+
+
+def test_small_logs_stay_in_the_database(lab):
+    exp = lab.create(chatty_pipe).run()
+    eid = _exec(exp, "chatty")
+    assert lab.db.log_blob(eid) is None and lab.db.logs(eid)
+
+
+@pytest.mark.local_only("the CLI is pointed at a local database URL")
+def test_cli_prints_a_stored_log_whole(lab, monkeypatch, capsys):
+    from dendrite.cli import main
+
+    monkeypatch.setenv("DENDRITE_LOG_INLINE", "20000")
+    exp = lab.create(verbose_pipe).run()
+    capsys.readouterr()
+    main(["--home", str(lab.home), "--db-url", lab.settings.db_url, "logs", exp.id, "verbose"])
+    out = capsys.readouterr().out
+    assert out.startswith("line 00000") and "line 02999" in out
+
+
+@pytest.mark.local_only("reads the storage report of a local store")
+def test_stored_logs_are_cleaned_up_with_their_experiment(lab, monkeypatch):
+    monkeypatch.setenv("DENDRITE_LOG_INLINE", "20000")
+    exp = lab.create(verbose_pipe).run()
+    blob = lab.db.log_blob(_exec(exp, "verbose"))
+    ref = lab.artifact(blob["hash"])
+    lab.gc(dry_run=False, grace=0)
+    assert lab.store.verify(ref)
+    row = next(r for r in lab.storage()["largest"] if r["hash"] == blob["hash"])
+    assert row["attached"] == "log" and row["sample_of"] == "verbose"
+    exp.delete()
+    lab.gc(dry_run=False, grace=0)
+    assert not lab.store.verify(ref)

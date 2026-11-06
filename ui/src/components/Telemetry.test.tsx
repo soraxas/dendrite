@@ -65,3 +65,16 @@ it("lists samples with a step slider", async () => {
   fireEvent.change(screen.getByLabelText("render step"), { target: { value: "0" } });
   expect(screen.getByAltText("render at step 0")).toBeTruthy();
 });
+
+it("shows the end of a log kept in the store, with the whole file a download away", async () => {
+  vi.spyOn(api, "logs").mockResolvedValue({
+    chunks: [{ seq: 0, stream: "stdout", t: 0, text: "… 1000 earlier bytes …\nthe last line\n" }],
+    running: false,
+    status: "success",
+    stored: { hash: "f".repeat(64), size: 5_000_000, shown: 262_144 },
+  });
+  renderWithQuery(<RunTelemetry execId="x4" running={false} />);
+  await waitFor(() => expect(screen.getByText("the last line")).toBeTruthy());
+  expect(screen.getByText(/Showing the last/).textContent).toContain("of 4.8 MB");
+  expect(screen.getByText("Download the whole log").getAttribute("href")).toContain(`${"f".repeat(64)}/download`);
+});
