@@ -121,7 +121,16 @@ function Console({ execId }: { execId: string }) {
     a.click();
     URL.revokeObjectURL(url);
   };
-  if (!all.length) return <div className="muted">{running ? "No output yet…" : "This run printed nothing."}</div>;
+  if (!all.length)
+    return (
+      <div className="muted">
+        {running ? "No output yet…" : "This run printed nothing."}{" "}
+        <span className="hint">
+          Output from compiled code and subprocesses is captured while one step runs at a time; with steps running in
+          parallel, use <code>dendrite.run</code> for subprocesses.
+        </span>
+      </div>
+    );
   return (
     <div className="console">
       <div className="console-bar">
@@ -179,10 +188,14 @@ const W = 320,
   H = 150,
   PAD = { l: 46, r: 8, t: 8, b: 22 };
 
-function fmtTick(v: number): string {
+const compact = new Intl.NumberFormat("en", { notation: "compact", maximumSignificantDigits: 3 });
+
+/** Axis and readout numbers: 60k, 1.2M, 0.0276, 3.1e-5. */
+export function fmtTick(v: number): string {
   const a = Math.abs(v);
   if (a === 0) return "0";
-  if (a >= 1e4 || a < 1e-3) return v.toExponential(1);
+  if (a >= 1e4) return compact.format(v).toLowerCase();
+  if (a < 1e-3) return v.toExponential(1);
   return Number(v.toPrecision(3)).toString();
 }
 
@@ -485,7 +498,7 @@ function EnvironmentView({ execId }: { execId: string }) {
   const g = env.git;
   return (
     <div className="env">
-      <dl className="tech">
+      <dl className="kv">
         {g ? (
           <>
             <dt>commit</dt>

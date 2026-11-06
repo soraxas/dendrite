@@ -181,7 +181,7 @@ Experiments record the artifact a name pointed at, so moving a name later never 
 
 ### Logs, charts, samples and environment
 
-Inside a step, `print`, `logging` and subprocesses started with `dendrite.run` are captured; `log_metric` draws live charts; `log_image` and `log_media` keep intermediate results; and dendrite records the git state, packages and machine each step ran on. It's all display only: it never changes a signature, and a reused result keeps the logs of the run that made it. See **[Watching runs](docs/telemetry.md)** for what is and isn't captured, limits, the UI tabs, `dendrite logs` and the HTTP API.
+Inside a step, `print`, `logging`, subprocesses and output from compiled code are captured; `log_metric` draws live charts; `log_image` and `log_media` keep intermediate results; and dendrite records the git state, packages and machine each step ran on. It's all display only: it never changes a signature, and a reused result keeps the logs of the run that made it. See **[Watching runs](docs/telemetry.md)** for what is and isn't captured, limits, the UI tabs, `dendrite logs` and the HTTP API.
 
 ## The UI
 
@@ -326,6 +326,8 @@ The server is `dendrite server run --config server.toml`, or the `Dockerfile` im
 | `DENDRITE_LOG_MAX` | `16777216` | bytes of console output kept per step run (the beginning and the end) |
 | `DENDRITE_SAMPLE_HISTORY` | `100` | logged steps kept per sample title and series |
 | `DENDRITE_CAPTURE_DIFF` | `1` | `0` leaves the uncommitted git diff out of the recorded environment |
+| `DENDRITE_CAPTURE_FD` | `1` | `0` captures Python-level output only (no file descriptor capture) |
+| `DENDRITE_LOG_INLINE` | `1048576` | finished logs bigger than this move from the database to the artifact store |
 | `DENDRITE_GC_GRACE` | `3600` | seconds during which clean-up skips freshly written objects |
 | `DENDRITE_SERVER`, `DENDRITE_PROJECT` | — | record to a dendrite server instead (also read from `dendrite.toml`) |
 | `DENDRITE_TOKEN` | — | a server token for CI; people use `dendrite login` instead |
@@ -341,7 +343,7 @@ Lab(store_url="s3://lineage/prod", storage_options={"endpoint_url": "http://mini
 
 - **Single process.** Runs use Prefect's default thread task runner. Deployments, remote workers, and process, Dask or Ray task runners aren't supported yet.
 - **Narrow code fingerprint.** Only a step's own source is hashed; bump `version=` when its helpers change.
-- **Console capture sees Python-level output only.** Output written straight to file descriptors by C code, by subprocesses not started through `dendrite.run`, or by threads a step starts isn't captured.
+- **Console capture of compiled code and plain subprocesses needs one step at a time.** While steps run in parallel, only Python-level output and `dendrite.run` subprocesses are captured.
 - **Value artifacts are pickles.** Only use stores you trust, and keep `dendrite ui` on localhost.
 
 ## Development

@@ -580,7 +580,7 @@ export function App() {
       <Sidebar tree={tree} selected={route.exp} onOpen={nav.openExp} collapsed={collapsed} onToggle={toggleSidebar} />
       <main>
         {toolbar}
-        <div className="view">{body}</div>
+        <div className={`view view-${route.view}`}>{body}</div>
       </main>
       <aside className="detail">{detail ?? <section className="muted">Select a node or artifact.</section>}</aside>
     </div>

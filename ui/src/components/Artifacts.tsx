@@ -45,7 +45,18 @@ function Row({
   openExp: (id: string) => void;
 }) {
   return (
-    <tr className={selected ? "selected" : ""} onClick={onSelect}>
+    <tr
+      className={selected ? "selected" : ""}
+      onClick={onSelect}
+      tabIndex={0}
+      aria-selected={selected}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelect();
+        }
+      }}
+    >
       <td className="thumb">
         <Thumb r={r.ref} />
       </td>
@@ -315,7 +326,7 @@ export function Compare({
                     {changes.length > 0 &&
                       `: ${changes
                         .slice(0, 3)
-                        .map((p) => `${p.key} ${fmtVal(p.a)} → ${fmtVal(p.b)}`)
+                        .map((p) => `${p.key} ${fmtVal(p.b)} (here ${fmtVal(p.a)})`)
                         .join(", ")}${changes.length > 3 ? ` +${changes.length - 3}` : ""}`}
                     {changes.length === 0 && ": same parameters"}
                   </>

@@ -18,7 +18,7 @@ Open an experiment and choose **Artifacts**. It lists everything the experiment 
 
 **Compare** on any output row shows that output side by side for this experiment, its parent and its forks (up to eight).
 
-- Each column is labelled with its experiment and the parameters that differ from this one.
+- Each column is labelled with its experiment and the parameters that differ, as "`key` its value (here this experiment's value)".
 - A fork that produced the same artifact says so instead of loading it again, so you can see at a glance which changes made a difference.
 
 ## Names
@@ -34,20 +34,23 @@ lab.name("best-splats", f"{exp.id}:train_splats.model", note="60k iterations")
 lab.name("raw-scan", f"{exp.id}:video")        # an experiment input
 lab.name("feats", f"{exp.id}:featurize")       # a step with a single output
 lab.name("that-one", "3f9a1c")                 # a hash or unique prefix
+lab.name("fig3", f"{exp.id}:render.video", tags=["paper", "ablation"])   # tags help find it later
 ```
 
 From the CLI:
 
 ```bash
 dendrite name best-splats EXP:train_splats.model --note "60k iterations"
-dendrite names                          # every name, with its artifact, source, note and who set it
+dendrite name fig3 EXP:render.video --tag paper --tag ablation
+dendrite names                          # every name, with its artifact, source, tags, note and who set it
+dendrite names --tag paper              # only names with that tag
 dendrite names --history best-splats    # where it pointed before
 dendrite unname best-splats             # the artifact stays
 ```
 
 In the UI, select an artifact and press **☆ Name…**. It suggests `step-output` as the name. Names appear as ★ chips in the panel, on the graph's output chips and in the Artifacts tab, and the **Names** tab lists them all.
 
-A name uses letters, digits, `.`, `_` and `-`, starts with a letter or digit, and is at most 100 characters.
+A name uses letters, digits, `.`, `_` and `-`, starts with a letter or digit, and is at most 100 characters. Tags follow the same rule, up to 50 characters. Moving a name keeps its tags unless you give new ones, and `tags=[]` clears them. On the Names page, click a tag (or type `#paper`) to show only names with it.
 
 ### Using a name
 
@@ -80,7 +83,7 @@ Naming, moving or removing a name never changes a signature, a plan or a cache d
 ### On a team server
 
 - **Names are per project.** Everyone in the project can see and use them.
-- **The server records who set each name.** Anyone with the runner role can create names; only the person who set a name, or a project admin, can move, re-note or remove it.
+- **The server records who set each name**, by account, so renaming someone doesn't change who owns their names. Anyone with the runner role can create names; only the person who set a name, or a project admin, can move, re-note, re-tag or remove it.
 - **`dendrite push`** brings your local names along. A name that already points at a different artifact on the server is kept as it is, and the push reports it.
 
 ### Over HTTP
@@ -88,8 +91,9 @@ Naming, moving or removing a name never changes a signature, a plan or a cache d
 | Endpoint | |
 |---|---|
 | `GET /api/names` | every name, with its artifact's kind, size and file name |
-| `PUT /api/names/{name}` | set or move: `{experiment, node, output}` or `{hash}`, plus `note`, `move` and `expect` (the target you expect it to have now) |
+| `PUT /api/names/{name}` | set or move: `{experiment, node, output}` or `{hash}`, plus `note`, `tags`, `move` and `expect` (the target you expect it to have now) |
 | `DELETE /api/names/{name}?expect=HASH` | remove |
 | `GET /api/names/{name}/history` | the current target and every earlier one |
+| `GET /api/compare?base=EXP&node=N&output=O&exps=A,B` | one output across experiments: each one's artifact and its parameter differences from `base` |
 
 A conflict answers 409 with `code` `name_taken` (it points elsewhere; send `move`) or `name_moved` (it changed since you looked). DAG, artifact and lineage responses include a `names` map from hash to names.

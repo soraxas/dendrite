@@ -64,7 +64,7 @@ it("compares an output across parent and forks, marking identical results", asyn
     />,
   );
   await waitFor(() => expect(screen.getByText(/identical to this experiment/)).toBeTruthy()); // the parent: same hash
-  expect(screen.getByText(/train.iterations 1 → 2/)).toBeTruthy();
+  expect(screen.getByText(/train.iterations 2 \(here 1\)/)).toBeTruthy();
   expect(compare).toHaveBeenCalledWith("me", "train", "model", ["p", "f"]);
   await waitFor(() => expect(artifact).toHaveBeenCalledWith(H("b")));
   expect(artifact).toHaveBeenCalledTimes(2); // this experiment's and the fork's; the parent's is the same artifact
