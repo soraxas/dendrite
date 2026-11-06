@@ -65,3 +65,15 @@ describe("downsample", () => {
     expect(out.some((p) => p.value === 100)).toBe(true);
   });
 });
+
+describe("appendLines", () => {
+  it("joins output across chunks and keeps the unfinished line apart", async () => {
+    const { appendLines } = await import("./telemetry");
+    let buf = { lines: [] as string[], partial: "" };
+    buf = appendLines(buf, "a\nb");
+    buf = appendLines(buf, "c\n 10%\r");
+    buf = appendLines(buf, "99%\ndone");
+    expect(buf.lines).toEqual(["a", "bc", "99%"]);
+    expect(buf.partial).toBe("done");
+  });
+});

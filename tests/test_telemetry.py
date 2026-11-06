@@ -278,3 +278,55 @@ def test_samples_survive_gc_until_their_experiment_is_deleted(lab, monkeypatch):
     exp.delete()
     lab.gc(dry_run=False, grace=0)
     assert not lab.store.verify(lab.artifact(h))
+
+
+def test_metrics_survive_a_failed_live_flush(lab, monkeypatch):
+    def broken(*args, **kwargs):
+        raise ConnectionError("telemetry backend down")
+
+    monkeypatch.setattr(lab.db, "write_telemetry", broken)
+    exp = lab.create(chatty_pipe, params={"chatty": {"n": 5}}).run()
+    points = lab.db.scalars([_exec(exp, "chatty")])[_exec(exp, "chatty")]
+    assert len([p for p in points if p["key"] == "loss/train"]) == 5  # publish writes them all
+
+
+def test_telemetry_endpoints(lab, tmp_path):
+    from fastapi.testclient import TestClient
+
+    from dendrite.server import create_app
+
+    from .test_api import no_bundle
+
+    exp = lab.create(painter_pipe).run()
+    c = TestClient(create_app(lab, ui_dir=no_bundle(tmp_path)))
+    eid = _exec(exp, "painter")
+    logs = c.get(f"/api/executions/{eid}/logs").json()
+    assert logs["running"] is False and logs["status"] == "success"
+    assert {s["title"] for s in c.get(f"/api/executions/{eid}/samples").json()["samples"]} == {"clip", "render"}
+    assert c.get(f"/api/executions/{eid}/environment").json()["environment"]["python"]
+    chatty = lab.create(chatty_pipe).run()
+    ceid = _exec(chatty, "chatty")
+    assert {p["key"] for p in c.get(f"/api/executions/{ceid}/scalars").json()["points"]} == {"loss/train", "loss/val"}
+    nodes = c.get(f"/api/experiments/{chatty.id}/scalars").json()["nodes"]
+    assert [n["node"] for n in nodes] == ["chatty"]
+    first = c.get(f"/api/executions/{ceid}/logs?after=-1").json()["chunks"]
+    assert c.get(f"/api/executions/{ceid}/logs?after={first[-1]['seq']}").json()["chunks"] == []
+    assert c.get("/api/executions/nope/logs").status_code == 404
+
+
+@pytest.mark.local_only("the CLI is pointed at a local database URL")
+def test_cli_logs_and_env(lab, capsys):
+    from dendrite.cli import main
+
+    exp = lab.create(chatty_pipe).run()
+    home = ["--home", str(lab.home), "--db-url", lab.settings.db_url]
+    capsys.readouterr()
+    main([*home, "logs", exp.id, "chatty"])
+    assert "hello from chatty" in capsys.readouterr().out
+    main([*home, "logs", exp.id, "chatty", "-f"])  # a finished run: prints and returns
+    assert "hello from chatty" in capsys.readouterr().out
+    main([*home, "env", exp.id, "chatty"])
+    out = capsys.readouterr().out
+    assert "python:" in out and "packages:" in out
+    with pytest.raises(SystemExit):
+        main([*home, "logs", exp.id, "missing"])

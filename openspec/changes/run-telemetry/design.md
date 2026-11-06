@@ -53,7 +53,7 @@ Capture is memoised per `(project_root, DENDRITE_ENV)` for the process, except f
 
 ### 8. UI
 
-- **Console:** polls `logs?after=` every second while the execution runs, then stops. It also invalidates on SSE `change` for the experiment. It renders a capped virtual list, so the DOM holds only the visible part.
+- **Console:** polls `logs?after=` every second while the execution runs, then stops. Lines are built incrementally as chunks arrive (carriage returns applied once per finished line), and only the last 2,000 are rendered unless the user filters or asks for all. Memoised lines skip re-rendering.
 - **ANSI:** a tiny SGR parser covering 16/256 colours, bold and reset.
 - **Carriage returns:** text after the last `\r` on a line replaces the line.
 - **Charts:** plain SVG with min/max downsampling to about 800 points per series, so there's no chart dependency. Smoothing is a debiased EMA applied in the UI.

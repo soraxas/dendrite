@@ -1,25 +1,37 @@
 // Run telemetry of one execution: console, scalar charts, logged samples and environment.
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { api, direct, type LogChunk, type NodeScalars, type Sample, type ScalarPoint } from "../api";
 import { fmtSize, short } from "../format";
-import { type Chart, collapseCR, downsample, groupScalars, parseAnsi, SERIES_COLORS, smooth } from "../telemetry";
+import {
+  appendLines,
+  type Chart,
+  collapseCR,
+  downsample,
+  groupScalars,
+  type LineBuffer,
+  parseAnsi,
+  SERIES_COLORS,
+  smooth,
+} from "../telemetry";
 
 type Tab = "console" | "scalars" | "samples" | "environment";
 const POLL_MS = 1000;
-const MAX_CHARS = 2_000_000; // keep the DOM bounded; "download" has the whole log
+const MAX_LINES = 2000; // lines rendered unless filtering or "show all"; Download has everything
 
-/** Console chunks of an execution, appended as they arrive while it runs. */
+/** Console output of an execution as lines, appended as chunks arrive while it runs. */
 export function useLog(execId: string) {
-  const [chunks, setChunks] = useState<LogChunk[]>([]);
+  const [buf, setBuf] = useState<LineBuffer>({ lines: [], partial: "" });
   const [tail, setTail] = useState<LogChunk | null>(null);
   const [running, setRunning] = useState(false);
+  const raw = useRef<string[]>([]); // for "Download"
   useEffect(() => {
     let stop = false;
     let after = -1;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    setChunks([]);
+    setBuf({ lines: [], partial: "" });
     setTail(null);
+    raw.current = [];
     const tick = async () => {
       try {
         const page = await api.logs(execId, after);
@@ -27,7 +39,9 @@ export function useLog(execId: string) {
         const fresh = page.chunks.filter((c) => c.seq >= 0);
         if (fresh.length) {
           after = fresh[fresh.length - 1].seq;
-          setChunks((prev) => [...prev, ...fresh]);
+          const text = fresh.map((c) => c.text).join("");
+          raw.current.push(text);
+          setBuf((prev) => appendLines(prev, text));
         }
         setTail(page.chunks.find((c) => c.seq < 0) ?? null);
         setRunning(page.running);
@@ -42,42 +56,53 @@ export function useLog(execId: string) {
       clearTimeout(timer);
     };
   }, [execId]);
-  return { chunks, tail, running };
+  return { buf, tail, running, raw };
 }
 
+const Line = memo(function Line({ text }: { text: string }) {
+  return (
+    <div>
+      {parseAnsi(text).map((s, j) => (
+        <span key={j} style={{ color: s.fg, fontWeight: s.bold ? 600 : undefined }}>
+          {s.text}
+        </span>
+      ))}
+      {"\n"}
+    </div>
+  );
+});
+
 function Console({ execId }: { execId: string }) {
-  const { chunks, tail, running } = useLog(execId);
+  const { buf, tail, running, raw } = useLog(execId);
   const [query, setQuery] = useState("");
   const [follow, setFollow] = useState(true);
+  const [showAll, setShowAll] = useState(false);
   const box = useRef<HTMLPreElement>(null);
-  const text = useMemo(() => {
-    let all = chunks.map((c) => c.text).join("");
-    if (tail) all += `\n… (live tail of a log past its size limit) …\n${tail.text}`;
-    all = collapseCR(all);
-    return all.length > MAX_CHARS
-      ? `… ${all.length - MAX_CHARS} characters above; download for all …\n${all.slice(-MAX_CHARS)}`
-      : all;
-  }, [chunks, tail]);
-  const lines = useMemo(() => {
-    const ls = text.split("\n");
-    if (!query) return ls;
+  const all = useMemo(() => {
+    const ls = buf.partial ? [...buf.lines, collapseCR(buf.partial)] : buf.lines;
+    if (!tail) return ls;
+    return [...ls, "… (live tail of a log past its size limit) …", ...collapseCR(tail.text).split("\n")];
+  }, [buf, tail]);
+  const filtered = useMemo(() => {
+    if (!query) return all;
     const q = query.toLowerCase();
-    return ls.filter((l) => l.toLowerCase().includes(q));
-  }, [text, query]);
+    return all.filter((l) => l.toLowerCase().includes(q));
+  }, [all, query]);
+  const hidden = showAll || query ? 0 : Math.max(0, filtered.length - MAX_LINES);
+  const shown = hidden ? filtered.slice(hidden) : filtered;
   // biome-ignore lint/correctness/useExhaustiveDependencies: scroll whenever new lines arrive
   useEffect(() => {
     if (follow && box.current) box.current.scrollTop = box.current.scrollHeight;
-  }, [lines, follow]);
+  }, [shown, follow]);
   const download = () => {
-    const url = URL.createObjectURL(new Blob([chunks.map((c) => c.text).join("")], { type: "text/plain" }));
+    const url = URL.createObjectURL(new Blob(raw.current, { type: "text/plain" }));
     const a = document.createElement("a");
     a.href = url;
     a.download = `${execId}.log`;
     a.click();
     URL.revokeObjectURL(url);
   };
-  if (!chunks.length && !tail)
-    return <div className="muted">{running ? "No output yet…" : "This run printed nothing."}</div>;
+  if (!all.length) return <div className="muted">{running ? "No output yet…" : "This run printed nothing."}</div>;
   return (
     <div className="console">
       <div className="console-bar">
@@ -109,17 +134,14 @@ function Console({ execId }: { execId: string }) {
           setFollow(el.scrollTop + el.clientHeight >= el.scrollHeight - 8);
         }}
       >
-        {lines.map((line, i) => (
-          // biome-ignore lint/suspicious/noArrayIndexKey: lines have no identity beyond their position
-          <div key={i}>
-            {parseAnsi(line).map((s, j) => (
-              // biome-ignore lint/suspicious/noArrayIndexKey: spans of one line
-              <span key={j} style={{ color: s.fg, fontWeight: s.bold ? 600 : undefined }}>
-                {s.text}
-              </span>
-            ))}
-            {"\n"}
+        {hidden > 0 && (
+          <div className="muted">
+            {hidden.toLocaleString()} earlier lines hidden · <a onClick={() => setShowAll(true)}>show all</a> or filter
+            to search them
           </div>
+        )}
+        {shown.map((line, i) => (
+          <Line key={hidden + i} text={line} />
         ))}
       </pre>
     </div>
@@ -255,7 +277,7 @@ export function ScalarCharts({ points }: { points: ScalarPoint[] }) {
 
 function Scalars({ execId, running }: { execId: string; running: boolean }) {
   const { data } = useQuery({
-    queryKey: ["scalars", execId],
+    queryKey: ["scalars", execId, running],
     queryFn: () => api.scalars(execId),
     refetchInterval: running ? 2000 : false,
   });
@@ -314,7 +336,7 @@ function SampleGroup({ items }: { items: Sample[] }) {
 
 function Samples({ execId, running }: { execId: string; running: boolean }) {
   const { data } = useQuery({
-    queryKey: ["samples", execId],
+    queryKey: ["samples", execId, running],
     queryFn: () => api.samples(execId),
     refetchInterval: running ? 3000 : false,
   });
@@ -465,7 +487,7 @@ export function RunTelemetry({
 /** Every step's charts of an experiment (the Metrics page). */
 export function ExperimentScalars({ expId, live }: { expId: string; live: boolean }) {
   const { data } = useQuery({
-    queryKey: ["experiment-scalars", expId],
+    queryKey: ["experiment-scalars", expId, live],
     queryFn: () => api.experimentScalars(expId),
     refetchInterval: live ? 3000 : false,
   });

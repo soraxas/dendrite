@@ -224,7 +224,7 @@ class ServerMetadata(Metadata):
             self._committed([ref])
         super().record_sample(exec_id, ref=ref, **kw)
 
-    def record_environment(self, exec_id: str, env_hash: str, data: dict[str, Any]) -> None:
+    def record_environment(self, exec_id: str, env_hash: str, data: dict[str, Any] | None) -> None:
         self._own_execution(exec_id)
         super().record_environment(exec_id, env_hash, data)
 

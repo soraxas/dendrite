@@ -71,7 +71,6 @@ class Telemetry:
         self._tail_bytes = 0
         self._dropped = 0
         self._tail_dirty = False
-        self.unsent_metrics: list[tuple[str, int, float]] = []
         self._metrics: list[tuple[str, int, float]] = []
         self._last = time.monotonic()
         self.closed = False
@@ -102,7 +101,6 @@ class Telemetry:
     def metric(self, key: str, step: int, value: float) -> None:
         with self._lock:
             self._metrics.append((key, step, value))
-            self.unsent_metrics.append((key, step, value))
         self.maybe_flush()
 
     def _seal(self) -> None:
@@ -149,9 +147,6 @@ class Telemetry:
             _local.busy = True  # the database layer may log; don't capture that into this log
             try:
                 self.db.write_telemetry(self.exec_id, logs=chunks, tail=tail, metric_values=metric_values)
-                with self._lock:
-                    sent = len(metric_values)
-                    self.unsent_metrics = self.unsent_metrics[sent:] if sent else self.unsent_metrics
             except Exception as e:  # pragma: no cover - depends on the backend failing
                 _log.warning("could not write telemetry for execution %s: %r", self.exec_id, e)
             finally:

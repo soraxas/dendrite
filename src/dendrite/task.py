@@ -701,14 +701,18 @@ class ArtifactTask:
             tel.flush(final=True)
             runtime._exec.reset(token)
             shutil.rmtree(wd, ignore_errors=True)
-        return refs, tel.unsent_metrics
+        return refs, ctx.metrics  # all of them: publish rewrites any a live flush already wrote
 
 
 def _record_environment(lab, exec_id: str) -> None:
     """Snapshot where this execution runs (display only; failures never fail the step)."""
     try:
         snap = telemetry.snapshot(lab.settings.project_root, os.environ.get("DENDRITE_ENV", ""))
-        lab.db.record_environment(exec_id, telemetry.env_hash(snap), snap)
+        h = telemetry.env_hash(snap)
+        # A wide fan-out shares one snapshot: send it once per metadata backend, then only link to it.
+        sent = lab.db.__dict__.setdefault("_dendrite_sent_envs", set())
+        lab.db.record_environment(exec_id, h, None if h in sent else snap)
+        sent.add(h)
     except Exception as e:  # pragma: no cover - depends on the environment
         logging.getLogger(__name__).warning("could not record the environment of execution %s: %r", exec_id, e)
 

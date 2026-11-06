@@ -127,3 +127,17 @@ export function downsample<T extends { value: number }>(points: T[], buckets = 4
 }
 
 export const SERIES_COLORS = ["var(--accent)", "#e8833a", "#3aa675", "#c94f7c", "#7b6cd9", "#c9a227", "#3a9ec9"];
+
+/** Console lines built incrementally: finished lines plus the line still being written. */
+export interface LineBuffer {
+  lines: string[];
+  partial: string;
+}
+
+/** Append raw output to ``buf``; carriage returns are applied as each line completes. */
+export function appendLines(buf: LineBuffer, text: string): LineBuffer {
+  const parts = (buf.partial + text).split("\n");
+  const partial = parts.pop() ?? "";
+  if (!parts.length) return { lines: buf.lines, partial };
+  return { lines: buf.lines.concat(parts.map(collapseCR)), partial };
+}

@@ -1023,9 +1023,11 @@ class Metadata:
             ).all()
         return [tuple(r) for r in rows]
 
-    def record_environment(self, exec_id: str, env_hash: str, data: dict[str, Any]) -> None:
+    def record_environment(self, exec_id: str, env_hash: str, data: dict[str, Any] | None) -> None:
+        """Link an execution to a snapshot; ``data`` may be ``None`` when it was stored before."""
         with self.tx() as conn:
-            if conn.execute(sa.select(environments.c.hash).where(environments.c.hash == env_hash)).first() is None:
+            known = conn.execute(sa.select(environments.c.hash).where(environments.c.hash == env_hash)).first()
+            if known is None and data is not None:
                 try:
                     with conn.begin_nested():
                         conn.execute(environments.insert().values(hash=env_hash, data=data))
