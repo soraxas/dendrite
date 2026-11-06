@@ -9,6 +9,7 @@ import { ArtifactIcon } from "./ArtifactIcon";
 import { ArtifactPreview } from "./ArtifactPreview";
 import { CodeModal } from "./CodeModal";
 import { DeleteExperiment, descendantsOf, StopButton } from "./Storage";
+import { RunTelemetry } from "./Telemetry";
 
 export interface Nav {
   openExp: (id: string) => void;
@@ -261,40 +262,6 @@ export function ExperimentDetail({
   );
 }
 
-function Sparklines({ execId }: { execId: string }) {
-  const { data } = useExecution(execId);
-  if (!data) return null;
-  const series = new Map<string, { step: number; value: number }[]>();
-  for (const m of data.metrics) series.set(m.key, [...(series.get(m.key) ?? []), m]);
-  return (
-    <>
-      {[...series]
-        .filter(([, s]) => s.length > 1)
-        .map(([k, s]) => {
-          const xs = s.map((m) => m.step),
-            ys = s.map((m) => m.value);
-          const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
-          const pts = s
-            .map(
-              (m) =>
-                `${(8 + ((m.step - x0) / (x1 - x0 || 1)) * 300).toFixed(1)},${(42 - ((m.value - y0) / (y1 - y0 || 1)) * 34).toFixed(1)}`,
-            )
-            .join(" ");
-          return (
-            <div key={k} style={{ marginTop: 10 }}>
-              <div className="mono muted">
-                {k} over {s.length} steps
-              </div>
-              <svg viewBox="0 0 316 48" width="100%" height="48" role="img" aria-label={`${k} trend`}>
-                <polyline points={pts} fill="none" stroke="var(--accent)" strokeWidth={2} />
-              </svg>
-            </div>
-          );
-        })}
-    </>
-  );
-}
-
 /** Which run's result a reused/frozen step took, with links to that experiment and run. */
 function ReusedFrom({
   execId,
@@ -454,6 +421,19 @@ export function NodeDetail({ n, dag, nav }: { n: DagNode; dag: Dag; nav: Nav }) 
           </div>
         )}
       </section>
+      {n.execution_id && (
+        <RunTelemetry
+          key={n.execution_id}
+          execId={n.execution_id}
+          running={n.status === "running"}
+          from={
+            n.execution_experiment && n.execution_experiment !== dag.experiment.id
+              ? { id: n.execution_experiment, name: nav.nameOf(n.execution_experiment) }
+              : null
+          }
+          onOpenExperiment={(id) => nav.openExp(id)}
+        />
+      )}
       {n.execution_id && <CodeSection execId={n.execution_id} step={n.name} />}
       <section>
         <h3>Parameters</h3>
@@ -485,7 +465,6 @@ export function NodeDetail({ n, dag, nav }: { n: DagNode; dag: Dag; nav: Nav }) 
               ))}
             </tbody>
           </table>
-          {n.execution_id && <Sparklines execId={n.execution_id} />}
         </section>
       )}
       <section>

@@ -161,6 +161,29 @@ def clips(video, defects):
 - **Display only:** stages, progress and reads never change a signature.
 - **The UI's default view** is one card per stage. A fan-out is one card with a status grid however many items it has, and expanding it draws at most 12 items.
 
+### Logs, charts, samples and environment
+
+Every step's run is recorded centrally, so you can watch and compare runs without hunting through terminals:
+
+```python
+@artifact_task(outputs=["model"])
+def train(frames: Path, iterations: int = 30_000):
+    dendrite.run(["colmap", "mapper", ...])            # the tool's output streams into the step's log
+    for step in range(iterations):
+        log_metric("loss/train", train_loss, step=step)  # "title/series": one chart, one line per series
+        log_metric("loss/val", val_loss, step=step)
+        if step % 1000 == 0:
+            print(f"step {step}")                      # print and logging are captured too
+            log_image("render", frame, step=step)       # a path, PIL image or numpy array
+    ...
+```
+
+- **Console:** `print`, `sys.stdout`/`sys.stderr` and `logging` inside a step are captured, and still shown in the terminal. Subprocesses go through `dendrite.run`. Logs are capped at `DENDRITE_LOG_MAX`, keeping the beginning and the end.
+- **Scalars:** `log_metric` is written while the step runs, so charts update live.
+- **Samples:** `log_image` and `log_media` keep intermediate renders, videos or meshes, the latest `DENDRITE_SAMPLE_HISTORY` steps per title.
+- **Environment:** the git commit, branch and uncommitted diff, Python, system, GPUs and installed packages.
+- **Display only, and reused with results.** None of it changes a signature, and a step reused from another experiment shows the logs and charts of the run that computed it.
+
 ## The UI
 
 `dendrite ui` serves the app. Pass `--import my_project.pipelines` so it can preview and edit drafts.
@@ -170,6 +193,8 @@ def clips(video, defects):
   - live status and progress, pushed as runs happen, even from another process
   - stages and fan-outs that fold into single cards
   - "reused from" links to the experiment that computed a result
+
+- **Run telemetry:** each step's Console (live, searchable), Scalars (charts with smoothing), Samples (with a step slider) and Environment tabs. The Metrics page charts every step of an experiment.
 
 - **Lineage:** trace any artifact back to its inputs and forward to what used it.
 
@@ -199,6 +224,7 @@ The built UI ships inside the wheel, so using dendrite never needs Node.js.
 | `dendrite diff A B` · `dag EXP` · `lineage HASH` | compare runs; Mermaid graphs |
 | `dendrite run EXP --import MOD` | run a draft made in the UI |
 | `dendrite check --import MOD` | static checks; exits 1 on errors |
+| `dendrite logs EXP NODE [-f]` · `env EXP NODE` | a step's console (follow a running one); where it ran |
 | `dendrite ui [--port 8454] [--import MOD]` | the web UI |
 | `dendrite du` · `rm EXP` · `keep EXP` · `evict EXEC` · `gc` · `clean` | storage; deletions preview unless `--yes` |
 
@@ -286,6 +312,9 @@ The server is `dendrite server run --config server.toml`, or the `Dockerfile` im
 | `DENDRITE_STORE_URL` | `$DENDRITE_HOME/store` | a directory, or `s3://bucket/prefix` and other fsspec URLs (`uv sync --extra s3`) |
 | `DENDRITE_ENV` | — | an environment fingerprint mixed into every signature, e.g. an image digest |
 | `DENDRITE_CHECK_READS` | `warn` | the undeclared-read guard: `warn`, `error` or `off` |
+| `DENDRITE_LOG_MAX` | `16777216` | bytes of console output kept per step run (the beginning and the end) |
+| `DENDRITE_SAMPLE_HISTORY` | `100` | logged steps kept per sample title and series |
+| `DENDRITE_CAPTURE_DIFF` | `1` | `0` leaves the uncommitted git diff out of the recorded environment |
 | `DENDRITE_GC_GRACE` | `3600` | seconds during which clean-up skips freshly written objects |
 | `DENDRITE_SERVER`, `DENDRITE_PROJECT` | — | record to a dendrite server instead (also read from `dendrite.toml`) |
 | `DENDRITE_TOKEN` | — | a server token for CI; people use `dendrite login` instead |
@@ -301,6 +330,7 @@ Lab(store_url="s3://lineage/prod", storage_options={"endpoint_url": "http://mini
 
 - **Single process.** Runs use Prefect's default thread task runner. Deployments, remote workers, and process, Dask or Ray task runners aren't supported yet.
 - **Narrow code fingerprint.** Only a step's own source is hashed; bump `version=` when its helpers change.
+- **Console capture sees Python-level output only.** Output written straight to file descriptors by C code, by subprocesses not started through `dendrite.run`, or by threads a step starts isn't captured.
 - **Value artifacts are pickles.** Only use stores you trust, and keep `dendrite ui` on localhost.
 
 ## Development

@@ -71,4 +71,4 @@ dendrite records what each step produced, but almost nothing about how the run w
 - **`db.py`:** new tables `execution_logs`, `execution_samples`, `environments` and `execution_environments`. Metrics are written incrementally. `change_tokens` covers live logs. All of these are created by `create_all`, with no migration.
 - **`storage.py`:** sample blobs are roots while their execution's experiment exists. Trimming old sample rows only removes display rows.
 - **`server.py`, `cli.py`, `remote.py`, `hosted/wire.py`, `hosted/authz.py`:** the new endpoints, commands and remote methods.
-- **UI:** new `components/Console.tsx`, `Scalars.tsx`, `Samples.tsx` and `Environment.tsx`; changes to `DetailPanel.tsx`, `Pages.tsx`, `api.ts` and `queries.ts`. New dependency: `uplot` (~45 KB) for charts.
+- **UI:** new `components/Console.tsx`, `Scalars.tsx`, `Samples.tsx` and `Environment.tsx`; changes to `DetailPanel.tsx`, `Pages.tsx`, `api.ts` and `queries.ts`. Charts are plain SVG, so there's no new dependency.

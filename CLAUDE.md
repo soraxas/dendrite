@@ -204,6 +204,16 @@ The flow of a run spans several modules in `src/dendrite/`:
 - **`dendrite push`** (`push.py`): `Metadata.export_bundle` on the local lab, the blobs through `ServerStore._put_missing`, then `import_bundle` on the server in one transaction. Existing experiments are skipped; an execution with an existing id, or a successful cacheable one with the same signature, is reused. Executions whose blobs were evicted locally are left out.
 - **Round trips.** `HttpMetadata` batches "queued" node-run writes and progress, and flushes before any other call. Clients drop idle connections at `remote.KEEPALIVE` (2 s), below the server's 30 s, or a reused connection can lose a request. `ArtifactStore.prefetch` batches a step's input URLs.
 
+15. **Run telemetry** (`telemetry.py`, OpenSpec `run-telemetry`).
+
+- **Capture.** `task._compute` creates a `telemetry.Telemetry` on the `ExecContext` and calls `telemetry.install()`, which wraps `sys.stdout`/`sys.stderr` in `_Tee` proxies (re-wrapping if something replaced them) and adds one root `logging` handler. Writes are routed by the `_exec` contextvar, so concurrent steps keep separate logs; `_local.busy` stops the database layer's own logging being captured. `dendrite.run` streams a subprocess through the proxy.
+- **Buffering.** Chunks and metrics flush at most every `LOG_INTERVAL`, plus a final flush before publish or fail (the traceback is written to stderr first). Past `DENDRITE_LOG_MAX / 2` output goes to a rolling tail, kept live in the `seq = -1` row and written after a truncation marker at the end. `_compute` returns only metrics that were never sent, for `publish`.
+- **Tables.** `execution_logs`, `execution_samples` (artifacts in the store, never outputs; history capped at write time), `environments` + `execution_environments` (one row per distinct snapshot), `execution_activity` (feeds `change_tokens`). Metrics are upserted into `metrics` while running.
+- **Environment.** `telemetry.snapshot` memoises the static part per process and git state for `GIT_TTL`; never environment variables; remote credentials stripped.
+- **Storage.** Sample hashes are roots of every existing experiment that ran or reuses their execution.
+- **Hosted.** `HttpMetadata.write_telemetry` batches on the progress flusher; `ServerMetadata` checks execution ownership for every telemetry write and committed blobs for samples.
+- **UI.** `components/Telemetry.tsx` (`RunTelemetry` tabs in `NodeDetail`, `ExperimentScalars` on the Metrics page); pure helpers in `ui/src/telemetry.ts` (ANSI, carriage returns, `title/series` grouping, smoothing, min/max downsampling). Charts are plain SVG.
+
 ## Invariants to preserve
 
 - Signatures must never include experiment ids or flow-run ids. That is what makes cross-experiment reuse work.
@@ -213,7 +223,7 @@ The flow of a run spans several modules in `src/dendrite/`:
 - A cache hit must `store.verify()` its outputs, including every member of a directory manifest. A missing blob means recompute.
 - Experiment config (params, inputs, pins) is frozen at its first run. Before that, only `draft` experiments are editable. Re-running only replaces node_runs.
 - **Reclaiming space never risks a wrong result.** It may only delete blobs, never metadata rows or anything a cache hit could trust without `verify()`. Anything deleted must recompute when needed. `tests/test_storage.py` covers this.
-- Progress, body reads and stages are display-only: they never enter a signature.
+- Progress, body reads, stages and run telemetry (logs, metrics, samples, environment) are display-only: they never enter a signature.
 - **Plans are side-effect free.** A plan never writes node_runs, executions, blobs, leases or pipeline reads, never touches Prefect, and never calls step functions. `tests/test_plan.py::test_plan_writes_nothing` checks this.
 - **A hosted server never unpickles.** Value previews come from the text the producer recorded (`value_previews`). `tests/test_hosted.py::test_the_server_never_unpickles` checks this.
 - **Hosted publish needs committed blobs.** No execution or artifact row may reference a blob the server hasn't confirmed is stored at its content address.
@@ -251,6 +261,8 @@ Spec-driven changes live in `openspec/`:
 - `openspec/changes/live-graph/` is live progress, pushed updates, fan-out groups and pipeline-read edges.
 - `openspec/changes/pipeline-stages/` is stages in code and in the UI, and the stage overview.
 - `openspec/changes/hosted-server/` is the proposed hosted mode: a server that owns Postgres and the bucket, login, projects and roles, and presigned blob access. Not implemented yet.
+- `openspec/changes/run-telemetry/` is console capture, live scalars, samples and environment per execution (implemented).
+- `openspec/changes/artifact-organisation/` is artifact names (`@name`) and the per-experiment Artifacts tab (proposed).
 - `openspec/changes/react-flow-ui/` is the React Flow UI change. Archive it with `openspec archive react-flow-ui` once it has been reviewed.
 - Use `/opsx:propose`, `/opsx:apply` and `/opsx:archive` for new work.
 - Validate with `openspec validate <change>`.

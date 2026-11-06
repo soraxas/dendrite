@@ -269,6 +269,54 @@ export interface Lineage {
   experiments: Usage[];
 }
 
+export interface LogChunk {
+  seq: number;
+  stream: "stdout" | "stderr" | "log" | "marker" | "tail";
+  t: number;
+  text: string;
+}
+export interface LogPage {
+  chunks: LogChunk[];
+  running: boolean;
+  status: string;
+}
+export interface ScalarPoint {
+  key: string;
+  step: number;
+  value: number;
+}
+export interface Sample {
+  title: string;
+  series: string;
+  step: number;
+  hash: string;
+  t: number;
+  kind: string | null;
+  size: number | null;
+  filename: string | null;
+}
+export interface Environment {
+  hash: string;
+  git: {
+    root: string;
+    commit: string | null;
+    branch: string | null;
+    remote: string | null;
+    dirty: boolean;
+    diff: string | null;
+  } | null;
+  python: { version: string; executable: string };
+  system: { platform: string; machine: string; host: string; gpus: string[] };
+  packages: string[];
+  uv_lock: string | null;
+  dendrite_env: string | null;
+}
+export interface NodeScalars {
+  node: string;
+  execution_id: string;
+  points: ScalarPoint[];
+}
+
 export interface Execution {
   id: string;
   signature: string;
@@ -453,6 +501,12 @@ export const api = {
   artifact: (h: string) => get<ArtifactDetail>(`api/artifacts/${encodeURIComponent(h)}`),
   lineage: (h: string) => get<Lineage>(`api/artifacts/${encodeURIComponent(h)}/lineage`),
   execution: (id: string) => get<Execution>(`api/executions/${encodeURIComponent(id)}`),
+  logs: (id: string, after = -1) => get<LogPage>(`api/executions/${encodeURIComponent(id)}/logs?after=${after}`),
+  scalars: (id: string) => get<{ points: ScalarPoint[] }>(`api/executions/${encodeURIComponent(id)}/scalars`),
+  samples: (id: string) => get<{ samples: Sample[] }>(`api/executions/${encodeURIComponent(id)}/samples`),
+  environment: (id: string) =>
+    get<{ environment: Environment | null }>(`api/executions/${encodeURIComponent(id)}/environment`),
+  experimentScalars: (id: string) => get<{ nodes: NodeScalars[] }>(`${exp(id)}/scalars`),
   source: (h: string) => get<SourceSnapshot>(`api/sources/${encodeURIComponent(h)}`),
   saveSource: (h: string, source: string, file_sha: string) =>
     request<{ file_sha: string }>(`api/sources/${encodeURIComponent(h)}`, {

@@ -1,6 +1,8 @@
+import { useState } from "react";
 import type { Dag, Diff } from "../api";
 import { statusLabel } from "../copy";
 import { flatten, fmtVal, short } from "../format";
+import { ExperimentScalars } from "./Telemetry";
 
 export function ParamsPage({ dag, onArtifact }: { dag: Dag; onArtifact: (h: string) => void }) {
   const overrides = flatten(dag.experiment.params);
@@ -107,29 +109,47 @@ export function MetricsPage({ dag }: { dag: Dag }) {
         </tr>
       )),
     );
+  const [asTable, setAsTable] = useState(false);
   return (
     <div className="pad">
-      <table>
-        <thead>
-          <tr>
-            <th>step</th>
-            <th>metric</th>
-            <th className="num">value (last logged)</th>
-            <th>outcome</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.length ? (
-            rows
-          ) : (
+      <div className="tabs" role="tablist" style={{ marginBottom: 12 }}>
+        <button
+          role="tab"
+          aria-selected={!asTable}
+          className={asTable ? "" : "active"}
+          onClick={() => setAsTable(false)}
+        >
+          Charts
+        </button>
+        <button role="tab" aria-selected={asTable} className={asTable ? "active" : ""} onClick={() => setAsTable(true)}>
+          Table
+        </button>
+      </div>
+      {!asTable ? (
+        <ExperimentScalars expId={dag.experiment.id} live={dag.experiment.status === "running"} />
+      ) : (
+        <table>
+          <thead>
             <tr>
-              <td colSpan={4} className="muted">
-                No metrics logged.
-              </td>
+              <th>step</th>
+              <th>metric</th>
+              <th className="num">value (last logged)</th>
+              <th>outcome</th>
             </tr>
-          )}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {rows.length ? (
+              rows
+            ) : (
+              <tr>
+                <td colSpan={4} className="muted">
+                  No metrics logged.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      )}
     </div>
   );
 }
