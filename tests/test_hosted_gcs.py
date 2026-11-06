@@ -29,9 +29,9 @@ def fake_gcs():
     except ImportError:
         pytest.skip("testcontainers is not installed")
     port = _free_port()
-    c = DockerContainer(IMAGE).with_bind_ports(4443, port)
-    c = c.with_command(f"-scheme http -port 4443 -public-host 127.0.0.1:{port}")
-    try:
+    try:  # the constructor already connects to Docker
+        c = DockerContainer(IMAGE).with_bind_ports(4443, port)
+        c = c.with_command(f"-scheme http -port 4443 -public-host 127.0.0.1:{port}")
         c.start()
     except Exception as e:  # no Docker
         pytest.skip(f"could not start {IMAGE}: {e}")

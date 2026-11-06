@@ -38,8 +38,8 @@ def pg_url():
             from testcontainers.postgres import PostgresContainer
         except ImportError:
             _unavailable("testcontainers is not installed")
-    container = PostgresContainer(PG_IMAGE, driver="psycopg")
-    try:
+    try:  # the constructor already connects to Docker, so it belongs inside the try
+        container = PostgresContainer(PG_IMAGE, driver="psycopg")
         container.start()
     except Exception as e:  # no Docker daemon, image pull failed, …
         _unavailable(f"could not start {PG_IMAGE}: {e}")
