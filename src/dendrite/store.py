@@ -34,6 +34,27 @@ class PlanIncomplete(RuntimeError):
         super().__init__(f"the plan depends on the output of {self.node!r}, which has not been computed")
 
 
+def _writable_retry(func, path, _exc) -> None:
+    # Store objects are read-only and checkouts hardlink them; Windows won't delete a read-only file.
+    try:
+        os.chmod(path, 0o644)
+        func(path)
+    except OSError:
+        pass
+
+
+def remove_tree(path: str | os.PathLike) -> None:
+    """Delete a directory tree (or file) if it exists, including read-only files, ignoring the rest."""
+    p = Path(path)
+    if p.is_dir() and not p.is_symlink():
+        shutil.rmtree(p, onexc=_writable_retry)
+    elif p.exists() or p.is_symlink():
+        try:
+            p.unlink()
+        except PermissionError:
+            _writable_retry(os.unlink, p, None)
+
+
 @dataclass(frozen=True)
 class ArtifactRef:
     """Lightweight, serialisable handle to an immutable artifact."""
@@ -226,8 +247,8 @@ class ArtifactStore(ABC):
     def drop_checkouts(self, hashes: Iterable[str]) -> None:
         """Remove local checkouts of these artifacts (hardlinks would keep deleted bytes alive)."""
         for h in hashes:
-            shutil.rmtree(self.cache_dir / "checkouts" / h, ignore_errors=True)
-            shutil.rmtree(self.cache_dir / "checkouts" / f"preview-{h}", ignore_errors=True)
+            remove_tree(self.cache_dir / "checkouts" / h)
+            remove_tree(self.cache_dir / "checkouts" / f"preview-{h}")
 
 
 class LocalStore(ArtifactStore):

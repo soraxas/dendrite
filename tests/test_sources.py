@@ -2,6 +2,7 @@
 
 import importlib.util
 import uuid
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
@@ -50,8 +51,8 @@ def test_snapshot_recorded_with_location(lab, source):
     exp = lab.create(toy.toy, inputs={"src": source}).run()
     exec_id = {n["node"]: n["execution_id"] for n in exp.node_runs()}["train"]
     src = client.get(f"/api/executions/{exec_id}").json()["source"]
-    assert src["file"].endswith("tests/toy.py") and src["qualname"] == "train"
-    assert src["display"].endswith("tests/toy.py")
+    assert Path(src["file"]).as_posix().endswith("tests/toy.py") and src["qualname"] == "train"
+    assert src["display"].replace("\\", "/").endswith("tests/toy.py")
     snap = client.get(f"/api/sources/{src['hash']}").json()
     lines = open(src["file"]).read().splitlines()
     assert lines[snap["line"] - 1].startswith("@artifact_task")  # first line is the decorator
@@ -107,3 +108,31 @@ def test_missing_file_and_disabled_editing(lab, source, tmp_path):
     assert client.get("/api/info").json()["edit"] is False
     path.unlink()
     assert client.get(f"/api/sources/{src['hash']}").json()["status"] == "missing"
+
+
+def test_crlf_files_match_and_keep_their_line_endings(tmp_path):
+    from dendrite.sources import disk_status, write_source
+
+    f = tmp_path / "steps.py"
+    f.write_bytes(b"import x\r\n\r\ndef step(a):\r\n    return a\r\n\r\nother = 1\r\n")
+    snap = {"file": str(f), "source": "def step(a):\n    return a\n"}  # as inspect.getsource gives it
+    status = disk_status(snap)
+    assert status["status"] == "same"
+    write_source(snap, "def step(a):\n    return a + 1\n", status["file_sha"])
+    assert f.read_bytes() == b"import x\r\n\r\ndef step(a):\r\n    return a + 1\r\n\r\nother = 1\r\n"
+
+
+def test_checkouts_of_read_only_objects_are_removed(tmp_path):
+    import os
+    import stat
+
+    from dendrite.store import remove_tree
+
+    d = tmp_path / "checkout" / "nested"
+    d.mkdir(parents=True)
+    f = d / "data"
+    f.write_text("x")
+    os.chmod(f, stat.S_IREAD)
+    remove_tree(tmp_path / "checkout")
+    assert not (tmp_path / "checkout").exists()
+    remove_tree(tmp_path / "checkout")  # already gone: fine

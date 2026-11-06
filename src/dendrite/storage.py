@@ -10,14 +10,13 @@ correctness.
 
 from __future__ import annotations
 
-import shutil
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from .store import ArtifactRef
+from .store import ArtifactRef, remove_tree
 
 if TYPE_CHECKING:
     from .experiment import Lab
@@ -500,7 +499,4 @@ def _disk_size(p: Path) -> int:
 
 
 def _rm(p: Path) -> None:
-    if p.is_dir() and not p.is_symlink():
-        shutil.rmtree(p, ignore_errors=True)
-    else:
-        p.unlink(missing_ok=True)
+    remove_tree(p)

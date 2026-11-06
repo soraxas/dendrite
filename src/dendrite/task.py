@@ -17,7 +17,6 @@ import importlib.metadata
 import inspect
 import logging
 import os
-import shutil
 import sys
 import textwrap
 import threading
@@ -36,7 +35,7 @@ from prefect.cache_policies import NO_CACHE
 
 from . import analysis, guard, runtime, telemetry
 from .hashing import canonical_json, sha256_bytes, sha256_json
-from .store import PENDING, ArtifactRef
+from .store import PENDING, ArtifactRef, remove_tree
 
 POLL_INTERVAL = 0.2
 
@@ -701,7 +700,7 @@ class ArtifactTask:
             telemetry.step_finished(tel)  # waits for captured fd output to be read
             tel.flush(final=True)
             runtime._exec.reset(token)
-            shutil.rmtree(wd, ignore_errors=True)
+            remove_tree(wd)
         return refs, ctx.metrics  # all of them: publish rewrites any a live flush already wrote
 
 

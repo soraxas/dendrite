@@ -6,7 +6,7 @@ from dendrite.server import create_app
 def test_download_directory_member(lab, tmp_path):
     folder = tmp_path / "reports"
     (folder / "nested").mkdir(parents=True)
-    (folder / "nested" / "a report.csv").write_text("x,y\n1,2\n")
+    (folder / "nested" / "a report.csv").write_bytes(b"x,y\n1,2\n")  # exact bytes on every platform
     ref = lab.ingest(folder)
     client = TestClient(create_app(lab))
 
