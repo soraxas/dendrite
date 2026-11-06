@@ -42,10 +42,14 @@ function PortChips({
   position: Position;
 }) {
   if (!ports.length) return null;
+  // Data flows toward the step on the in side and away from it on the out side.
+  const arrow = position === Position.Top || position === Position.Bottom ? "↓" : "→";
   return (
     <NodeToolbar isVisible={isVisible} position={position} offset={10}>
       <div className={`ports ${side}`} role="group" aria-label={side === "in" ? "Input data" : "Output data"}>
-        <span className="ports-title">{side === "in" ? "in" : "out"}</span>
+        <span className="ports-title">
+          {side === "in" ? "in" : "out"} <span aria-hidden="true">{arrow}</span>
+        </span>
         {ports.map((p) => (
           <button
             key={`${p.name}:${p.hash}`}

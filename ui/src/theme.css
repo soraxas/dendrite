@@ -1652,22 +1652,44 @@ button.top-link.active {
   }
 }
 
-/* data chips around a selected step: tinted so they stand out from the canvas, in vs out distinct */
+/* data chips around a selected step: a soft rounded capsule, tinted so in and out read apart */
 .ports {
-  background: color-mix(in srgb, var(--accent) 16%, var(--panel));
-  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  border-radius: 999px;
+  padding: 3px 4px 3px 4px;
+  gap: 4px;
+  box-shadow: 0 6px 20px rgb(0 0 0 / 0.22);
+  backdrop-filter: blur(6px);
 }
 .ports.out {
-  background: color-mix(in srgb, var(--computed) 16%, var(--panel));
-  border-color: var(--computed);
+  background: color-mix(in srgb, var(--computed) 10%, var(--panel));
+  border-color: color-mix(in srgb, var(--computed) 45%, transparent);
 }
 .ports .ports-title {
-  color: var(--ink);
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  letter-spacing: 0.4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.ports.out .ports-title {
+  color: var(--computed);
+  background: color-mix(in srgb, var(--computed) 18%, transparent);
 }
 .port {
-  background: var(--panel);
-  border-color: var(--line-strong);
+  background: color-mix(in srgb, var(--panel) 85%, transparent);
+  border-color: transparent;
   color: var(--ink);
+  padding: 2px 10px;
+  align-items: center;
+  transition:
+    background 0.12s,
+    border-color 0.12s;
 }
 .ports.in .port:hover,
 .ports.in .port.on {
