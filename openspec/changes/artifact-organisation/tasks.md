@@ -61,4 +61,4 @@
 
 - [x] 9.1 README: names (`@name`, CLI, GC protection) and the Artifacts tab
 - [x] 9.2 Update CLAUDE.md's architecture notes for names and the Artifacts tab
-- [ ] 9.3 Run `prek run --all-files`, the full pytest suite on SQLite and Postgres, and `npm test`/`npm run build`
+- [x] 9.3 Run `prek run --all-files`, the full pytest suite on SQLite and Postgres, and `npm test`/`npm run build`
