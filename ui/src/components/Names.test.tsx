@@ -109,3 +109,16 @@ it("lists names and opens one in its experiment", async () => {
   fireEvent.click(screen.getByText("@raw"));
   expect(open).toHaveBeenCalledWith(H, "e-1");
 });
+
+it("parses tags and filters the Names page by #tag", async () => {
+  const { parseTags } = await import("./Names");
+  expect(parseTags("paper, ablation #fig3 paper")).toEqual(["paper", "ablation", "fig3"]);
+  vi.spyOn(api, "names").mockResolvedValue({
+    names: [row({ name: "a", tags: ["paper"] }), row({ name: "b", tags: ["draft"] })],
+  });
+  renderWithQuery(<NamesPage canEdit nameOf={(id) => id} openArtifact={vi.fn()} openExp={vi.fn()} />);
+  await waitFor(() => expect(screen.getByText("@a")).toBeTruthy());
+  fireEvent.click(screen.getByText("#paper"));
+  expect(screen.queryByText("@b")).toBeNull();
+  expect(screen.getByText("@a")).toBeTruthy();
+});

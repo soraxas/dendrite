@@ -277,15 +277,19 @@ class Lab:
         target: str | ArtifactRef,
         *,
         note: str | None = None,
+        tags: list[str] | None = None,
         move: bool = False,
         expect: str | None = None,
     ) -> dict[str, Any]:
         """Give an artifact a human-readable name, usable as ``@name`` wherever an artifact is
         accepted. Names are metadata only: they never change a signature. Named artifacts are
         kept by garbage collection. Moving an existing name needs ``move=True`` and keeps its
-        earlier target in the history."""
+        earlier target in the history. ``tags`` (e.g. ``["paper"]``) help find names later;
+        ``None`` leaves existing tags as they are."""
         ref, source = self.resolve_target(target)
-        return self.db.set_name(name, ref.hash, **source, note=note, set_by=_whoami(), move=move, expect=expect)
+        return self.db.set_name(
+            name, ref.hash, **source, note=note, tags=tags, set_by=_whoami(), move=move, expect=expect
+        )
 
     def unname(self, name: str, *, expect: str | None = None) -> bool:
         """Remove a name (the artifact stays). Returns whether it existed."""
@@ -1077,6 +1081,20 @@ class Experiment:
             "error": r["error"],
             "keep": bool(r.get("keep")),
         }
+
+    def diff_params(self, other: Experiment) -> list[dict[str, Any]]:
+        """Parameters that differ: ``[{key, a, b, change}]`` with ``a`` from this experiment."""
+        fa, fb = _flatten(self.params), _flatten(other.params)
+        return [
+            {
+                "key": k,
+                "a": fa.get(k),
+                "b": fb.get(k),
+                "change": "added" if k not in fa else "removed" if k not in fb else "changed",
+            }
+            for k in sorted(set(fa) | set(fb))
+            if fa.get(k, _MISSING) != fb.get(k, _MISSING)
+        ]
 
     def diff(self, other: Experiment) -> dict[str, Any]:
         fa, fb = _flatten(self.params), _flatten(other.params)

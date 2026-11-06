@@ -1,5 +1,5 @@
 // An experiment's Artifacts tab: every input and output grouped stage → step, filters, and Compare.
-import { useQueries } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { type ReactNode, useMemo, useState } from "react";
 import { type ArtifactRef, api, type Dag } from "../api";
 import {
@@ -271,21 +271,15 @@ export function Compare({
 }) {
   const { data: tree = [] } = useExperiments();
   const { ids, more } = compareCandidates(tree, base.experiment.id);
-  const others = ids.slice(1);
-  const dags = useQueries({
-    queries: others.map((id) => ({ queryKey: ["dag", id], queryFn: () => api.dag(id), staleTime: 10000 })),
+  const { data, error } = useQuery({
+    queryKey: ["compare", base.experiment.id, node, output, ids.join(",")],
+    queryFn: () => api.compare(base.experiment.id, node, output, ids.slice(1)),
+    staleTime: 10000,
   });
-  const diffs = useQueries({
-    queries: others.map((id) => ({
-      queryKey: ["diff", base.experiment.id, id],
-      queryFn: () => api.diff(base.experiment.id, id),
-      staleTime: 10000,
-    })),
-  });
-  const hashOf = (d?: Dag) => d?.nodes.find((n) => n.name === node)?.outputs?.[output]?.hash;
-  const mine = hashOf(base);
+  const cols = data?.columns ?? [];
+  const mine = cols.find((c) => c.relation === "self")?.hash ?? undefined;
   return (
-    <section className="compare-panel">
+    <section className="compare-panel" aria-label={`Compare ${node}.${output}`}>
       <div className="cmp-title">
         <h3>
           Compare{" "}
@@ -297,33 +291,43 @@ export function Compare({
           Close
         </button>
       </div>
+      {error && <div className="err">{String(error)}</div>}
+      {!data && !error && <div className="muted">Loading…</div>}
       <div className="cmp-cols">
-        <CompareColumn label={<b>{nameOf(base.experiment.id)}</b>} sub="this experiment" hash={mine} same={false} />
-        {others.map((id, i) => {
-          const h = hashOf(dags[i].data);
-          const changes = diffs[i].data?.params ?? [];
-          const rel = id === base.experiment.parent_id ? "parent" : "fork";
+        {cols.map((c) => {
+          const changes = c.params;
           return (
             <CompareColumn
-              key={id}
-              label={<a onClick={() => openExp(id)}>{nameOf(id)}</a>}
-              sub={
-                <>
-                  {rel}
-                  {changes.length > 0 &&
-                    `: ${changes
-                      .slice(0, 3)
-                      .map((c) => `${c.key} ${fmtVal(c.a)} → ${fmtVal(c.b)}`)
-                      .join(", ")}${changes.length > 3 ? ` +${changes.length - 3}` : ""}`}
-                </>
+              key={c.experiment}
+              label={
+                c.relation === "self" ? (
+                  <b>{nameOf(c.experiment)}</b>
+                ) : (
+                  <a onClick={() => openExp(c.experiment)}>{nameOf(c.experiment)}</a>
+                )
               }
-              hash={dags[i].isLoading ? undefined : h}
-              same={!!h && h === mine}
+              sub={
+                c.relation === "self" ? (
+                  "this experiment"
+                ) : (
+                  <>
+                    {c.relation}
+                    {changes.length > 0 &&
+                      `: ${changes
+                        .slice(0, 3)
+                        .map((p) => `${p.key} ${fmtVal(p.a)} → ${fmtVal(p.b)}`)
+                        .join(", ")}${changes.length > 3 ? ` +${changes.length - 3}` : ""}`}
+                    {changes.length === 0 && ": same parameters"}
+                  </>
+                )
+              }
+              hash={c.hash ?? undefined}
+              same={c.relation !== "self" && !!c.hash && c.hash === mine}
             />
           );
         })}
       </div>
-      {others.length === 0 && <p className="muted">This experiment has no parent or forks to compare with.</p>}
+      {data && cols.length <= 1 && <p className="muted">This experiment has no parent or forks to compare with.</p>}
       {more > 0 && <p className="muted">{more} more forks not shown.</p>}
     </section>
   );

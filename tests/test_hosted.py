@@ -712,6 +712,9 @@ def test_names_are_attributed_and_guarded(hosted, tmp_path, source):
     bob.name("bobs", f"{exp.id}:featurize")  # runners may create their own
     alice.name("best", f"{exp.id}:featurize", move=True)
     assert [h["hash"] for h in alice.db.name_history("best")] == [row["hash"]]
+    assert alice.db.name("best")["set_by_id"] and alice.db.name("best")["set_by_id"] != bob.db.name("bobs")["set_by_id"]
+    with pytest.raises(PermissionError):
+        bob.name("best", f"{exp.id}:featurize", tags=["mine"])  # re-tagging is changing it too
     hosted.lab(tmp_path / "admin", project).unname("bobs")  # admins may change anyone's
     for lab in (alice, bob):
         lab.db.dispose()

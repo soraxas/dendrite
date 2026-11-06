@@ -181,3 +181,72 @@ def test_cli_name_names_unname(lab, source, capsys):
     main([*home, "unname", "paper-fig3"])
     with pytest.raises(SystemExit):
         main([*home, "unname", "paper-fig3"])
+
+
+def test_tags_label_names_and_survive_a_move(lab, source):
+    exp = lab.create(toy.toy, inputs={"src": source}).run()
+    row = lab.name("best", f"{exp.id}:featurize", tags=["paper", "ablation", "paper"])
+    assert row["tags"] == ["ablation", "paper"]
+    moved = lab.name("best", f"{exp.id}:train.model", move=True)
+    assert moved["tags"] == ["ablation", "paper"]  # kept unless new ones are given
+    assert lab.name("best", f"{exp.id}:train.model", tags=[])["tags"] == []
+    with pytest.raises(ValueError, match="tag"):
+        lab.name("best", f"{exp.id}:train.model", tags=["no spaces"])
+
+
+def test_compare_endpoint_lists_one_output_across_experiments(lab, source, tmp_path):
+    from fastapi.testclient import TestClient
+
+    from dendrite.server import create_app
+
+    from .test_api import no_bundle
+
+    base = lab.create(toy.toy, inputs={"src": source}).run()
+    fork = base.fork({"train.iterations": 3}).run()
+    same = base.fork({"train.seed": 0}).run()  # the default: same result
+    c = TestClient(create_app(lab, ui_dir=no_bundle(tmp_path)))
+    out = c.get(f"/api/compare?base={fork.id}&node=train&output=model&exps={base.id},{same.id},nope").json()
+    cols = {col["experiment"]: col for col in out["columns"]}
+    assert set(cols) == {fork.id, base.id, same.id}
+    assert cols[fork.id]["relation"] == "self" and cols[base.id]["relation"] == "parent"
+    assert cols[same.id]["relation"] == "other"
+    assert cols[base.id]["params"] == [{"key": "train.iterations", "a": 3, "b": None, "change": "removed"}]
+    assert cols[base.id]["hash"] != cols[fork.id]["hash"]
+    assert cols[base.id]["artifact"]["kind"] == "file"
+
+
+@pytest.mark.local_only("the CLI is pointed at a local database URL")
+def test_cli_tags(lab, source, capsys):
+    from dendrite.cli import main
+
+    exp = lab.create(toy.toy, inputs={"src": source}).run()
+    home = ["--home", str(lab.home), "--db-url", lab.settings.db_url]
+    main([*home, "name", "a", f"{exp.id}:featurize", "--tag", "paper"])
+    main([*home, "name", "b", f"{exp.id}:train.model"])
+    capsys.readouterr()
+    main([*home, "names", "--tag", "paper"])
+    out = capsys.readouterr().out
+    assert "@a" in out and "#paper" in out and "@b" not in out
+
+
+@pytest.mark.local_only("opens a SQLite file directly")
+def test_names_table_from_a_pre_release_build_gains_its_new_columns(tmp_path):
+    import sqlalchemy as sa
+
+    from dendrite.db import Metadata
+
+    url = f"sqlite:///{tmp_path / 'old.db'}"
+    engine = sa.create_engine(url)
+    with engine.begin() as conn:  # the table as the first build created it
+        conn.execute(
+            sa.text(
+                "CREATE TABLE artifact_names (name VARCHAR(100) PRIMARY KEY, hash VARCHAR(64) NOT NULL, "
+                "experiment_id VARCHAR(32), node VARCHAR(200), output VARCHAR(200), note TEXT, "
+                "set_by VARCHAR(200), set_at FLOAT NOT NULL)"
+            )
+        )
+        conn.execute(sa.text("INSERT INTO artifact_names (name, hash, set_at) VALUES ('old', 'h', 1.0)"))
+    engine.dispose()
+    db = Metadata(url)
+    assert db.name("old")["tags"] is None and db.name("old")["set_by_id"] is None
+    db.dispose()

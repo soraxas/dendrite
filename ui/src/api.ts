@@ -241,6 +241,7 @@ export interface ArtifactName {
   note: string | null;
   set_by: string | null;
   set_at: number;
+  tags?: string[] | null;
   kind?: string | null;
   size?: number | null;
   filename?: string | null;
@@ -257,8 +258,18 @@ export interface NameRequest {
   output?: string;
   hash?: string;
   note?: string;
+  tags?: string[];
   move?: boolean;
   expect?: string;
+}
+
+export interface CompareColumn {
+  experiment: string;
+  name: string | null;
+  relation: "self" | "parent" | "fork" | "other";
+  hash: string | null;
+  artifact: ArtifactRef | null;
+  params: Diff["params"];
 }
 
 export interface Role {
@@ -544,6 +555,10 @@ export const api = {
   lineage: (h: string) => get<Lineage>(`api/artifacts/${encodeURIComponent(h)}/lineage`),
   execution: (id: string) => get<Execution>(`api/executions/${encodeURIComponent(id)}`),
   names: () => get<{ names: ArtifactName[] }>("api/names"),
+  compare: (base: string, node: string, output: string, exps: string[]) =>
+    get<{ node: string; output: string; columns: CompareColumn[] }>(
+      `api/compare?base=${encodeURIComponent(base)}&node=${encodeURIComponent(node)}&output=${encodeURIComponent(output)}&exps=${encodeURIComponent(exps.join(","))}`,
+    ),
   setName: (name: string, req: NameRequest) => send<ArtifactName>("PUT", `api/names/${encodeURIComponent(name)}`, req),
   removeName: (name: string, expect?: string) =>
     send<{ removed: string }>(

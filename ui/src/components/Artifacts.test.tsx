@@ -10,7 +10,8 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const ref = (h: string): ArtifactRef => ({ hash: h.padEnd(64, "0"), kind: "value", size: 3, filename: null });
+const H = (h: string) => h.padEnd(64, "0");
+const ref = (h: string): ArtifactRef => ({ hash: H(h), kind: "value", size: 3, filename: null });
 const dagOf = (id: string, parent: string | null, h: string): Dag => ({
   experiment: exp({ id, name: id, parent_id: parent, status: "completed" }),
   edges: [],
@@ -24,10 +25,22 @@ it("compares an output across parent and forks, marking identical results", asyn
     { id: "f", name: "f", parent_id: "me" },
   ];
   vi.spyOn(api, "experiments").mockResolvedValue(tree as never);
-  vi.spyOn(api, "dag").mockImplementation(async (id) => (id === "p" ? dagOf("p", null, "a") : dagOf("f", "me", "b")));
-  vi.spyOn(api, "diff").mockResolvedValue({
-    params: [{ key: "train.iterations", a: 1, b: 2, change: "changed" }],
-  } as never);
+  const compare = vi.spyOn(api, "compare").mockResolvedValue({
+    node: "train",
+    output: "model",
+    columns: [
+      { experiment: "me", name: "me", relation: "self", hash: H("a"), artifact: ref("a"), params: [] },
+      { experiment: "p", name: "p", relation: "parent", hash: H("a"), artifact: ref("a"), params: [] },
+      {
+        experiment: "f",
+        name: "f",
+        relation: "fork",
+        hash: H("b"),
+        artifact: ref("b"),
+        params: [{ key: "train.iterations", a: 1, b: 2, change: "changed" }],
+      },
+    ],
+  });
   const artifact = vi.spyOn(api, "artifact").mockImplementation(
     async (h) =>
       ({
@@ -51,8 +64,9 @@ it("compares an output across parent and forks, marking identical results", asyn
     />,
   );
   await waitFor(() => expect(screen.getByText(/identical to this experiment/)).toBeTruthy()); // the parent: same hash
-  await waitFor(() => expect(screen.getAllByText(/train.iterations 1 → 2/).length).toBeGreaterThan(0));
-  await waitFor(() => expect(artifact).toHaveBeenCalledWith("b".padEnd(64, "0")));
+  expect(screen.getByText(/train.iterations 1 → 2/)).toBeTruthy();
+  expect(compare).toHaveBeenCalledWith("me", "train", "model", ["p", "f"]);
+  await waitFor(() => expect(artifact).toHaveBeenCalledWith(H("b")));
   expect(artifact).toHaveBeenCalledTimes(2); // this experiment's and the fork's; the parent's is the same artifact
 });
 

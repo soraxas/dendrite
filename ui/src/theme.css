@@ -2204,3 +2204,18 @@ button.top-link.active {
   stroke: var(--accent);
   stroke-width: 0.5;
 }
+.tag-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 2px;
+}
+button.tag {
+  border: 0;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  color: var(--accent);
+  background: var(--accent-bg);
+  cursor: pointer;
+}

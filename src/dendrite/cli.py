@@ -123,7 +123,7 @@ def cmd_name(lab: Lab, args) -> None:
     from .db import NameConflict
 
     try:
-        row = lab.name(args.name, args.target, note=args.note, move=args.force)
+        row = lab.name(args.name, args.target, note=args.note, tags=args.tag or None, move=args.force)
     except NameConflict as e:
         raise SystemExit(f"{e} (pass --force to move it)" if e.code == "name_taken" else str(e)) from None
     except KeyError as e:
@@ -148,14 +148,18 @@ def cmd_names(lab: Lab, args) -> None:
         return
     rows = []
     for n in lab.names():
+        if args.tag and not set(args.tag) <= set(n.get("tags") or []):
+            continue
         src = n["experiment_id"] or ""
         if n["experiment_id"] and (n["node"] or n["output"]):
             src += f":{n['node'] + '.' if n['node'] else ''}{n['output'] or ''}"
         size = fmt_bytes(n["size"]) if n.get("size") is not None else ""
+        tags = " ".join(f"#{t}" for t in n.get("tags") or [])
         rows.append(
-            [f"@{n['name']}", n["hash"][:12], n.get("kind") or "", size, src, n["note"] or "", n["set_by"] or ""]
+            [f"@{n['name']}", n["hash"][:12], n.get("kind") or "", size, src, tags, n["note"] or "", n["set_by"] or ""]
         )
-    print(_table(rows, ["name", "artifact", "kind", "size", "from", "note", "by"]) if rows else "no names yet")
+    header = ["name", "artifact", "kind", "size", "from", "tags", "note", "by"]
+    print(_table(rows, header) if rows else ("no names with those tags" if args.tag else "no names yet"))
 
 
 def cmd_unname(lab: Lab, args) -> None:
@@ -691,9 +695,11 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("name")
     s.add_argument("target", help="EXP:NODE.OUTPUT, EXP:NODE, EXP:INPUT, @name, or a hash (prefix)")
     s.add_argument("--note")
+    s.add_argument("--tag", action="append", help="a label for finding it later (repeatable)")
     s.add_argument("--force", action="store_true", help="move the name if it points elsewhere")
     s = sub.add_parser("names", help="list artifact names (--history NAME: where it pointed before)")
     s.add_argument("--history", metavar="NAME")
+    s.add_argument("--tag", action="append", help="only names with this tag (repeatable: all of them)")
     s = sub.add_parser("unname", help="remove a name (the artifact stays)")
     s.add_argument("name")
     s = sub.add_parser("logs", help="console output of a step (-f follows a running one)")

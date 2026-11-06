@@ -189,6 +189,7 @@ class NameRequest(BaseModel):
     hash: str | None = None
     target: str | None = None
     note: str | None = None
+    tags: list[str] | None = None
     move: bool = False
     expect: str | None = None  # compare-and-set on the name's current target
 
@@ -352,7 +353,7 @@ def create_app(
         else:
             raise HTTPException(422, "say what to name: experiment and node/output, hash, or target")
         try:
-            return lab.name(name, target, note=req.note, move=req.move, expect=req.expect)
+            return lab.name(name, target, note=req.note, tags=req.tags, move=req.move, expect=req.expect)
         except NameConflict as e:
             raise HTTPException(409, {"message": str(e).split(": ", 1)[-1], "code": e.code}) from None
         except KeyError as e:
@@ -649,6 +650,44 @@ def create_app(
         d = _experiment(lab, exp_id).dag()
         d["mermaid"] = mermaid(d)
         return _with_names(lab, d)
+
+    @app.get("/api/compare")
+    def compare(base: str, node: str, output: str, exps: str = "") -> dict[str, Any]:
+        """One step output across experiments: each one's artifact and its parameter changes from
+        ``base``. Cheaper than a DAG per experiment: node runs and params only."""
+        b = _experiment(lab, base)
+        ids = [i for i in dict.fromkeys([b.id, *exps.split(",")]) if i][:16]
+        columns = []
+        hashes = {}
+        for eid in ids:
+            if eid == b.id:
+                e = b
+            else:
+                row = lab.db.experiment(eid)
+                if row is None:
+                    continue
+                e = Experiment(lab, row)
+            h = e.node_outputs(node).get(output)
+            hashes[eid] = h
+            if e.id == b.id:
+                relation = "self"
+            elif e.id == b.parent_id:
+                relation = "parent"
+            else:
+                relation = "fork" if e.parent_id == b.id else "other"
+            columns.append(
+                {
+                    "experiment": e.id,
+                    "name": e.name,
+                    "relation": relation,
+                    "hash": h,
+                    "params": [] if e.id == b.id else b.diff_params(e),
+                }
+            )
+        refs = lab.db.artifacts_by_hash(h for h in hashes.values() if h)
+        for c in columns:
+            c["artifact"] = _ref_dict(refs[c["hash"]]) if c["hash"] in refs else None
+        return {"node": node, "output": output, "columns": columns}
 
     @app.get("/api/diff")
     def diff(a: str, b: str) -> dict[str, Any]:

@@ -142,7 +142,10 @@ class ServerMetadata(Metadata):
 
     # -- artifact names: anyone who runs may name; only the setter or an admin may change one --
     def _may_change_name(self, c: Caller | None, cur: dict | None) -> None:
-        if c is None or cur is None or c.is_admin or c.role == "admin" or cur.get("set_by") == c.label:
+        if c is None or cur is None or c.is_admin or c.role == "admin":
+            return
+        owner = cur.get("set_by_id")
+        if owner == c.user_id or (owner is None and cur.get("set_by") == c.label):  # pre-id rows: by label
             return
         raise Forbidden(
             f"name {cur['name']!r} was set by {cur.get('set_by') or 'someone else'}; an admin can change it"
@@ -151,9 +154,9 @@ class ServerMetadata(Metadata):
     def set_name(self, name: str, hash: str, **kw: Any) -> dict:
         c = need("runner")
         if c is not None:
-            kw["set_by"] = c.label  # never what the client says
+            kw["set_by"], kw["set_by_id"] = c.label, c.user_id  # never what the client says
             cur = super().name(name)
-            if cur is not None and (cur["hash"] != hash or kw.get("note") is not None):
+            if cur is not None and (cur["hash"] != hash or kw.get("note") is not None or kw.get("tags") is not None):
                 self._may_change_name(c, cur)
         return super().set_name(name, hash, **kw)
 
@@ -299,7 +302,10 @@ class ServerMetadata(Metadata):
         if c is not None:
             refs = [ArtifactRef(a["hash"], a["kind"], a["size"], a["filename"]) for a in bundle["artifacts"]]
             self._committed(refs)
-            bundle = {**bundle, "names": [{**n, "set_by": c.label} for n in bundle.get("names", [])]}
+            bundle = {
+                **bundle,
+                "names": [{**n, "set_by": c.label, "set_by_id": c.user_id} for n in bundle.get("names", [])],
+            }
         out = super().import_bundle(bundle)
         if c is not None:
             self.control.attribute(self.project, "experiment", out["created"], c)

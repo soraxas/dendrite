@@ -38,6 +38,18 @@ class NameConflict(ValueError):
         self.code = code
 
 
+def _add_name_columns(engine: sa.Engine) -> None:
+    """Labs made by pre-release builds have ``artifact_names`` without its later columns: add them.
+    (Both are nullable, so this is a plain ``ADD COLUMN`` on SQLite and Postgres alike.)"""
+    have = {c["name"] for c in sa.inspect(engine).get_columns("artifact_names")}
+    missing = [c for c in ("set_by_id", "tags") if c not in have]
+    if missing:
+        with engine.begin() as conn:
+            for col in missing:
+                kind = "VARCHAR(200)" if col == "set_by_id" else "JSON"
+                conn.execute(sa.text(f"ALTER TABLE artifact_names ADD COLUMN {col} {kind}"))
+
+
 def check_name(name: str) -> str:
     if not isinstance(name, str) or not NAME_RE.match(name):
         raise ValueError(
@@ -264,8 +276,10 @@ artifact_names = sa.Table(
     sa.Column("node", sa.String(200)),
     sa.Column("output", sa.String(200)),
     sa.Column("note", sa.Text),
-    sa.Column("set_by", sa.String(200)),
+    sa.Column("set_by", sa.String(200)),  # who, for display
     sa.Column("set_at", sa.Float, nullable=False),
+    sa.Column("set_by_id", sa.String(200)),  # who, for permissions (a server's user id)
+    sa.Column("tags", sa.JSON),  # free-form labels for finding names, e.g. ["paper", "ablation"]
 )
 
 # Earlier targets of names that were moved or removed (append-only).
@@ -357,6 +371,7 @@ class Metadata:
             self.engine = sa.create_engine(url, pool_pre_ping=True, **pool)
             self.reader = self.engine
         meta.create_all(self.engine)
+        _add_name_columns(self.engine)
 
     @contextmanager
     def tx(self) -> Iterator[sa.Connection]:
@@ -940,6 +955,7 @@ class Metadata:
 
     # -- artifact names (metadata only) ------------------------------------------------
     _NAME_COLS = ("name", "hash", "experiment_id", "node", "output", "note", "set_by", "set_at")
+    TAG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,49}$")
 
     def set_name(
         self,
@@ -951,12 +967,19 @@ class Metadata:
         output: str | None = None,
         note: str | None = None,
         set_by: str | None = None,
+        set_by_id: str | None = None,
+        tags: list[str] | None = None,
         move: bool = False,
         expect: str | None = None,
     ) -> dict:
         """Point ``name`` at ``hash``. Moving an existing name needs ``move``; ``expect`` is a
         compare-and-set on its current target. The outgoing target goes to the history."""
         check_name(name)
+        if tags is not None:
+            tags = sorted({t.strip() for t in tags if t and t.strip()})
+            bad = [t for t in tags if not self.TAG_RE.match(t)]
+            if bad:
+                raise ValueError(f"invalid tag {bad[0]!r}: use letters, digits, '.', '_' or '-'")
         now = time.time()
         with self.tx() as conn:
             if conn.execute(sa.select(artifacts.c.hash).where(artifacts.c.hash == hash)).first() is None:
@@ -965,7 +988,15 @@ class Metadata:
             if expect is not None and (cur is None or cur["hash"] != expect):
                 raise NameConflict(f"{name!r} no longer points at {expect[:12]}", "name_moved")
             values = dict(
-                hash=hash, experiment_id=experiment_id, node=node, output=output, note=note, set_by=set_by, set_at=now
+                hash=hash,
+                experiment_id=experiment_id,
+                node=node,
+                output=output,
+                note=note,
+                set_by=set_by,
+                set_by_id=set_by_id,
+                set_at=now,
+                tags=tags,
             )
             if cur is None:
                 try:
@@ -974,11 +1005,14 @@ class Metadata:
                 except IntegrityError:
                     raise NameConflict(f"{name!r} was just set by someone else", "name_moved") from None
             elif cur["hash"] == hash:
-                if note is not None:
-                    conn.execute(artifact_names.update().where(artifact_names.c.name == name).values(note=note))
+                changes = {k: v for k, v in (("note", note), ("tags", tags)) if v is not None}
+                if changes:
+                    conn.execute(artifact_names.update().where(artifact_names.c.name == name).values(**changes))
             else:
                 if not move:
                     raise NameConflict(f"{name!r} already points at {cur['hash'][:12]}; move it explicitly")
+                if tags is None:
+                    values["tags"] = cur.get("tags")  # moving keeps the tags unless new ones are given
                 self._end_name(conn, dict(cur), set_by, now, "moved")
                 res = conn.execute(
                     artifact_names.update()

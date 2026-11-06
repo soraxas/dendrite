@@ -8,6 +8,10 @@ import { ArtifactIcon } from "./ArtifactIcon";
 
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
 
+/** "paper, ablation #fig3" → ["paper", "ablation", "fig3"] */
+export const parseTags = (text: string): string[] =>
+  [...new Set(text.split(/[\s,]+/).map((t) => t.replace(/^#/, "").trim()))].filter(Boolean);
+
 /** A suggestion for a new name: ``<node>-<output>``, cleaned to the allowed characters. */
 export function suggestName(node?: string | null, output?: string | null, filename?: string | null): string {
   const raw = [node, output].filter(Boolean).join("-") || (filename ?? "").replace(/\.[^.]+$/, "") || "artifact";
@@ -43,6 +47,7 @@ export function NameControl({
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [note, setNote] = useState("");
+  const [tags, setTags] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [taken, setTaken] = useState<string | null>(null); // a name pointing elsewhere: offer to move it
   const [busy, setBusy] = useState(false);
@@ -51,6 +56,7 @@ export function NameControl({
   const start = () => {
     setName(suggestName(source?.node, source?.output, filename));
     setNote("");
+    setTags("");
     setError(null);
     setTaken(null);
     setOpen(true);
@@ -67,6 +73,8 @@ export function NameControl({
           ? { experiment: source.experiment, output: source.output }
           : { hash };
     if (note) req.note = note;
+    const tagList = parseTags(tags);
+    if (tagList.length) req.tags = tagList;
     if (move) {
       req.move = true;
       if (taken) req.expect = taken;
@@ -143,6 +151,12 @@ export function NameControl({
             value={note}
             onChange={(e) => setNote(e.target.value)}
           />
+          <input
+            aria-label="Tags"
+            placeholder="tags, comma-separated (optional): paper, ablation"
+            value={tags}
+            onChange={(e) => setTags(e.target.value)}
+          />
           <div className="name-actions">
             <button type="submit" className="primary" disabled={busy}>
               Save
@@ -202,9 +216,12 @@ export function NamesPage({
   const refresh = useRefreshNames();
   if (error) return <div className="pad err">{String(error)}</div>;
   if (!data) return <div className="pad muted">Loading…</div>;
-  const q = query.toLowerCase();
-  const rows = data.names.filter(
-    (n) => !q || [n.name, n.note, n.node, n.output, n.set_by].some((v) => v?.toLowerCase().includes(q)),
+  const q = query.toLowerCase().trim();
+  const tagOnly = q.startsWith("#") ? q.slice(1) : null;
+  const rows = data.names.filter((n) =>
+    tagOnly != null
+      ? (n.tags ?? []).some((t) => t.toLowerCase() === tagOnly)
+      : !q || [n.name, n.note, n.node, n.output, n.set_by, ...(n.tags ?? [])].some((v) => v?.toLowerCase().includes(q)),
   );
   if (!data.names.length)
     return (
@@ -221,7 +238,7 @@ export function NamesPage({
       <input
         type="search"
         className="item-search"
-        placeholder="Find a name, note, step or person"
+        placeholder="Find a name, note, step, person or #tag"
         aria-label="Find a name"
         value={query}
         onChange={(e) => setQuery(e.target.value)}
@@ -235,7 +252,7 @@ export function NamesPage({
             <th>artifact</th>
             <th className="num">size</th>
             <th>from</th>
-            <th>note</th>
+            <th>note · tags</th>
             <th>set</th>
             <th />
           </tr>
@@ -275,7 +292,18 @@ export function NamesPage({
                   <span className="muted">—</span>
                 )}
               </td>
-              <td>{n.note ?? ""}</td>
+              <td>
+                {n.note ?? ""}
+                {(n.tags ?? []).length > 0 && (
+                  <div className="tag-row">
+                    {(n.tags ?? []).map((t) => (
+                      <button key={t} type="button" className="tag" onClick={() => setQuery(`#${t}`)}>
+                        #{t}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </td>
               <td className="muted">
                 {fmtTime(n.set_at)}
                 {n.set_by ? ` · ${n.set_by}` : ""}
