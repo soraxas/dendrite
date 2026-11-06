@@ -50,6 +50,65 @@ def cmd_show(lab: Lab, args) -> None:
     print(_table(rows, ["node", "status", "execution", "time", "outputs", "metrics"]))
 
 
+def _node_execution(lab: Lab, exp_ref: str, node: str) -> str:
+    exp = lab.get(exp_ref)
+    for nr in lab.db.node_runs(exp.id):
+        if nr["node"] == node:
+            if not nr.get("execution_id"):
+                raise SystemExit(f"{node} has no execution yet (status {nr['status']})")
+            return nr["execution_id"]
+    raise SystemExit(f"experiment {exp.id} has no node {node!r}")
+
+
+def cmd_logs(lab: Lab, args) -> None:
+    exec_id = _node_execution(lab, args.experiment, args.node)
+    after = -1
+    while True:
+        chunks = lab.db.logs(exec_id, after=after)
+        for c in chunks:
+            if c["seq"] >= 0:
+                after = c["seq"]
+            elif args.follow:
+                continue  # the live tail of an oversized log; the final flush rewrites it in order
+            sys.stdout.write(c["text"])
+        sys.stdout.flush()
+        if not args.follow:
+            return
+        ex = lab.db.execution(exec_id)
+        if ex is None or ex["status"] != "running":
+            for c in lab.db.logs(exec_id, after=after):  # what the final flush wrote
+                if c["seq"] >= 0:
+                    sys.stdout.write(c["text"])
+            return
+        time.sleep(1.0)
+
+
+def cmd_env(lab: Lab, args) -> None:
+    env = lab.db.environment(_node_execution(lab, args.experiment, args.node))
+    if env is None:
+        raise SystemExit("no environment recorded for this execution")
+    if args.json:
+        print(json.dumps(env, indent=2))
+        return
+    git = env.get("git") or {}
+    if git:
+        state = "dirty" if git.get("dirty") else "clean"
+        print(f"git:      {git.get('commit') or '?'} ({git.get('branch') or '?'}, {state})  {git.get('remote') or ''}")
+    py = env.get("python") or {}
+    print(f"python:   {py.get('version')}  {py.get('executable')}")
+    system = env.get("system") or {}
+    print(f"system:   {system.get('platform')}  host={system.get('host')}")
+    for gpu in system.get("gpus") or []:
+        print(f"gpu:      {gpu}")
+    if env.get("uv_lock"):
+        print(f"uv.lock:  {env['uv_lock'][:16]}")
+    if env.get("dendrite_env"):
+        print(f"env:      {env['dendrite_env']}")
+    print(f"packages: {len(env.get('packages') or [])} (--json lists them)")
+    if git.get("diff"):
+        print("\nuncommitted diff:\n" + git["diff"])
+
+
 def cmd_diff(lab: Lab, args) -> None:
     d = lab.get(args.a).diff(lab.get(args.b))
     print(f"A={d['a']}  B={d['b']}")
@@ -572,6 +631,14 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("list", help="list experiments")
     s = sub.add_parser("show", help="show an experiment's nodes, outputs and metrics")
     s.add_argument("experiment")
+    s = sub.add_parser("logs", help="console output of a step (-f follows a running one)")
+    s.add_argument("experiment")
+    s.add_argument("node")
+    s.add_argument("-f", "--follow", action="store_true")
+    s = sub.add_parser("env", help="where a step ran: git state, diff, python, system, packages")
+    s.add_argument("experiment")
+    s.add_argument("node")
+    s.add_argument("--json", action="store_true")
     s = sub.add_parser("diff", help="compare two experiments")
     s.add_argument("a")
     s.add_argument("b")

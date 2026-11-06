@@ -15,6 +15,7 @@ from __future__ import annotations
 import functools
 import importlib.metadata
 import inspect
+import logging
 import os
 import shutil
 import sys
@@ -33,7 +34,7 @@ from typing import Any
 from prefect import get_run_logger, task
 from prefect.cache_policies import NO_CACHE
 
-from . import analysis, guard, runtime
+from . import analysis, guard, runtime, telemetry
 from .hashing import canonical_json, sha256_bytes, sha256_json
 from .store import PENDING, ArtifactRef
 
@@ -629,6 +630,7 @@ class ArtifactTask:
         )
         if self.source:
             db.record_source(exec_id, self.source)
+        _record_environment(lab, exec_id)
         db.upsert_node_run(exp_id, self.name, execution_id=exec_id)  # live progress finds it
         try:
             with _Heartbeat(db, signature, owner, self.lease_ttl) if lease else nullcontext():
@@ -669,7 +671,9 @@ class ArtifactTask:
                 kwargs[pname] = _map_refs(call[pname], lab.store.load)
         wd = lab.home / "tmp" / exec_id
         wd.mkdir(parents=True, exist_ok=True)
-        ctx = runtime.ExecContext(workdir=wd, execution_id=exec_id, db=lab.db)
+        tel = telemetry.Telemetry(lab.db, exec_id)
+        ctx = runtime.ExecContext(workdir=wd, execution_id=exec_id, db=lab.db, telemetry=tel, store=lab.store)
+        telemetry.install()
         token = runtime._exec.set(ctx)
         settings = lab.settings
         allowed = [wd, lab.home, lab.store.cache_dir, getattr(lab.store, "root", lab.home)]
@@ -677,6 +681,9 @@ class ArtifactTask:
         try:
             try:
                 result = self.fn(**kwargs)
+            except BaseException:
+                tel.write("stderr", traceback.format_exc(limit=20))
+                raise
             finally:
                 watched = guard.stop(reads)
             if watched and watched.violation:  # even if the step swallowed the exception
@@ -691,9 +698,19 @@ class ArtifactTask:
                 else:
                     refs[name] = lab.store.put_value(value)
         finally:
+            tel.flush(final=True)
             runtime._exec.reset(token)
             shutil.rmtree(wd, ignore_errors=True)
-        return refs, ctx.metrics
+        return refs, tel.unsent_metrics
+
+
+def _record_environment(lab, exec_id: str) -> None:
+    """Snapshot where this execution runs (display only; failures never fail the step)."""
+    try:
+        snap = telemetry.snapshot(lab.settings.project_root, os.environ.get("DENDRITE_ENV", ""))
+        lab.db.record_environment(exec_id, telemetry.env_hash(snap), snap)
+    except Exception as e:  # pragma: no cover - depends on the environment
+        logging.getLogger(__name__).warning("could not record the environment of execution %s: %r", exec_id, e)
 
 
 _STEPS: dict[tuple[str, str], ArtifactTask] = {}  # (module, name) -> latest definition

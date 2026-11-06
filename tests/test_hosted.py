@@ -103,6 +103,22 @@ def test_roles_gate_writes(hosted, tmp_path, source):
         lab.db.dispose()
 
 
+def test_only_the_executions_owner_writes_its_telemetry(hosted, tmp_path, source):
+    project = hosted.project()
+    owner_token = hosted.user("tel-owner@t.io", project, "runner")
+    other_token = hosted.user("tel-other@t.io", project, "runner")
+    owner = hosted.lab(tmp_path / "o", project, owner_token)
+    exp = owner.create(toy.toy, inputs={"src": source}).run()
+    exec_id = {n["node"]: n["execution_id"] for n in exp.node_runs()}["train"]
+    chunk = {"seq": 99, "stream": "stdout", "t": 0.0, "text": "forged"}
+    assert rpc(hosted, other_token, project, "write_telemetry", exec_id, logs=[chunk]).status_code == 403
+    assert rpc(hosted, other_token, project, "record_environment", exec_id, "h", {}).status_code == 403
+    assert rpc(hosted, owner_token, project, "write_telemetry", exec_id, logs=[chunk]).status_code == 200
+    assert "forged" in "".join(c["text"] for c in owner.db.logs(exec_id))
+    assert owner.db.environment(exec_id)["python"]  # recorded by the run itself
+    owner.db.dispose()
+
+
 def test_unlisted_methods_and_outsiders_are_refused(hosted):
     project = hosted.project()
     assert rpc(hosted, hosted.admin_token, project, "tx").status_code == 404

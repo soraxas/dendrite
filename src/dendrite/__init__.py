@@ -17,9 +17,10 @@ except PackageNotFoundError:  # running from a source tree without installing
     __version__ = "0.0.0"
 
 from .experiment import Experiment, Lab, NotADraft, Pipeline, pipeline
-from .runtime import load, log_metric, progress, stage, workdir
+from .runtime import load, log_image, log_media, log_metric, progress, stage, workdir
 from .store import ArtifactRef, ArtifactStore, FsspecStore, LocalStore
 from .task import ArtifactTask, artifact_task
+from .telemetry import run
 
 __all__ = [
     "ArtifactRef",
@@ -33,9 +34,12 @@ __all__ = [
     "Pipeline",
     "artifact_task",
     "load",
+    "log_image",
+    "log_media",
     "log_metric",
     "pipeline",
     "progress",
+    "run",
     "stage",
     "workdir",
 ]

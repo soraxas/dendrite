@@ -57,6 +57,8 @@ class ExecContext:
     metrics: list[tuple[str, int, float]] = field(default_factory=list)
     db: Any = None
     last_progress: float = 0.0
+    telemetry: Any = None  # telemetry.Telemetry: console log and live metrics
+    store: Any = None  # for logged samples
 
 
 # Prefect may run tasks on worker threads, so runs are looked up by id rather than via a
@@ -241,3 +243,47 @@ def log_metric(key: str, value: float, step: int = 0) -> None:
     if ctx is None:
         raise RuntimeError("log_metric() is only available inside an executing artifact task")
     ctx.metrics.append((key, int(step), float(value)))
+    if ctx.telemetry is not None:
+        ctx.telemetry.metric(key, int(step), float(value))
+
+
+def _sample(kind: str, title: str, path: Path, step: int, series: str | None) -> None:
+    from . import telemetry
+
+    ctx = _exec.get()
+    if ctx is None:
+        raise RuntimeError(f"{kind}() is only available inside an executing artifact task")
+    if ctx.store is None or ctx.db is None:
+        return
+    ref = ctx.store.put_path(path)
+    ctx.db.record_sample(
+        ctx.execution_id,
+        title=title,
+        series=series if series is not None else title,
+        step=int(step),
+        ref=ref,
+        history=telemetry.sample_history(),
+    )
+
+
+def log_image(title: str, image: Any, step: int = 0, series: str | None = None) -> None:
+    """Record an intermediate image (a path, PIL image or numpy array) for the UI's Samples tab.
+
+    Samples are display only: stored in the artifact store, never outputs or part of a
+    signature. The latest ``DENDRITE_SAMPLE_HISTORY`` steps per title and series are kept.
+    """
+    from . import telemetry
+
+    ctx = _exec.get()
+    if ctx is None:
+        raise RuntimeError("log_image() is only available inside an executing artifact task")
+    stem = f"{title}-{series or ''}-{int(step)}"
+    _sample("log_image", title, telemetry.image_file(image, ctx.workdir, stem), step, series)
+
+
+def log_media(title: str, path: str | os.PathLike, step: int = 0, series: str | None = None) -> None:
+    """Record any file (video, audio, a point cloud…) as a sample, like ``log_image``."""
+    p = Path(path)
+    if not p.is_file():
+        raise FileNotFoundError(p)
+    _sample("log_media", title, p, step, series)

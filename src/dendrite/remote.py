@@ -280,6 +280,7 @@ class HttpMetadata:
         self.client = client
         self._progress: dict[str, tuple] = {}
         self._queued: list[tuple[tuple, dict]] = []
+        self._telemetry: list[tuple[str, dict]] = []
         self._plock = threading.Lock()
         self._flock = threading.RLock()
         self._flusher: threading.Thread | None = None
@@ -305,6 +306,14 @@ class HttpMetadata:
                 self._flusher = threading.Thread(target=self._flush_loop, daemon=True, name="dendrite-progress")
                 self._flusher.start()
 
+    # Console chunks and live metrics: batched like progress, in order, flushed before any other call.
+    def write_telemetry(self, exec_id: str, **kw: Any) -> None:
+        with self._plock:
+            self._telemetry.append((exec_id, kw))
+            if self._flusher is None:
+                self._flusher = threading.Thread(target=self._flush_loop, daemon=True, name="dendrite-progress")
+                self._flusher.start()
+
     # A pipeline body enqueues every submitted step at once; send those "queued" rows as one
     # batch. Any other call flushes them first, so this client always reads its own writes.
     def upsert_node_run(self, exp_id: str, node: str, **values: Any) -> None:
@@ -322,7 +331,9 @@ class HttpMetadata:
             with self._plock:
                 progress, self._progress = list(self._progress.values()), {}
                 queued, self._queued = self._queued, []
+                tel, self._telemetry = self._telemetry, []
             calls = [("upsert_node_run", args, kw) for args, kw in queued]
+            calls += [("write_telemetry", (exec_id,), kw) for exec_id, kw in tel]
             calls += [("set_progress", args, {}) for args in progress]
             for i in range(0, len(calls), 500):
                 self.client.rpc_batch(calls[i : i + 500])

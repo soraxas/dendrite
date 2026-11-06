@@ -620,6 +620,49 @@ def create_app(
         ex["source"] = {**src, "display": _display_path(src["file"])} if src else None
         return ex
 
+    # -- run telemetry (display only) -------------------------------------------------
+    def _exec_or_404(exec_id: str) -> dict[str, Any]:
+        ex = lab.db.execution(exec_id)
+        if ex is None:
+            raise HTTPException(404, f"no execution {exec_id!r}")
+        return ex
+
+    @app.get("/api/executions/{exec_id}/logs")
+    def execution_logs(exec_id: str, after: int = -1, limit: int = 2000) -> dict[str, Any]:
+        ex = _exec_or_404(exec_id)
+        chunks = lab.db.logs(exec_id, after=after, limit=max(1, min(limit, 5000)))
+        return {"chunks": chunks, "running": ex["status"] == "running", "status": ex["status"]}
+
+    @app.get("/api/executions/{exec_id}/scalars")
+    def execution_scalars(exec_id: str) -> dict[str, Any]:
+        _exec_or_404(exec_id)
+        return {"points": lab.db.scalars([exec_id]).get(exec_id, [])}
+
+    @app.get("/api/executions/{exec_id}/samples")
+    def execution_samples(exec_id: str) -> dict[str, Any]:
+        _exec_or_404(exec_id)
+        return {"samples": lab.db.samples(exec_id)}
+
+    @app.get("/api/executions/{exec_id}/environment")
+    def execution_environment(exec_id: str) -> dict[str, Any]:
+        _exec_or_404(exec_id)
+        return {"environment": lab.db.environment(exec_id)}
+
+    @app.get("/api/experiments/{exp_id}/scalars")
+    def experiment_scalars(exp_id: str) -> dict[str, Any]:
+        exp = lab.db.experiment(exp_id)
+        if exp is None:
+            raise HTTPException(404, f"no experiment {exp_id!r}")
+        runs = [nr for nr in lab.db.node_runs(exp["id"]) if nr.get("execution_id")]
+        points = lab.db.scalars(nr["execution_id"] for nr in runs)
+        return {
+            "nodes": [
+                {"node": nr["node"], "execution_id": nr["execution_id"], "points": points.get(nr["execution_id"], [])}
+                for nr in runs
+                if points.get(nr["execution_id"])
+            ]
+        }
+
     @app.get("/api/sources/{source_hash}")
     def source(source_hash: str) -> dict[str, Any]:
         snap = lab.db.snapshot(source_hash)

@@ -47,6 +47,11 @@ READS = {
     "producer_of",
     "ancestor_executions",
     "descendant_executions",
+    "logs",
+    "scalars",
+    "samples",
+    "sample_hashes",
+    "environment",
 }
 WRITES = {
     "register_artifacts",
@@ -70,6 +75,9 @@ WRITES = {
     "renew_lease",
     "release_lease",
     "import_bundle",
+    "write_telemetry",
+    "record_sample",
+    "record_environment",
 }
 ADMIN = {"set_keep"}
 REMOTE = {**dict.fromkeys(READS, "viewer"), **dict.fromkeys(WRITES, "runner"), **dict.fromkeys(ADMIN, "admin")}

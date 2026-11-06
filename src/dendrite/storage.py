@@ -40,6 +40,7 @@ class _Graph:
     experiments: list[dict]
     node_runs: list[dict]
     executions: list[dict]
+    samples: list[tuple[str, str, str | None]] = field(default_factory=list)  # (execution, hash, experiment)
     manifests: dict[str, list[str]] = field(default_factory=dict)  # dir hash -> member hashes
 
     def size(self, h: str) -> int:
@@ -65,6 +66,7 @@ class Storage:
             experiments=db.experiments(),
             node_runs=db.all_node_runs(),
             executions=db.successful_executions(),
+            samples=db.sample_hashes(),
         )
         g.objects = {h: (size, mtime) for h, size, mtime in self.lab.store.iter_objects()}
         return g
@@ -100,6 +102,15 @@ class Storage:
         for nr in g.node_runs:
             if nr["experiment_id"] in roots and nr["execution_id"] not in skip:
                 roots[nr["experiment_id"]].update((nr["outputs"] or {}).values())
+        # Logged samples live as long as an experiment ran or reuses their execution.
+        users: dict[str, set[str]] = {}
+        for nr in g.node_runs:
+            if nr["execution_id"]:
+                users.setdefault(nr["execution_id"], set()).add(nr["experiment_id"])
+        for eid, h, exp in g.samples:
+            for owner in users.get(eid, set()) | ({exp} if exp else set()):
+                if owner in roots:
+                    roots[owner].add(h)
         return roots
 
     def _last_use(self, g: _Graph) -> dict[str, float]:

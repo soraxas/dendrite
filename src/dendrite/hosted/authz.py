@@ -215,6 +215,19 @@ class ServerMetadata(Metadata):
         self._own_execution(exec_id)
         super().record_source(exec_id, snap)
 
+    def write_telemetry(self, exec_id: str, **kw: Any) -> None:
+        self._own_execution(exec_id)
+        super().write_telemetry(exec_id, **kw)
+
+    def record_sample(self, exec_id: str, *, ref: ArtifactRef, **kw: Any) -> None:
+        if self._own("execution", [exec_id]) is not None:
+            self._committed([ref])
+        super().record_sample(exec_id, ref=ref, **kw)
+
+    def record_environment(self, exec_id: str, env_hash: str, data: dict[str, Any]) -> None:
+        self._own_execution(exec_id)
+        super().record_environment(exec_id, env_hash, data)
+
     def fail_execution(self, exec_id: str, error: str) -> None:
         self._own_execution(exec_id)
         super().fail_execution(exec_id, error)

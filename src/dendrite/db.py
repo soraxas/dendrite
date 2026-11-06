@@ -169,6 +169,52 @@ execution_progress = sa.Table(
     sa.Column("updated_at", sa.Float, nullable=False),
 )
 
+# Console output a step wrote (stdout, stderr, logging), in chunks: display only. ``seq`` -1 is
+# the rolling tail of a log past its size limit, overwritten while it runs.
+execution_logs = sa.Table(
+    "execution_logs",
+    meta,
+    sa.Column("execution_id", sa.String(32), sa.ForeignKey("executions.id"), primary_key=True),
+    sa.Column("seq", sa.Integer, primary_key=True),
+    sa.Column("stream", sa.String(10), nullable=False),  # stdout | stderr | log | marker
+    sa.Column("t", sa.Float, nullable=False),
+    sa.Column("text", sa.Text, nullable=False),
+)
+
+# Intermediate images/media a step logged (`log_image`, `log_media`): artifacts, never outputs.
+execution_samples = sa.Table(
+    "execution_samples",
+    meta,
+    sa.Column("execution_id", sa.String(32), sa.ForeignKey("executions.id"), primary_key=True),
+    sa.Column("title", sa.String(200), primary_key=True),
+    sa.Column("series", sa.String(200), primary_key=True),
+    sa.Column("step", sa.Integer, primary_key=True),
+    sa.Column("hash", sa.String(64), nullable=False, index=True),
+    sa.Column("t", sa.Float, nullable=False),
+)
+
+# Where an execution ran (git, packages, system), stored once per distinct snapshot.
+environments = sa.Table(
+    "environments",
+    meta,
+    sa.Column("hash", sa.String(64), primary_key=True),
+    sa.Column("data", sa.JSON, nullable=False),
+)
+execution_environments = sa.Table(
+    "execution_environments",
+    meta,
+    sa.Column("execution_id", sa.String(32), sa.ForeignKey("executions.id"), primary_key=True),
+    sa.Column("env_hash", sa.String(64), nullable=False),
+)
+
+# When an execution last wrote telemetry, so pushed updates notice live logs and metrics.
+execution_activity = sa.Table(
+    "execution_activity",
+    meta,
+    sa.Column("execution_id", sa.String(32), sa.ForeignKey("executions.id"), primary_key=True),
+    sa.Column("updated_at", sa.Float, nullable=False),
+)
+
 # The stage path (`dendrite.stage`) each node was called in, per experiment: display only.
 node_stages = sa.Table(
     "node_stages",
@@ -493,12 +539,17 @@ class Metadata:
                 .join(execution_progress, execution_progress.c.execution_id == node_runs.c.execution_id)
                 .group_by(node_runs.c.experiment_id)
             ).all()
+            act = conn.execute(
+                sa.select(node_runs.c.experiment_id, sa.func.max(execution_activity.c.updated_at))
+                .join(execution_activity, execution_activity.c.execution_id == node_runs.c.execution_id)
+                .group_by(node_runs.c.experiment_id)
+            ).all()
         per: dict[str, list] = {}
         for row in exps:
             per.setdefault(row[0], []).append(tuple(row))
         for row in runs:
             per.setdefault(row[0], []).append(tuple(row))
-        for row in prog:
+        for row in (*prog, *act):
             per.setdefault(row[0], []).append(tuple(row))
         tree = repr(sorted((tuple(r) for r in exps), key=repr)) + repr(sorted(map(tuple, flags)))
         return tree, {k: repr(sorted(v, key=repr)) for k, v in per.items()}
@@ -753,11 +804,7 @@ class Metadata:
                         execution_id=exec_id, name=name, position=pos, artifact_hash=ref.hash
                     )
                 )
-            latest: dict[tuple[str, int], float] = {}
-            for key, step, value in metric_values:
-                latest[(key, step)] = value
-            for (key, step), value in latest.items():
-                conn.execute(metrics.insert().values(execution_id=exec_id, key=key, step=step, value=value))
+            self._write_metrics(conn, exec_id, metric_values)
             conn.execute(
                 executions.update().where(executions.c.id == exec_id).values(status="success", finished_at=time.time())
             )
@@ -811,6 +858,190 @@ class Metadata:
                 .first()
             )
         return dict(row) if row else None
+
+    # -- telemetry (display only: never part of a signature) ---------------------------
+    @staticmethod
+    def _write_metrics(conn: sa.Connection, exec_id: str, values: Iterable[tuple[str, int, float]]) -> None:
+        """Upsert metric points; a repeated (key, step) keeps the last value."""
+        latest: dict[tuple[str, int], float] = {}
+        for key, step, value in values:
+            latest[(key, step)] = value
+        by_key: dict[str, list[int]] = {}
+        for key, step in latest:
+            by_key.setdefault(key, []).append(step)
+        for key, steps in by_key.items():
+            for i in range(0, len(steps), 500):
+                conn.execute(
+                    metrics.delete().where(
+                        metrics.c.execution_id == exec_id, metrics.c.key == key, metrics.c.step.in_(steps[i : i + 500])
+                    )
+                )
+        if latest:
+            conn.execute(
+                metrics.insert(),
+                [{"execution_id": exec_id, "key": k, "step": s, "value": v} for (k, s), v in latest.items()],
+            )
+
+    @staticmethod
+    def _touch(conn: sa.Connection, exec_id: str) -> None:
+        now = time.time()
+        res = conn.execute(
+            execution_activity.update().where(execution_activity.c.execution_id == exec_id).values(updated_at=now)
+        )
+        if res.rowcount == 0:
+            conn.execute(execution_activity.insert().values(execution_id=exec_id, updated_at=now))
+
+    def write_telemetry(
+        self,
+        exec_id: str,
+        *,
+        logs: list[dict] | None = None,
+        tail: str | None = None,
+        metric_values: list[tuple[str, int, float]] | None = None,
+    ) -> None:
+        """Append log chunks (``{seq, stream, t, text}``), replace the rolling tail, upsert metrics."""
+        if not (logs or tail is not None or metric_values):
+            return
+        with self.tx() as conn:
+            if logs:
+                conn.execute(execution_logs.insert(), [{"execution_id": exec_id, **c} for c in logs])
+            if tail is not None:
+                conn.execute(
+                    execution_logs.delete().where(execution_logs.c.execution_id == exec_id, execution_logs.c.seq == -1)
+                )
+                if tail:
+                    conn.execute(
+                        execution_logs.insert().values(
+                            execution_id=exec_id, seq=-1, stream="tail", t=time.time(), text=tail
+                        )
+                    )
+            if metric_values:
+                self._write_metrics(conn, exec_id, metric_values)
+            self._touch(conn, exec_id)
+
+    def logs(self, exec_id: str, after: int = -1, limit: int = 2000) -> list[dict]:
+        """Log chunks with ``seq > after`` in order; the rolling tail (seq -1) comes last, if any."""
+        with self.ro() as conn:
+            rows = (
+                conn.execute(
+                    sa.select(execution_logs.c.seq, execution_logs.c.stream, execution_logs.c.t, execution_logs.c.text)
+                    .where(execution_logs.c.execution_id == exec_id, execution_logs.c.seq > after)
+                    .order_by(execution_logs.c.seq)
+                    .limit(limit)
+                )
+                .mappings()
+                .all()
+            )
+            tail = (
+                conn.execute(
+                    sa.select(
+                        execution_logs.c.seq, execution_logs.c.stream, execution_logs.c.t, execution_logs.c.text
+                    ).where(execution_logs.c.execution_id == exec_id, execution_logs.c.seq == -1)
+                )
+                .mappings()
+                .first()
+            )
+        out = [dict(r) for r in rows]
+        if tail and len(out) < limit:
+            out.append(dict(tail))
+        return out
+
+    def scalars(self, exec_ids: Iterable[str]) -> dict[str, list[dict]]:
+        """Every metric point per execution: ``{exec_id: [{key, step, value}]}`` ordered by key, step."""
+        ids = [i for i in set(exec_ids) if i]
+        if not ids:
+            return {}
+        with self.ro() as conn:
+            rows = conn.execute(
+                sa.select(metrics.c.execution_id, metrics.c.key, metrics.c.step, metrics.c.value)
+                .where(metrics.c.execution_id.in_(ids))
+                .order_by(metrics.c.key, metrics.c.step)
+            ).all()
+        out: dict[str, list[dict]] = {i: [] for i in ids}
+        for eid, key, step, value in rows:
+            out[eid].append({"key": key, "step": step, "value": value})
+        return out
+
+    def record_sample(
+        self, exec_id: str, *, title: str, series: str, step: int, ref: ArtifactRef, history: int
+    ) -> None:
+        """Record a logged sample (its blob already stored) and drop steps beyond ``history``."""
+        with self.tx() as conn:
+            self._register_artifacts(conn, [ref])
+            key = (
+                execution_samples.c.execution_id == exec_id,
+                execution_samples.c.title == title,
+                execution_samples.c.series == series,
+            )
+            conn.execute(execution_samples.delete().where(*key, execution_samples.c.step == step))
+            conn.execute(
+                execution_samples.insert().values(
+                    execution_id=exec_id, title=title, series=series, step=step, hash=ref.hash, t=time.time()
+                )
+            )
+            if history > 0:
+                keep = (
+                    sa.select(execution_samples.c.step)
+                    .where(*key)
+                    .order_by(execution_samples.c.step.desc())
+                    .limit(history)
+                    .subquery()
+                )
+                conn.execute(execution_samples.delete().where(*key, execution_samples.c.step.not_in(sa.select(keep))))
+            self._touch(conn, exec_id)
+
+    def samples(self, exec_id: str) -> list[dict]:
+        with self.ro() as conn:
+            rows = (
+                conn.execute(
+                    sa.select(
+                        execution_samples.c.title,
+                        execution_samples.c.series,
+                        execution_samples.c.step,
+                        execution_samples.c.hash,
+                        execution_samples.c.t,
+                        artifacts.c.kind,
+                        artifacts.c.size,
+                        artifacts.c.filename,
+                    )
+                    .join(artifacts, artifacts.c.hash == execution_samples.c.hash, isouter=True)
+                    .where(execution_samples.c.execution_id == exec_id)
+                    .order_by(execution_samples.c.title, execution_samples.c.series, execution_samples.c.step)
+                )
+                .mappings()
+                .all()
+            )
+        return [dict(r) for r in rows]
+
+    def sample_hashes(self) -> list[tuple[str, str, str | None]]:
+        """``(execution_id, hash, experiment that ran it)`` of every logged sample (storage accounting)."""
+        with self.ro() as conn:
+            rows = conn.execute(
+                sa.select(execution_samples.c.execution_id, execution_samples.c.hash, executions.c.experiment_id).join(
+                    executions, executions.c.id == execution_samples.c.execution_id
+                )
+            ).all()
+        return [tuple(r) for r in rows]
+
+    def record_environment(self, exec_id: str, env_hash: str, data: dict[str, Any]) -> None:
+        with self.tx() as conn:
+            if conn.execute(sa.select(environments.c.hash).where(environments.c.hash == env_hash)).first() is None:
+                try:
+                    with conn.begin_nested():
+                        conn.execute(environments.insert().values(hash=env_hash, data=data))
+                except IntegrityError:  # stored concurrently by another step
+                    pass
+            conn.execute(execution_environments.delete().where(execution_environments.c.execution_id == exec_id))
+            conn.execute(execution_environments.insert().values(execution_id=exec_id, env_hash=env_hash))
+
+    def environment(self, exec_id: str) -> dict | None:
+        with self.ro() as conn:
+            row = conn.execute(
+                sa.select(environments.c.hash, environments.c.data)
+                .join(execution_environments, execution_environments.c.env_hash == environments.c.hash)
+                .where(execution_environments.c.execution_id == exec_id)
+            ).first()
+        return {"hash": row[0], **row[1]} if row else None
 
     def fail_execution(self, exec_id: str, error: str) -> None:
         with self.tx() as conn:
