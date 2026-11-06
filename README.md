@@ -9,6 +9,8 @@ You write a pipeline as ordinary Python functions. dendrite runs it through Pref
 - **Never computes the same thing twice.** Every step execution gets a signature from its code, inputs and the params it uses. If any experiment has already run that signature, its outputs are reused.
 - **Makes forking cheap.** Fork an experiment, change one parameter, and only the steps that depend on it run again. You can also *pin* a step to an earlier result instead of recomputing it.
 - **Records where every artifact came from**, across experiments: which step made it, from what inputs, and what used it.
+- **Records how every run went:** console output, live metric charts, intermediate images and the environment, kept with the result, so a reused result still has its logs.
+- **Lets you name and compare results:** call the good one `@best-splats` and use it anywhere, or put one output side by side across forks.
 - **Shows it all live** in a web UI: the pipeline graph, progress, lineage, diffs, drafts you can edit before running, and storage management.
 
 It's built for work like 3D reconstruction, Gaussian splatting and ML training, where steps take minutes to hours and you mostly try one change at a time.
@@ -52,7 +54,7 @@ more.load("top")
 from pathlib import Path
 from typing import NamedTuple
 import dendrite
-from dendrite import artifact_task, load, log_metric, pipeline, progress, stage, workdir
+from dendrite import artifact_task, load, log_image, log_metric, pipeline, progress, stage, workdir
 
 class Sfm(NamedTuple):                 # names the step's outputs
     cameras: Path
@@ -67,14 +69,17 @@ def extract_frames(video: Path, fps: int = 2) -> Path:
 
 @artifact_task
 def colmap(frames: Path, matcher: str = "sequential") -> Sfm:
-    ...
+    dendrite.run(["colmap", "automatic_reconstructor", ...])   # its output streams into the step's log
     return Sfm(cameras_json, sparse_dir)
 
 @artifact_task
 def train_splats(frames: Path, cameras: Path, sparse: Path, iterations: int = 30_000, seed: int = 42) -> Path:
     for step in range(iterations):
         ...
+        log_metric("loss/train", loss, step=step)      # live charts; "title/series" share a chart
         progress(step + 1, iterations, "iterations")   # live on the step's card in the UI
+        if step % 1000 == 0:
+            log_image("render", render, step=step)     # intermediate renders, with a step slider
     log_metric("psnr", 31.2)
     return workdir() / "splats.ply"
 
@@ -93,6 +98,7 @@ c = b.fork({"colmap.matcher": "sequential"}, pin={"colmap": a}).run()   # COLMAP
 
 a.diff(b)                               # params, shared executions, metric deltas
 lab.lineage(b.output("train_splats"))   # where the model came from, and what used it
+lab.name("best-splats", f"{b.id}:train_splats")   # then lab.load("@best-splats"), or use it as an input
 ```
 
 `examples/recon.py` is a runnable pipeline in this style.
@@ -171,34 +177,11 @@ lab.load("@best-splats")                                   # by name
 lab.create(recon, inputs={"video": "@raw-video"})           # inputs and pins accept names too
 ```
 
-- **Stable experiments.** An experiment records the artifact a name pointed at when it was created, so moving the name later never changes it.
-- **History.** Moving a name needs `move=True` (`--force` on the CLI), and keeps where it pointed before.
-- **Kept.** Clean-up never deletes a named artifact; removing the name makes it collectable again.
-- **Metadata only.** Naming never changes a signature.
-- **In the UI** press ☆ Name… on any artifact; the Names tab lists them all. On a server, names are per project, record who set them, and only the setter or an admin can move them.
+Experiments record the artifact a name pointed at, so moving a name later never changes them. Named artifacts are never cleaned up, and naming never changes a signature. See **[Finding and reusing results](docs/finding-results.md)** for targets, moving and history, the Artifacts tab, Compare, and names on a team server.
 
 ### Logs, charts, samples and environment
 
-Every step's run is recorded centrally, so you can watch and compare runs without hunting through terminals:
-
-```python
-@artifact_task(outputs=["model"])
-def train(frames: Path, iterations: int = 30_000):
-    dendrite.run(["colmap", "mapper", ...])            # the tool's output streams into the step's log
-    for step in range(iterations):
-        log_metric("loss/train", train_loss, step=step)  # "title/series": one chart, one line per series
-        log_metric("loss/val", val_loss, step=step)
-        if step % 1000 == 0:
-            print(f"step {step}")                      # print and logging are captured too
-            log_image("render", frame, step=step)       # a path, PIL image or numpy array
-    ...
-```
-
-- **Console:** `print`, `sys.stdout`/`sys.stderr` and `logging` inside a step are captured, and still shown in the terminal. Subprocesses go through `dendrite.run`. Logs are capped at `DENDRITE_LOG_MAX`, keeping the beginning and the end.
-- **Scalars:** `log_metric` is written while the step runs, so charts update live.
-- **Samples:** `log_image` and `log_media` keep intermediate renders, videos or meshes, the latest `DENDRITE_SAMPLE_HISTORY` steps per title.
-- **Environment:** the git commit, branch and uncommitted diff, Python, system, GPUs and installed packages.
-- **Display only, and reused with results.** None of it changes a signature, and a step reused from another experiment shows the logs and charts of the run that computed it.
+Inside a step, `print`, `logging` and subprocesses started with `dendrite.run` are captured; `log_metric` draws live charts; `log_image` and `log_media` keep intermediate results; and dendrite records the git state, packages and machine each step ran on. It's all display only: it never changes a signature, and a reused result keeps the logs of the run that made it. See **[Watching runs](docs/telemetry.md)** for what is and isn't captured, limits, the UI tabs, `dendrite logs` and the HTTP API.
 
 ## The UI
 
@@ -250,6 +233,13 @@ The built UI ships inside the wheel, so using dendrite never needs Node.js.
 | `dendrite du` · `rm EXP` · `keep EXP` · `evict EXEC` · `gc` · `clean` | storage; deletions preview unless `--yes` |
 
 Each run also publishes a Prefect markdown artifact, `dendrite-<exp id>`, so lineage shows in the Prefect UI too.
+
+## Guides
+
+- [Watching runs: logs, charts, samples and environment](docs/telemetry.md)
+- [Finding and reusing results: names, the Artifacts tab and Compare](docs/finding-results.md)
+- [Deploying a dendrite server](docs/deploying.md)
+- [Running a team server on one machine](examples/team/README.md)
 
 ## Sharing results with a team
 
