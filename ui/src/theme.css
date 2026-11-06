@@ -2005,3 +2005,79 @@ button.top-link.active {
   background: var(--chip);
   border-radius: 6px;
 }
+
+/* Artifact names */
+.names {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin-top: 10px;
+}
+.name-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 12px;
+  color: var(--pinned);
+  background: var(--pinned-bg);
+}
+.name-chip button.link {
+  border: 0;
+  background: none;
+  padding: 0 2px;
+  color: inherit;
+  cursor: pointer;
+}
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.name-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+.name-form label {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.name-form input {
+  flex: 1;
+  font: inherit;
+  color: inherit;
+  background: var(--bg);
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  padding: 4px 8px;
+}
+.name-actions {
+  display: flex;
+  gap: 6px;
+}
+.names-table td.thumb {
+  width: 48px;
+}
+.names-table td.thumb img {
+  width: 44px;
+  height: 33px;
+  object-fit: cover;
+  border-radius: 3px;
+  border: 1px solid var(--line);
+}
+.name-history {
+  margin: 4px 0 0;
+  padding-left: 16px;
+  font-size: 12px;
+}
+.names-table td:nth-child(2),
+.names-table td:nth-child(4) {
+  white-space: nowrap;
+}

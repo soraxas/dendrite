@@ -19,6 +19,17 @@ from .config import Settings
 from .db import Metadata
 from .store import PENDING, ArtifactRef, ArtifactStore, PlanIncomplete, open_store
 
+
+def _whoami() -> str | None:
+    """Who sets a name in a local lab (a hosted server records the signed-in user instead)."""
+    try:
+        import getpass
+
+        return getpass.getuser()
+    except Exception:  # pragma: no cover - no user database entry
+        return None
+
+
 _PIPELINES: dict[str, Pipeline] = {}
 _MISSING = object()
 
@@ -209,17 +220,79 @@ class Lab:
 
     # -- artifacts -----------------------------------------------------------------
     def ingest(self, source: str | os.PathLike | ArtifactRef) -> ArtifactRef:
+        """Store a file or directory as an artifact. A string ``@name`` is a named artifact, never a
+        path; pass ``Path("@name")`` for a file whose name starts with ``@``."""
+        if isinstance(source, str) and source.startswith("@"):
+            return self.artifact(source)
         ref = source if isinstance(source, ArtifactRef) else self.store.put_path(Path(source))
         self.db.register_artifacts([ref])
         return ref
 
     def artifact(self, key: str | ArtifactRef) -> ArtifactRef:
+        """An artifact by ref, hash, unique hash prefix or ``@name``."""
         if isinstance(key, ArtifactRef):
             return key
+        if key.startswith("@"):
+            row = self.db.name(key[1:])
+            ref = self.db.artifact(row["hash"]) if row else None
+            if ref is None:
+                raise KeyError(f"no artifact named {key!r} (for a file whose name starts with '@', pass Path(...))")
+            return ref
         ref = self.db.artifact(key) or self.db.resolve_artifact_prefix(key)
         if ref is None:
             raise KeyError(f"unknown or ambiguous artifact {key!r}")
         return ref
+
+    # -- names -------------------------------------------------------------------
+    def resolve_target(self, target: str | ArtifactRef) -> tuple[ArtifactRef, dict[str, str | None]]:
+        """What a name would point at, and where it came from.
+
+        ``target`` is ``<exp>:<node>.<output>``, ``<exp>:<node>`` (a single-output node),
+        ``<exp>:<input>``, ``@name``, a hash or a unique hash prefix, or an ``ArtifactRef``.
+        """
+        none: dict[str, str | None] = {"experiment_id": None, "node": None, "output": None}
+        if isinstance(target, ArtifactRef) or ":" not in target:
+            return self.artifact(target), none
+        exp_ref, _, rest = target.partition(":")
+        exp = self.get(exp_ref)
+        if rest in exp.inputs:
+            return self.artifact(exp.inputs[rest]), {"experiment_id": exp.id, "node": None, "output": rest}
+        outs = exp.node_outputs(rest)
+        node, out = (rest, None) if outs else rest.rpartition(".")[::2]
+        if not outs:
+            outs = exp.node_outputs(node)
+        if not outs:
+            raise KeyError(f"{exp.id} has no input or step output {rest!r}")
+        if out is None:
+            if len(outs) != 1:
+                raise KeyError(f"{node!r} has outputs {sorted(outs)}; name one as {node}.<output>")
+            out = next(iter(outs))
+        if out not in outs:
+            raise KeyError(f"{node!r} has no output {out!r} (it has {sorted(outs)})")
+        return self.artifact(outs[out]), {"experiment_id": exp.id, "node": node, "output": out}
+
+    def name(
+        self,
+        name: str,
+        target: str | ArtifactRef,
+        *,
+        note: str | None = None,
+        move: bool = False,
+        expect: str | None = None,
+    ) -> dict[str, Any]:
+        """Give an artifact a human-readable name, usable as ``@name`` wherever an artifact is
+        accepted. Names are metadata only: they never change a signature. Named artifacts are
+        kept by garbage collection. Moving an existing name needs ``move=True`` and keeps its
+        earlier target in the history."""
+        ref, source = self.resolve_target(target)
+        return self.db.set_name(name, ref.hash, **source, note=note, set_by=_whoami(), move=move, expect=expect)
+
+    def unname(self, name: str, *, expect: str | None = None) -> bool:
+        """Remove a name (the artifact stays). Returns whether it existed."""
+        return self.db.remove_name(name, expect=expect, by=_whoami())
+
+    def names(self) -> list[dict[str, Any]]:
+        return self.db.names()
 
     def load(self, ref: str | ArtifactRef) -> Any:
         """Local path (file/dir artifacts) or Python object (value artifacts).

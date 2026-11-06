@@ -8,6 +8,7 @@ import { useArtifact, useDiff, useExecution, useSource, useStorage } from "../qu
 import { ArtifactIcon } from "./ArtifactIcon";
 import { ArtifactPreview } from "./ArtifactPreview";
 import { CodeModal } from "./CodeModal";
+import { NameControl } from "./Names";
 import { DeleteExperiment, descendantsOf, StopButton } from "./Storage";
 import { RunTelemetry } from "./Telemetry";
 
@@ -411,7 +412,17 @@ export function NodeDetail({ n, dag, nav }: { n: DagNode; dag: Dag; nav: Nav }) 
       <section>
         <h3>Outputs</h3>
         {Object.keys(n.outputs ?? {}).length ? (
-          Object.entries(n.outputs ?? {}).map(([k, r]) => <ArtifactChip key={k} name={k} r={r} nav={nav} />)
+          Object.entries(n.outputs ?? {}).map(([k, r]) => (
+            <div key={k} className="chip-row">
+              <ArtifactChip name={k} r={r} nav={nav} />
+              {r &&
+                (dag.names?.[r.hash] ?? []).map((nm) => (
+                  <span key={nm} className="name-chip" title="named artifact">
+                    ★ @{nm}
+                  </span>
+                ))}
+            </div>
+          ))
         ) : (
           <Muted>{pending ? "not produced yet" : "—"}</Muted>
         )}
@@ -504,11 +515,16 @@ export function ArtifactDetailPanel({
   label,
   nav,
   canTrace,
+  canEdit = false,
+  source,
 }: {
   hash: string;
   label?: string;
   nav: Nav;
   canTrace: boolean;
+  canEdit?: boolean;
+  /** Where this artifact was selected from, so a name records it (and suggests ``node-output``). */
+  source?: { experiment?: string; node?: string | null; output?: string | null };
 }) {
   const { data: a, error } = useArtifact(hash);
   if (error) return <section className="err">{String(error)}</section>;
@@ -550,6 +566,13 @@ export function ArtifactDetailPanel({
             )}
           </dd>
         </dl>
+        <NameControl
+          hash={a.hash}
+          names={a.names?.[a.hash] ?? []}
+          source={source}
+          filename={a.filename}
+          canEdit={canEdit}
+        />
         <div style={{ marginTop: 10, display: "flex", gap: 6 }}>
           {canTrace && (
             <button

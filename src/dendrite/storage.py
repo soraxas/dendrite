@@ -40,7 +40,8 @@ class _Graph:
     experiments: list[dict]
     node_runs: list[dict]
     executions: list[dict]
-    samples: list[tuple[str, str, str | None]] = field(default_factory=list)  # (execution, hash, experiment)
+    samples: list[tuple[str, str, str | None, str]] = field(default_factory=list)  # (execution, hash, exp, node)
+    names: dict[str, list[str]] = field(default_factory=dict)  # hash -> names pointing at it
     manifests: dict[str, list[str]] = field(default_factory=dict)  # dir hash -> member hashes
 
     def size(self, h: str) -> int:
@@ -49,6 +50,9 @@ class _Graph:
 
 def _pin_hashes(pins: dict | None) -> list[str]:
     return [h for outs in (pins or {}).values() for h in (outs or {}).values()]
+
+
+NAMED = "@names"  # the root group of named artifacts: never an experiment id
 
 
 class Storage:
@@ -67,7 +71,10 @@ class Storage:
             node_runs=db.all_node_runs(),
             executions=db.successful_executions(),
             samples=db.sample_hashes(),
+            names={},
         )
+        for n in db.names():
+            g.names.setdefault(n["hash"], []).append(n["name"])
         g.objects = {h: (size, mtime) for h, size, mtime in self.lab.store.iter_objects()}
         return g
 
@@ -107,10 +114,13 @@ class Storage:
         for nr in g.node_runs:
             if nr["execution_id"]:
                 users.setdefault(nr["execution_id"], set()).add(nr["experiment_id"])
-        for eid, h, exp in g.samples:
+        for eid, h, exp, _node in g.samples:
             for owner in users.get(eid, set()) | ({exp} if exp else set()):
                 if owner in roots:
                     roots[owner].add(h)
+        # Named artifacts are kept for as long as the name exists, whatever uses them.
+        if g.names:
+            roots[NAMED] = set(g.names)
         return roots
 
     def _last_use(self, g: _Graph) -> dict[str, float]:
@@ -158,7 +168,8 @@ class Storage:
         reach, reachers = self._reach(g)
         reached = set().union(*reach.values())  # including blobs that are missing (evicted)
         live_bytes = sum(g.size(h) for h in reachers)
-        shared = {h for h, r in reachers.items() if len(r) > 1}
+        shared = {h for h, r in reachers.items() if len(r - {NAMED}) > 1}
+        named = {h for h in reach.get(NAMED, set()) if h in g.objects}
 
         # Bytes freed by deleting an experiment *and its forks*: blobs whose reachers all sit
         # in that subtree, i.e. credited to every common ancestor of the reachers.
@@ -236,6 +247,7 @@ class Storage:
             for h in ex["outputs"].values():
                 producer.setdefault(h, ex["node"])
         top = sorted(g.artifacts.values(), key=lambda a: -self._artifact_bytes(g, a["hash"]))[:largest]
+        sampled = {h: node for _, h, _, node in g.samples}  # logged samples aren't inputs or outputs
         largest_rows = [
             {
                 "hash": a["hash"],
@@ -245,7 +257,9 @@ class Storage:
                 "producer_node": producer.get(a["hash"]),
                 "present": a["hash"] in g.objects,
                 "live": a["hash"] in reached,
-                "experiments": len(reachers.get(a["hash"], ())),
+                "experiments": len(reachers.get(a["hash"], set()) - {NAMED}),
+                "names": g.names.get(a["hash"], []),
+                "sample_of": sampled.get(a["hash"]),
             }
             for a in top
             if self._artifact_bytes(g, a["hash"])
@@ -261,6 +275,7 @@ class Storage:
                 "live": {"objects": len(reachers), "bytes": live_bytes},
                 "shared": {"objects": len(shared), "bytes": sum(g.size(h) for h in shared)},
                 "collectable": {"objects": len(g.objects) - len(reachers), "bytes": total - live_bytes},
+                "named": {"objects": len(named), "bytes": sum(g.size(h) for h in named)},
             },
             "experiments": experiments,
             "cache": cache,
@@ -398,12 +413,18 @@ class Storage:
             raise EvictRefused(
                 f"experiment {pinned[0]} pins these outputs, so it couldn't run without them (force=True to evict anyway)"
             )
+        named = sorted({n for h in tops for n in g.names.get(h, [])})
+        if named and not force:
+            raise EvictRefused(
+                f"named {', '.join('@' + n for n in named)}; remove the name first (or force=True to evict anyway)"
+            )
         # Everything else that stays reachable. Experiment inputs always stay (they're the
         # user's data, not cache); pins of these outputs only reach here with ``force``.
         inputs = {h for e in g.experiments for h in e["inputs"].values()}
         others = set(inputs)
         others |= {h for e in g.experiments for h in _pin_hashes(e["pins"]) if h not in tops}
         others |= {h for nr in g.node_runs for h in (nr["outputs"] or {}).values() if h not in tops}
+        others |= {h for h in g.names if h not in tops}
         keep = self._closure(g, others)
         deleted, skipped = [], []
         for h in sorted(self._closure(g, tops)):

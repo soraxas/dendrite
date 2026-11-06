@@ -14,6 +14,7 @@ Entities are kept deliberately separate:
 
 from __future__ import annotations
 
+import re
 import time
 import uuid
 from collections.abc import Iterable, Iterator
@@ -25,6 +26,25 @@ import sqlalchemy as sa
 from sqlalchemy.exc import IntegrityError
 
 from .store import ArtifactRef
+
+NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
+
+
+class NameConflict(ValueError):
+    """A name points elsewhere: ``code`` is ``name_taken`` (move it explicitly) or ``name_moved``."""
+
+    def __init__(self, message: str, code: str = "name_taken"):
+        super().__init__(f"{code}: {message}")
+        self.code = code
+
+
+def check_name(name: str) -> str:
+    if not isinstance(name, str) or not NAME_RE.match(name):
+        raise ValueError(
+            f"invalid name {name!r}: use letters, digits, '.', '_' or '-', starting with a letter or digit"
+        )
+    return name
+
 
 meta = sa.MetaData()
 
@@ -213,6 +233,38 @@ execution_activity = sa.Table(
     meta,
     sa.Column("execution_id", sa.String(32), sa.ForeignKey("executions.id"), primary_key=True),
     sa.Column("updated_at", sa.Float, nullable=False),
+)
+
+# Human-readable names for artifacts (`@best-splat`): metadata only, never in a signature.
+artifact_names = sa.Table(
+    "artifact_names",
+    meta,
+    sa.Column("name", sa.String(100), primary_key=True),
+    sa.Column("hash", sa.String(64), nullable=False, index=True),
+    sa.Column("experiment_id", sa.String(32)),  # where it was named from, if anywhere
+    sa.Column("node", sa.String(200)),
+    sa.Column("output", sa.String(200)),
+    sa.Column("note", sa.Text),
+    sa.Column("set_by", sa.String(200)),
+    sa.Column("set_at", sa.Float, nullable=False),
+)
+
+# Earlier targets of names that were moved or removed (append-only).
+artifact_name_history = sa.Table(
+    "artifact_name_history",
+    meta,
+    sa.Column("id", sa.Integer, primary_key=True, autoincrement=True),
+    sa.Column("name", sa.String(100), nullable=False, index=True),
+    sa.Column("hash", sa.String(64), nullable=False),
+    sa.Column("experiment_id", sa.String(32)),
+    sa.Column("node", sa.String(200)),
+    sa.Column("output", sa.String(200)),
+    sa.Column("note", sa.Text),
+    sa.Column("set_by", sa.String(200)),
+    sa.Column("set_at", sa.Float, nullable=False),
+    sa.Column("ended_by", sa.String(200)),
+    sa.Column("ended_at", sa.Float, nullable=False),
+    sa.Column("action", sa.String(10), nullable=False),  # moved | removed
 )
 
 # The stage path (`dendrite.stage`) each node was called in, per experiment: display only.
@@ -524,6 +576,10 @@ class Metadata:
                 )
             ).all()
             flags = conn.execute(sa.select(experiment_flags.c.experiment_id, experiment_flags.c.keep)).all()
+            named = conn.execute(
+                sa.select(sa.func.count(), sa.func.max(artifact_names.c.set_at)).select_from(artifact_names)
+            ).first()
+            ended = conn.execute(sa.select(sa.func.max(artifact_name_history.c.id))).scalar()
             runs = conn.execute(
                 sa.select(
                     node_runs.c.experiment_id,
@@ -551,7 +607,11 @@ class Metadata:
             per.setdefault(row[0], []).append(tuple(row))
         for row in (*prog, *act):
             per.setdefault(row[0], []).append(tuple(row))
-        tree = repr(sorted((tuple(r) for r in exps), key=repr)) + repr(sorted(map(tuple, flags)))
+        tree = (
+            repr(sorted((tuple(r) for r in exps), key=repr))
+            + repr(sorted(map(tuple, flags)))
+            + repr((tuple(named or ()), ended))
+        )
         return tree, {k: repr(sorted(v, key=repr)) for k, v in per.items()}
 
     def _upsert_node_run(self, conn: sa.Connection, exp_id: str, node: str, **values: Any) -> None:
@@ -859,6 +919,131 @@ class Metadata:
             )
         return dict(row) if row else None
 
+    # -- artifact names (metadata only) ------------------------------------------------
+    _NAME_COLS = ("name", "hash", "experiment_id", "node", "output", "note", "set_by", "set_at")
+
+    def set_name(
+        self,
+        name: str,
+        hash: str,
+        *,
+        experiment_id: str | None = None,
+        node: str | None = None,
+        output: str | None = None,
+        note: str | None = None,
+        set_by: str | None = None,
+        move: bool = False,
+        expect: str | None = None,
+    ) -> dict:
+        """Point ``name`` at ``hash``. Moving an existing name needs ``move``; ``expect`` is a
+        compare-and-set on its current target. The outgoing target goes to the history."""
+        check_name(name)
+        now = time.time()
+        with self.tx() as conn:
+            if conn.execute(sa.select(artifacts.c.hash).where(artifacts.c.hash == hash)).first() is None:
+                raise KeyError(f"unknown artifact {hash[:12]}")
+            cur = conn.execute(sa.select(artifact_names).where(artifact_names.c.name == name)).mappings().first()
+            if expect is not None and (cur is None or cur["hash"] != expect):
+                raise NameConflict(f"{name!r} no longer points at {expect[:12]}", "name_moved")
+            values = dict(
+                hash=hash, experiment_id=experiment_id, node=node, output=output, note=note, set_by=set_by, set_at=now
+            )
+            if cur is None:
+                try:
+                    with conn.begin_nested():
+                        conn.execute(artifact_names.insert().values(name=name, **values))
+                except IntegrityError:
+                    raise NameConflict(f"{name!r} was just set by someone else", "name_moved") from None
+            elif cur["hash"] == hash:
+                if note is not None:
+                    conn.execute(artifact_names.update().where(artifact_names.c.name == name).values(note=note))
+            else:
+                if not move:
+                    raise NameConflict(f"{name!r} already points at {cur['hash'][:12]}; move it explicitly")
+                self._end_name(conn, dict(cur), set_by, now, "moved")
+                res = conn.execute(
+                    artifact_names.update()
+                    .where(artifact_names.c.name == name, artifact_names.c.hash == cur["hash"])
+                    .values(**values)
+                )
+                if res.rowcount != 1:
+                    raise NameConflict(f"{name!r} was moved concurrently", "name_moved")
+            row = conn.execute(sa.select(artifact_names).where(artifact_names.c.name == name)).mappings().first()
+        return dict(row)
+
+    @staticmethod
+    def _end_name(conn: sa.Connection, cur: dict, by: str | None, now: float, action: str) -> None:
+        conn.execute(
+            artifact_name_history.insert().values(
+                **{k: cur[k] for k in Metadata._NAME_COLS}, ended_by=by, ended_at=now, action=action
+            )
+        )
+
+    def remove_name(self, name: str, *, expect: str | None = None, by: str | None = None) -> bool:
+        with self.tx() as conn:
+            cur = conn.execute(sa.select(artifact_names).where(artifact_names.c.name == name)).mappings().first()
+            if cur is None:
+                return False
+            if expect is not None and cur["hash"] != expect:
+                raise NameConflict(f"{name!r} no longer points at {expect[:12]}", "name_moved")
+            self._end_name(conn, dict(cur), by, time.time(), "removed")
+            conn.execute(
+                artifact_names.delete().where(artifact_names.c.name == name, artifact_names.c.hash == cur["hash"])
+            )
+        return True
+
+    def name(self, name: str) -> dict | None:
+        with self.ro() as conn:
+            row = conn.execute(sa.select(artifact_names).where(artifact_names.c.name == name)).mappings().first()
+        return dict(row) if row else None
+
+    def names(self) -> list[dict]:
+        """Every current name with its artifact's kind, size and filename, most recent first."""
+        with self.ro() as conn:
+            rows = (
+                conn.execute(
+                    sa.select(artifact_names, artifacts.c.kind, artifacts.c.size, artifacts.c.filename)
+                    .join(artifacts, artifacts.c.hash == artifact_names.c.hash, isouter=True)
+                    .order_by(artifact_names.c.set_at.desc())
+                )
+                .mappings()
+                .all()
+            )
+        return [dict(r) for r in rows]
+
+    def names_for(self, hashes: Iterable[str]) -> dict[str, list[str]]:
+        hs = [h for h in set(hashes) if h]
+        out: dict[str, list[str]] = {}
+        if not hs:
+            return out
+        with self.ro() as conn:
+            for i in range(0, len(hs), 500):
+                rows = conn.execute(
+                    sa.select(artifact_names.c.hash, artifact_names.c.name)
+                    .where(artifact_names.c.hash.in_(hs[i : i + 500]))
+                    .order_by(artifact_names.c.name)
+                ).all()
+                for h, n in rows:
+                    out.setdefault(h, []).append(n)
+        return out
+
+    def name_history(self, name: str) -> list[dict]:
+        with self.ro() as conn:
+            rows = (
+                conn.execute(
+                    sa.select(artifact_name_history)
+                    .where(artifact_name_history.c.name == name)
+                    .order_by(artifact_name_history.c.ended_at.desc(), artifact_name_history.c.id.desc())
+                )
+                .mappings()
+                .all()
+            )
+        return [dict(r) for r in rows]
+
+    def named_hashes(self) -> set[str]:
+        with self.ro() as conn:
+            return {r[0] for r in conn.execute(sa.select(artifact_names.c.hash))}
+
     # -- telemetry (display only: never part of a signature) ---------------------------
     @staticmethod
     def _write_metrics(conn: sa.Connection, exec_id: str, values: Iterable[tuple[str, int, float]]) -> None:
@@ -1013,13 +1198,16 @@ class Metadata:
             )
         return [dict(r) for r in rows]
 
-    def sample_hashes(self) -> list[tuple[str, str, str | None]]:
-        """``(execution_id, hash, experiment that ran it)`` of every logged sample (storage accounting)."""
+    def sample_hashes(self) -> list[tuple[str, str, str | None, str]]:
+        """``(execution_id, hash, experiment that ran it, node)`` of every logged sample (storage accounting)."""
         with self.ro() as conn:
             rows = conn.execute(
-                sa.select(execution_samples.c.execution_id, execution_samples.c.hash, executions.c.experiment_id).join(
-                    executions, executions.c.id == execution_samples.c.execution_id
-                )
+                sa.select(
+                    execution_samples.c.execution_id,
+                    execution_samples.c.hash,
+                    executions.c.experiment_id,
+                    executions.c.node,
+                ).join(executions, executions.c.id == execution_samples.c.execution_id)
             ).all()
         return [tuple(r) for r in rows]
 
@@ -1196,6 +1384,7 @@ class Metadata:
                 hashes |= set((r["inputs"] or {}).values()) | set((r["outputs"] or {}).values())
             hashes |= {r["artifact_hash"] for r in out["execution_inputs"] + out["execution_outputs"]}
             hashes |= {r["artifact_hash"] for r in out["pipeline_reads"]}
+            out["names"] = rows(artifact_names, artifact_names.c.hash.in_(hashes))  # current names, no history
             out["artifacts"] = rows(artifacts, artifacts.c.hash.in_(hashes))
         return out
 
@@ -1265,7 +1454,30 @@ class Metadata:
                     if r["experiment_id"] in new_ids:
                         conn.execute(table.insert().values(**r))
             created = [e["id"] for e in new_exps]
-        return {"created": created, "skipped": skipped, "executions": inserted, "reused": reused}
+            # Names: add the missing ones; one that exists here with another target is never overwritten.
+            names_added, names_skipped = [], []
+            known_exps = new_ids | have
+            bundled = {a["hash"] for a in bundle["artifacts"]}
+            for n in bundle.get("names", []):
+                if n["hash"] not in bundled:  # its blob didn't travel (e.g. evicted locally)
+                    continue
+                cur = conn.execute(sa.select(artifact_names.c.hash).where(artifact_names.c.name == n["name"])).first()
+                if cur is None:
+                    row = dict(n)
+                    if row.get("experiment_id") not in known_exps:
+                        row["experiment_id"] = None
+                    conn.execute(artifact_names.insert().values(**row))
+                    names_added.append(n["name"])
+                elif cur[0] != n["hash"]:
+                    names_skipped.append(n["name"])
+        return {
+            "created": created,
+            "skipped": skipped,
+            "executions": inserted,
+            "reused": reused,
+            "names": names_added,
+            "names_skipped": names_skipped,
+        }
 
     # -- lineage -------------------------------------------------------------------
     _ANCESTORS = sa.text(

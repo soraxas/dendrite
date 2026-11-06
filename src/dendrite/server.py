@@ -21,6 +21,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import runtime
+from .db import NameConflict
 from .experiment import _PIPELINES, Experiment, Lab, NotADraft, _ref_dict
 from .sources import SourceConflict, disk_status, write_source
 from .storage import EvictRefused, StorageBusy
@@ -55,6 +56,27 @@ def _experiment(lab: Lab, key: str) -> Experiment:
         return lab.get(key)
     except KeyError:
         raise HTTPException(404, f"no experiment {key!r}") from None
+
+
+def _hashes_in(obj: Any, out: set[str] | None = None) -> set[str]:
+    """Every artifact hash mentioned in a response (``hash``, or a lineage node's ``id``)."""
+    out = set() if out is None else out
+    if isinstance(obj, dict):
+        for k in ("hash", "id"):
+            h = obj.get(k)
+            if isinstance(h, str) and len(h) == 64:
+                out.add(h)
+        for v in obj.values():
+            _hashes_in(v, out)
+    elif isinstance(obj, list):
+        for v in obj:
+            _hashes_in(v, out)
+    return out
+
+
+def _with_names(lab: Lab, payload: dict[str, Any]) -> dict[str, Any]:
+    payload["names"] = lab.db.names_for(_hashes_in(payload))
+    return payload
 
 
 def _artifact(lab: Lab, key: str) -> ArtifactRef:
@@ -134,6 +156,19 @@ class ShapeRequest(BaseModel):
 
 class ForkRequest(BaseModel):
     name: str | None = None
+
+
+class NameRequest(BaseModel):
+    """What to name: an experiment's step output or input, a hash, or a CLI-style ``target``."""
+
+    experiment: str | None = None
+    node: str | None = None
+    output: str | None = None
+    hash: str | None = None
+    target: str | None = None
+    note: str | None = None
+    move: bool = False
+    expect: str | None = None  # compare-and-set on the name's current target
 
 
 class DraftEdit(BaseModel):
@@ -275,6 +310,48 @@ def create_app(
     def require_edit() -> None:
         if not allow_edit:
             raise HTTPException(403, EDIT_DISABLED)
+
+    # -- artifact names (metadata only) -------------------------------------------------
+    @app.get("/api/names")
+    def names() -> dict[str, Any]:
+        return {"names": lab.names()}
+
+    @app.put("/api/names/{name}")
+    def set_name(name: str, req: NameRequest) -> dict[str, Any]:
+        require_edit()
+        if req.hash:
+            target = req.hash
+        elif req.experiment and req.node:
+            target = f"{req.experiment}:{req.node}" + (f".{req.output}" if req.output else "")
+        elif req.experiment and req.output:
+            target = f"{req.experiment}:{req.output}"
+        elif req.target:
+            target = req.target
+        else:
+            raise HTTPException(422, "say what to name: experiment and node/output, hash, or target")
+        try:
+            return lab.name(name, target, note=req.note, move=req.move, expect=req.expect)
+        except NameConflict as e:
+            raise HTTPException(409, {"message": str(e).split(": ", 1)[-1], "code": e.code}) from None
+        except KeyError as e:
+            raise HTTPException(404, str(e.args[0] if e.args else e)) from None
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from None
+
+    @app.delete("/api/names/{name}")
+    def remove_name(name: str, expect: str | None = None) -> dict[str, Any]:
+        require_edit()
+        try:
+            removed = lab.unname(name, expect=expect)
+        except NameConflict as e:
+            raise HTTPException(409, {"message": str(e).split(": ", 1)[-1], "code": e.code}) from None
+        if not removed:
+            raise HTTPException(404, f"no name {name!r}")
+        return {"removed": name}
+
+    @app.get("/api/names/{name}/history")
+    def name_history(name: str) -> dict[str, Any]:
+        return {"name": lab.db.name(name), "history": lab.db.name_history(name)}
 
     @app.post("/api/experiments/{exp_id}/fork")
     def fork(exp_id: str, req: ForkRequest) -> dict[str, Any]:
@@ -549,7 +626,7 @@ def create_app(
     def dag(exp_id: str) -> dict[str, Any]:
         d = _experiment(lab, exp_id).dag()
         d["mermaid"] = mermaid(d)
-        return d
+        return _with_names(lab, d)
 
     @app.get("/api/diff")
     def diff(a: str, b: str) -> dict[str, Any]:
@@ -568,13 +645,14 @@ def create_app(
             "experiments": lab.db.experiments_using_artifact(ref.hash),
             "preview": _preview(lab, ref, present, hosted),
             "auto_preview_bytes": AUTO_PREVIEW_BYTES if lab.store.remote else None,
+            "names": lab.db.names_for([ref.hash]),
         }
 
     @app.get("/api/artifacts/{key}/lineage")
     def lineage(key: str) -> dict[str, Any]:
         g = lab.lineage(_artifact(lab, key))
         g["mermaid"] = lineage_mermaid(g)
-        return g
+        return _with_names(lab, g)
 
     @app.get("/api/artifacts/{key}/download")
     def download(request: Request, key: str, path: str | None = None, redirect: bool = False):

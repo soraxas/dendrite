@@ -1,9 +1,9 @@
 // Hash routing: #/exp/:id[/params|metrics|diff/:other], #/artifact/:hash[/from/:exp] and
-// #/storage[/cache|largest],
+// #/storage[/cache|largest], #/names,
 // with the graph selection in a `sel` query param so it survives polling, reloads and links.
 import { useCallback, useSyncExternalStore } from "react";
 
-export type View = "home" | "dag" | "code" | "params" | "metrics" | "diff" | "lineage" | "storage";
+export type View = "home" | "dag" | "code" | "params" | "metrics" | "diff" | "lineage" | "storage" | "names";
 export type StorageTab = "experiments" | "cache" | "largest";
 
 export interface Route {
@@ -29,6 +29,7 @@ export function parse(hash: string): Route {
     const tab = parts[1] === "cache" || parts[1] === "largest" ? parts[1] : "experiments";
     return { view: "storage", tab, sel };
   }
+  if (parts[0] === "names") return { view: "names", sel };
   if (parts[0] === "artifact" && parts[1]) {
     return { view: "lineage", artifact: parts[1], exp: parts[2] === "from" ? parts[3] : undefined, sel };
   }
@@ -38,7 +39,8 @@ export function parse(hash: string): Route {
 export function href(r: Route): string {
   const enc = encodeURIComponent;
   let path = "#/";
-  if (r.view === "storage") path = `#/storage${r.tab && r.tab !== "experiments" ? `/${r.tab}` : ""}`;
+  if (r.view === "names") path = "#/names";
+  else if (r.view === "storage") path = `#/storage${r.tab && r.tab !== "experiments" ? `/${r.tab}` : ""}`;
   else if (r.view === "lineage" && r.artifact)
     path = `#/artifact/${enc(r.artifact)}${r.exp ? `/from/${enc(r.exp)}` : ""}`;
   else if (r.exp) {

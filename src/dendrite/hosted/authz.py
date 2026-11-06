@@ -140,6 +140,30 @@ class ServerMetadata(Metadata):
         self._own("experiment", [exp_id])
         return super().update_experiment_if(exp_id, when, **values)
 
+    # -- artifact names: anyone who runs may name; only the setter or an admin may change one --
+    def _may_change_name(self, c: Caller | None, cur: dict | None) -> None:
+        if c is None or cur is None or c.is_admin or c.role == "admin" or cur.get("set_by") == c.label:
+            return
+        raise Forbidden(
+            f"name {cur['name']!r} was set by {cur.get('set_by') or 'someone else'}; an admin can change it"
+        )
+
+    def set_name(self, name: str, hash: str, **kw: Any) -> dict:
+        c = need("runner")
+        if c is not None:
+            kw["set_by"] = c.label  # never what the client says
+            cur = super().name(name)
+            if cur is not None and (cur["hash"] != hash or kw.get("note") is not None):
+                self._may_change_name(c, cur)
+        return super().set_name(name, hash, **kw)
+
+    def remove_name(self, name: str, *, expect: str | None = None, by: str | None = None) -> bool:
+        c = need("runner")
+        if c is not None:
+            by = c.label
+            self._may_change_name(c, super().name(name))
+        return super().remove_name(name, expect=expect, by=by)
+
     def set_keep(self, exp_id: str, keep: bool) -> None:
         need("admin")
         super().set_keep(exp_id, keep)
@@ -270,6 +294,7 @@ class ServerMetadata(Metadata):
         if c is not None:
             refs = [ArtifactRef(a["hash"], a["kind"], a["size"], a["filename"]) for a in bundle["artifacts"]]
             self._committed(refs)
+            bundle = {**bundle, "names": [{**n, "set_by": c.label} for n in bundle.get("names", [])]}
         out = super().import_bundle(bundle)
         if c is not None:
             self.control.attribute(self.project, "experiment", out["created"], c)

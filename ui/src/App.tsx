@@ -13,6 +13,7 @@ import {
 import { DraftBar, DraftStepEditor } from "./components/Draft";
 import { HostedBar } from "./components/HostedBar";
 import { LineageView } from "./components/LineageView";
+import { NamesPage } from "./components/Names";
 import { DiffPage, MetricsPage, ParamsPage } from "./components/Pages";
 import { Sidebar } from "./components/Sidebar";
 import { StageAssign, StageDetail } from "./components/StageDetail";
@@ -42,6 +43,21 @@ function dagLabel(dag: Dag | undefined, hash: string): string | undefined {
     for (const [k, r] of Object.entries(n.outputs ?? {})) if (r?.hash === hash) return k;
   }
   for (const n of dag?.nodes ?? []) for (const [k, r] of Object.entries(n.inputs ?? {})) if (r?.hash === hash) return k;
+  return undefined;
+}
+
+/** Where a selected artifact sits in this experiment (a step output or an input), for naming it. */
+function outputSource(
+  dag: Dag | undefined,
+  hash: string,
+): { experiment: string; node?: string; output: string } | undefined {
+  if (!dag) return undefined;
+  for (const n of dag.nodes) {
+    if (n.kind === "input" && n.artifact?.hash === hash) return { experiment: dag.experiment.id, output: n.name };
+    if (n.kind !== "node") continue;
+    for (const [k, r] of Object.entries(n.outputs ?? {}))
+      if (r?.hash === hash) return { experiment: dag.experiment.id, node: n.name, output: k };
+  }
   return undefined;
 }
 
@@ -97,6 +113,7 @@ export function App() {
   const { data: info } = useInfo();
   const inLineage = route.view === "lineage";
   const inStorage = route.view === "storage";
+  const inNames = route.view === "names";
   // The Experiments tab returns to the experiment you were looking at before Storage.
   const [lastExp, setLastExp] = useState<string | undefined>(route.exp);
   useEffect(() => {
@@ -190,7 +207,31 @@ export function App() {
     </div>
   );
   let graphSel: string | undefined;
-  if (inStorage) {
+  if (inNames) {
+    toolbar = (
+      <div className="toolbar">
+        <div className="tb-title">
+          <div className="tb-row">
+            <span className="mode-chip">Names</span>
+            <h2>Named artifacts</h2>
+          </div>
+          <div className="story">
+            Results you named, usable as <code>@name</code> in code, inputs and pins, and kept by clean-up.
+          </div>
+        </div>
+      </div>
+    );
+    body = (
+      <NamesPage
+        canEdit={canEdit}
+        nameOf={nameOf}
+        openExp={nav.openExp}
+        openArtifact={(h, exp) =>
+          navigate({ view: "lineage", artifact: h, exp: exp ?? undefined, sel: `artifact:${h}` })
+        }
+      />
+    );
+  } else if (inStorage) {
     toolbar = (
       <div className="toolbar">
         <div className="tb-title">
@@ -336,7 +377,19 @@ export function App() {
 
   // ---- detail panel: exactly the selected item
   let detail = null;
-  if (inStorage) {
+  if (inNames) {
+    detail = (
+      <section className="muted storage-help">
+        <h3>Using names</h3>
+        <p>
+          A name is a label for one artifact. <code>lab.load("@best")</code>,{" "}
+          <code>inputs=&#123;"x": "@best"&#125;</code> and pins accept it, and record the artifact itself, so moving a
+          name later never changes an experiment.
+        </p>
+        <p>Named artifacts are never cleaned up. Moving a name keeps where it pointed before in its history.</p>
+      </section>
+    );
+  } else if (inStorage) {
     detail = (
       <section className="muted storage-help">
         <h3>How space is counted</h3>
@@ -401,7 +454,16 @@ export function App() {
     );
   } else if (kind === "input" && dag) {
     const n = dag.nodes.find((x) => x.id === `input:${id}`);
-    detail = n?.artifact ? <ArtifactDetailPanel hash={n.artifact.hash} label={n.name} nav={nav} canTrace /> : null;
+    detail = n?.artifact ? (
+      <ArtifactDetailPanel
+        hash={n.artifact.hash}
+        label={n.name}
+        nav={nav}
+        canTrace
+        canEdit={canEdit}
+        source={{ experiment: dag.experiment.id, output: n.name }}
+      />
+    ) : null;
   } else if (kind === "artifact" && id) {
     const label = inLineage ? lineageLabel(lineage, id) : dagLabel(dag, id);
     detail = (
@@ -411,13 +473,21 @@ export function App() {
         label={label}
         nav={nav}
         canTrace={!inLineage || id !== lineage?.artifact.hash}
+        canEdit={canEdit}
+        source={inLineage ? undefined : outputSource(dag, id)}
       />
     );
   } else if (kind === "exec" && id) {
     detail = <ExecutionDetailPanel key={id} id={id} nav={nav} />;
   } else if (inLineage && lineage) {
     detail = (
-      <ArtifactDetailPanel hash={lineage.artifact.hash} label={lineage.artifact.label} nav={nav} canTrace={false} />
+      <ArtifactDetailPanel
+        hash={lineage.artifact.hash}
+        label={lineage.artifact.label}
+        nav={nav}
+        canTrace={false}
+        canEdit={canEdit}
+      />
     );
   } else if (dag) {
     detail = (
@@ -437,14 +507,22 @@ export function App() {
         <span className="brand">dendrite</span>
         <nav className="tabs" aria-label="Sections">
           <button
-            className={`tab ${inStorage ? "" : "active"}`}
-            aria-current={inStorage ? undefined : "page"}
+            className={`tab ${inStorage || inNames ? "" : "active"}`}
+            aria-current={inStorage || inNames ? undefined : "page"}
             title="Experiments, their pipelines, lineage and results"
             onClick={() =>
               navigate(lastExp && tree.some((e) => e.id === lastExp) ? { view: "dag", exp: lastExp } : { view: "home" })
             }
           >
             Experiments
+          </button>
+          <button
+            className={`tab ${inNames ? "active" : ""}`}
+            aria-current={inNames ? "page" : undefined}
+            title="Artifacts you named, usable as @name"
+            onClick={() => navigate({ view: "names" })}
+          >
+            Names
           </button>
           <button
             className={`tab ${inStorage ? "active" : ""}`}

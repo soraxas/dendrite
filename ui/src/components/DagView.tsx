@@ -21,10 +21,18 @@ import { DagLegend, PlanLegend } from "./Legend";
 import { type HoverCard, nodeTypes, type Port } from "./nodes";
 
 // Placeholders (kind "pending") stand for outputs a draft hasn't computed yet; there is nothing to open.
-export const toPorts = (m?: Record<string, ArtifactRef | null>): Port[] =>
+export const toPorts = (m?: Record<string, ArtifactRef | null>, names?: Record<string, string[]>): Port[] =>
   Object.entries(m ?? {}).flatMap(([name, r]) =>
     r && (r.kind as string) !== "pending"
-      ? [{ name, hash: r.hash, kind: r.kind, filename: r.filename, sub: `${r.kind} · ${fmtSize(r.size)}` }]
+      ? [
+          {
+            name,
+            hash: r.hash,
+            kind: r.kind,
+            filename: r.filename,
+            sub: `${(names?.[r.hash] ?? []).map((n) => `★ @${n} · `).join("")}${r.kind} · ${fmtSize(r.size)}`,
+          },
+        ]
       : [],
   );
 
@@ -441,8 +449,8 @@ export function DagView({
                 ...member,
                 ...stageTag,
                 ports: {
-                  inputs: toPorts(n.inputs),
-                  outputs: toPorts(n.outputs),
+                  inputs: toPorts(n.inputs, (dag as Dag).names),
+                  outputs: toPorts(n.outputs, (dag as Dag).names),
                   active: activeArtifact,
                   onPick: onArtifact,
                 },
@@ -487,8 +495,8 @@ export function DagView({
               ...stageTag,
               hover: hoverFor(n, line, origin ? nameOf(origin) : null),
               ports: {
-                inputs: toPorts(n.inputs),
-                outputs: toPorts(n.outputs),
+                inputs: toPorts(n.inputs, (dag as Dag).names),
+                outputs: toPorts(n.outputs, (dag as Dag).names),
                 active: activeArtifact,
                 onPick: onArtifact,
               },

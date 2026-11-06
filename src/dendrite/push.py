@@ -57,6 +57,8 @@ def push(
         + (f", {len(out['skipped'])} already there" if out["skipped"] else "")
         + f"; {len(out['executions'])} execution(s) copied, {len(out['reused'])} matched ones the project already had"
     )
+    for name in out.get("names_skipped", []):
+        report(f"kept the server's @{name}: it already names a different artifact there")
     return {**out, "uploaded": len(files)}
 
 

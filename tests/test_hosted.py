@@ -697,6 +697,48 @@ def test_push_local_experiments_to_the_server(hosted, tmp_path, source):
         lab.db.dispose()
 
 
+def test_names_are_attributed_and_guarded(hosted, tmp_path, source):
+    project = hosted.project()
+    alice = hosted.lab(tmp_path / "a", project, hosted.user(f"alice{uuid_hex()}@t.io", project, "runner"))
+    bob = hosted.lab(tmp_path / "b", project, hosted.user(f"bob{uuid_hex()}@t.io", project, "runner"))
+    exp = alice.create(toy.toy, inputs={"src": source}).run()
+    row = alice.name("best", f"{exp.id}:train.model")
+    assert row["set_by"].startswith("alice")  # the server's record of who, not the client's
+    assert bob.load("@best").read_text()  # anyone in the project can use it
+    with pytest.raises(PermissionError):
+        bob.name("best", f"{exp.id}:featurize", move=True)
+    with pytest.raises(PermissionError):
+        bob.unname("best")
+    bob.name("bobs", f"{exp.id}:featurize")  # runners may create their own
+    alice.name("best", f"{exp.id}:featurize", move=True)
+    assert [h["hash"] for h in alice.db.name_history("best")] == [row["hash"]]
+    hosted.lab(tmp_path / "admin", project).unname("bobs")  # admins may change anyone's
+    for lab in (alice, bob):
+        lab.db.dispose()
+
+
+def test_push_carries_names_without_overwriting(hosted, tmp_path, source):
+    from dendrite.push import push
+
+    project = hosted.project()
+    me = hosted.lab(tmp_path / "me", project, hosted.user(f"namer{uuid_hex()}@t.io", project, "runner"))
+    theirs = me.create(toy.toy, inputs={"src": source}).run()
+    me.name("taken", f"{theirs.id}:featurize")
+    local = Lab(tmp_path / "laptop", db_url=f"sqlite:///{tmp_path / 'laptop' / 'lineage.db'}")
+    mine = local.create(toy.toy, inputs={"src": source}).fork({"train.iterations": 4}).run()
+    local.name("fresh", f"{mine.id}:train.model")
+    local.name("taken", f"{mine.id}:train.model")
+    notes = []
+    out = push(local, me, [mine.id], report=notes.append)
+    assert out["names"] == ["fresh"] and out["names_skipped"] == ["taken"]
+    assert me.artifact("@fresh").hash == mine.output("train", "model").hash
+    assert me.artifact("@taken").hash == theirs.output("featurize").hash
+    assert me.db.name("fresh")["set_by"].startswith("namer")
+    assert any("@taken" in n for n in notes)
+    for lab in (local, me):
+        lab.db.dispose()
+
+
 def test_push_matches_executions_the_project_already_has(hosted, tmp_path, source):
     from dendrite.push import push
 

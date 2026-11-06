@@ -76,7 +76,7 @@ def _as_api_error(e: Exception) -> ApiError:
         return ApiError(409, "Conflict", str(e))
     if isinstance(e, UploadError):
         return ApiError(400, "UploadError", str(e))
-    if type(e).__name__ in ("StorageBusy", "EvictRefused", "NotADraft", "PlanIncomplete"):
+    if type(e).__name__ in ("StorageBusy", "EvictRefused", "NotADraft", "PlanIncomplete", "NameConflict"):
         return ApiError(409, type(e).__name__, str(e))
     if isinstance(e, IntegrityError):
         return ApiError(409, "IntegrityError", str(e.orig))

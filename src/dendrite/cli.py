@@ -109,6 +109,51 @@ def cmd_env(lab: Lab, args) -> None:
         print("\nuncommitted diff:\n" + git["diff"])
 
 
+def cmd_name(lab: Lab, args) -> None:
+    from .db import NameConflict
+
+    try:
+        row = lab.name(args.name, args.target, note=args.note, move=args.force)
+    except NameConflict as e:
+        raise SystemExit(f"{e} (pass --force to move it)" if e.code == "name_taken" else str(e)) from None
+    except KeyError as e:
+        raise SystemExit(str(e.args[0] if e.args else e)) from None
+    src = f"{row['experiment_id']}:{row['node'] or ''}{'.' if row['node'] else ''}{row['output'] or ''}"
+    print(f"@{row['name']} -> {row['hash'][:12]}" + (f"  ({src})" if row["experiment_id"] else ""))
+
+
+def cmd_names(lab: Lab, args) -> None:
+    if args.history:
+        cur = lab.db.name(args.history)
+        if cur:
+            print(f"@{cur['name']} -> {cur['hash'][:12]}  set {_fmt_time(cur['set_at'])} by {cur['set_by'] or '?'}")
+        rows = [
+            [h["action"], h["hash"][:12], _fmt_time(h["set_at"]), _fmt_time(h["ended_at"]), h["ended_by"] or ""]
+            for h in lab.db.name_history(args.history)
+        ]
+        if not cur and not rows:
+            raise SystemExit(f"no name {args.history!r}")
+        if rows:
+            print(_table(rows, ["ended", "was", "set", "until", "by"]))
+        return
+    rows = []
+    for n in lab.names():
+        src = n["experiment_id"] or ""
+        if n["experiment_id"] and (n["node"] or n["output"]):
+            src += f":{n['node'] + '.' if n['node'] else ''}{n['output'] or ''}"
+        size = fmt_bytes(n["size"]) if n.get("size") is not None else ""
+        rows.append(
+            [f"@{n['name']}", n["hash"][:12], n.get("kind") or "", size, src, n["note"] or "", n["set_by"] or ""]
+        )
+    print(_table(rows, ["name", "artifact", "kind", "size", "from", "note", "by"]) if rows else "no names yet")
+
+
+def cmd_unname(lab: Lab, args) -> None:
+    if not lab.unname(args.name):
+        raise SystemExit(f"no name {args.name!r}")
+    print(f"removed @{args.name} (the artifact stays; gc may now collect it if nothing else uses it)")
+
+
 def cmd_diff(lab: Lab, args) -> None:
     d = lab.get(args.a).diff(lab.get(args.b))
     print(f"A={d['a']}  B={d['b']}")
@@ -248,7 +293,8 @@ def cmd_du(lab: Lab, args) -> None:
     st = inv["store"]
     print(f"store {st['url']}: {st['objects']} objects, {fmt_bytes(st['bytes'])}")
     print(
-        f"  live {fmt_bytes(st['live']['bytes'])} (shared {fmt_bytes(st['shared']['bytes'])})"
+        f"  live {fmt_bytes(st['live']['bytes'])} (shared {fmt_bytes(st['shared']['bytes'])}"
+        f", named {fmt_bytes(st.get('named', {}).get('bytes', 0))})"
         f" · collectable {fmt_bytes(st['collectable']['bytes'])} · scratch "
         + ", ".join(f"{k} {fmt_bytes(v)}" for k, v in inv["scratch"].items())
     )
@@ -631,6 +677,15 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("list", help="list experiments")
     s = sub.add_parser("show", help="show an experiment's nodes, outputs and metrics")
     s.add_argument("experiment")
+    s = sub.add_parser("name", help="give an artifact a name, usable as @name (kept by gc)")
+    s.add_argument("name")
+    s.add_argument("target", help="EXP:NODE.OUTPUT, EXP:NODE, EXP:INPUT, @name, or a hash (prefix)")
+    s.add_argument("--note")
+    s.add_argument("--force", action="store_true", help="move the name if it points elsewhere")
+    s = sub.add_parser("names", help="list artifact names (--history NAME: where it pointed before)")
+    s.add_argument("--history", metavar="NAME")
+    s = sub.add_parser("unname", help="remove a name (the artifact stays)")
+    s.add_argument("name")
     s = sub.add_parser("logs", help="console output of a step (-f follows a running one)")
     s.add_argument("experiment")
     s.add_argument("node")

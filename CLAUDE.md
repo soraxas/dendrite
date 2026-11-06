@@ -214,6 +214,15 @@ The flow of a run spans several modules in `src/dendrite/`:
 - **Hosted.** `HttpMetadata.write_telemetry` batches on the progress flusher; `ServerMetadata` checks execution ownership for every telemetry write and committed blobs for samples.
 - **UI.** `components/Telemetry.tsx` (`RunTelemetry` tabs in `NodeDetail`, `ExperimentScalars` on the Metrics page); pure helpers in `ui/src/telemetry.ts` (ANSI, carriage returns, `title/series` grouping, smoothing, min/max downsampling). Charts are plain SVG.
 
+16. **Artifact names** (OpenSpec `artifact-organisation`).
+
+- **Tables.** `artifact_names` (one current target per name, with the experiment/node/output it was named from) and the append-only `artifact_name_history` (`moved` | `removed`). `Metadata.set_name` validates `NAME_RE`, refuses moving a name without `move` (`NameConflict` `name_taken`) and does a compare-and-set on `expect` (`name_moved`), in one transaction with the history row.
+- **Resolution.** `Lab.artifact` and `Lab.ingest` treat a string starting with `@` as a name, never a path. Inputs and pins store the resolved hash, so a moved name never changes frozen config. `Lab.resolve_target` parses `EXP:NODE.OUTPUT`, `EXP:NODE`, `EXP:INPUT`, `@name`, a hash or prefix.
+- **Storage.** `storage.NAMED` (`"@names"`) is a root group of every named hash: never collected, excluded from "exclusive"/"shared", and `evict` refuses named outputs unless forced.
+- **API.** `GET/PUT/DELETE /api/names/{name}`, `GET /api/names/{name}/history`; DAG, artifact and lineage responses carry a `names` map (hash → names) from `_with_names`. Names change the tree change-token, so SSE refreshes names, DAGs and artifacts.
+- **Hosted.** `ServerMetadata.set_name/remove_name` record the caller's label as `set_by` and require the setter or an admin to move, re-note or remove a name. `export_bundle` carries current names; `import_bundle` adds missing ones and reports conflicts (`names_skipped`) without overwriting.
+- **UI.** `components/Names.tsx`: `NameControl` (★ chips and ☆ Name… with a "Move it here" flow on `name_taken`) in `ArtifactDetailPanel`, and `NamesPage` at `#/names`. Output ports and the node panel show `★ @name`.
+
 ## Invariants to preserve
 
 - Signatures must never include experiment ids or flow-run ids. That is what makes cross-experiment reuse work.
@@ -262,7 +271,7 @@ Spec-driven changes live in `openspec/`:
 - `openspec/changes/pipeline-stages/` is stages in code and in the UI, and the stage overview.
 - `openspec/changes/hosted-server/` is the proposed hosted mode: a server that owns Postgres and the bucket, login, projects and roles, and presigned blob access. Not implemented yet.
 - `openspec/changes/run-telemetry/` is console capture, live scalars, samples and environment per execution (implemented).
-- `openspec/changes/artifact-organisation/` is artifact names (`@name`) and the per-experiment Artifacts tab (proposed).
+- `openspec/changes/artifact-organisation/` is artifact names (`@name`, implemented) and the per-experiment Artifacts tab.
 - `openspec/changes/react-flow-ui/` is the React Flow UI change. Archive it with `openspec archive react-flow-ui` once it has been reviewed.
 - Use `/opsx:propose`, `/opsx:apply` and `/opsx:archive` for new work.
 - Validate with `openspec validate <change>`.

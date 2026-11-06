@@ -578,12 +578,28 @@ function LargestTab({
               <a onClick={() => openArtifact(a.hash)}>{a.filename || a.kind}</a>{" "}
               <span className="mono muted">{short(a.hash, 10)}</span>
               {!a.live && <span className="muted"> · unused</span>}
+              {(a.names ?? []).map((n) => (
+                <span key={n} className="name-chip" title="Named: protected from clean-up and eviction">
+                  ★ @{n}
+                </span>
+              ))}
             </td>
-            <td>{a.producer_node ?? "input"}</td>
+            <td>{a.producer_node ?? (a.sample_of ? `${a.sample_of} (logged sample)` : "input")}</td>
             <td className="num">{fmtSize(a.size)}</td>
             <td className="num">{a.experiments}</td>
             <td className="actions">
-              {a.producer_node ? (
+              {a.names?.length ? (
+                <span className="muted" title="Remove the name first to evict it">
+                  protected
+                </span>
+              ) : a.sample_of ? (
+                <span
+                  className="muted"
+                  title="Logged samples are kept while an experiment that ran or reuses their step exists"
+                >
+                  sample
+                </span>
+              ) : a.producer_node ? (
                 <EvictButton
                   label={a.filename || a.kind}
                   note={`${a.producer_node} recomputes it the next time a run needs it.`}
@@ -830,6 +846,13 @@ export function StoragePage({
           st.shared.bytes,
           "Used by more than one experiment: counted once, freed only when none use it",
         )}
+        {(st.named?.objects ?? 0) > 0 &&
+          tile(
+            "Named",
+            st.named!.bytes,
+            "Kept because a name points at it (Names tab); removing the name lets clean-up reclaim it",
+            plural(st.named!.objects, "object"),
+          )}
         {tile(
           "Can be cleaned up",
           st.collectable.bytes,

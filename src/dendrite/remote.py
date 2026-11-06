@@ -157,6 +157,11 @@ def _raise(r: httpx.Response) -> None:
         from . import storage
 
         raise getattr(storage, kind)(msg)
+    if kind == "NameConflict":
+        from .db import NameConflict
+
+        code, _, text = msg.partition(": ")
+        raise NameConflict(text or msg, code if text else "name_taken")
     if kind == "NotADraft":
         from .experiment import NotADraft
 

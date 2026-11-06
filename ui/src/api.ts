@@ -228,6 +228,37 @@ export interface Dag {
   nodes: DagNode[];
   edges: DagEdge[];
   reads?: PipelineRead[];
+  /** Artifact names pointing at hashes in this graph. */
+  names?: Record<string, string[]>;
+}
+
+export interface ArtifactName {
+  name: string;
+  hash: string;
+  experiment_id: string | null;
+  node: string | null;
+  output: string | null;
+  note: string | null;
+  set_by: string | null;
+  set_at: number;
+  kind?: string | null;
+  size?: number | null;
+  filename?: string | null;
+}
+export interface NameHistoryEntry extends ArtifactName {
+  id: number;
+  ended_by: string | null;
+  ended_at: number;
+  action: "moved" | "removed";
+}
+export interface NameRequest {
+  experiment?: string;
+  node?: string;
+  output?: string;
+  hash?: string;
+  note?: string;
+  move?: boolean;
+  expect?: string;
 }
 
 export interface Role {
@@ -352,6 +383,7 @@ export interface ArtifactDetail extends ArtifactRef {
   preview: Preview;
   /** Remote stores only: larger files wait for "Load preview", since previewing downloads them. */
   auto_preview_bytes: number | null;
+  names?: Record<string, string[]>;
 }
 
 export interface Diff {
@@ -409,6 +441,8 @@ export interface Inventory {
     live: { objects: number; bytes: number };
     shared: { objects: number; bytes: number };
     collectable: { objects: number; bytes: number };
+    /** Kept because a name points at it. */
+    named?: { objects: number; bytes: number };
   };
   experiments: StorageExperiment[];
   cache: CacheEntry[];
@@ -421,6 +455,9 @@ export interface Inventory {
     present: boolean;
     live: boolean;
     experiments: number;
+    names?: string[];
+    /** A sample logged by this step (log_image/log_media), not an input or output. */
+    sample_of?: string | null;
   }[];
   scratch: Record<string, number>;
   busy: string[];
@@ -501,6 +538,15 @@ export const api = {
   artifact: (h: string) => get<ArtifactDetail>(`api/artifacts/${encodeURIComponent(h)}`),
   lineage: (h: string) => get<Lineage>(`api/artifacts/${encodeURIComponent(h)}/lineage`),
   execution: (id: string) => get<Execution>(`api/executions/${encodeURIComponent(id)}`),
+  names: () => get<{ names: ArtifactName[] }>("api/names"),
+  setName: (name: string, req: NameRequest) => send<ArtifactName>("PUT", `api/names/${encodeURIComponent(name)}`, req),
+  removeName: (name: string, expect?: string) =>
+    send<{ removed: string }>(
+      "DELETE",
+      `api/names/${encodeURIComponent(name)}${expect ? `?expect=${encodeURIComponent(expect)}` : ""}`,
+    ),
+  nameHistory: (name: string) =>
+    get<{ name: ArtifactName | null; history: NameHistoryEntry[] }>(`api/names/${encodeURIComponent(name)}/history`),
   logs: (id: string, after = -1) => get<LogPage>(`api/executions/${encodeURIComponent(id)}/logs?after=${after}`),
   scalars: (id: string) => get<{ points: ScalarPoint[] }>(`api/executions/${encodeURIComponent(id)}/scalars`),
   samples: (id: string) => get<{ samples: Sample[] }>(`api/executions/${encodeURIComponent(id)}/samples`),

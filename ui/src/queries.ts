@@ -48,7 +48,7 @@ export function useLiveUpdates(): void {
       const e = JSON.parse(m.data) as { hello?: boolean; tree?: boolean; experiments?: string[] };
       setLive(true);
       if (e.hello) return;
-      if (e.tree) invalidate(["experiments"]);
+      if (e.tree) for (const k of ["experiments", "names", "dag", "artifact", "lineage"]) invalidate([k]); // names live in the tree token
       for (const id of e.experiments ?? []) {
         invalidate(["dag", id]);
         invalidate(["plan", id]);
@@ -95,6 +95,8 @@ export const useArtifact = (hash?: string) =>
     enabled: !!hash,
     refetchInterval: 10000,
   });
+
+export const useNames = () => useQuery({ queryKey: ["names"], queryFn: api.names, staleTime: 5000 });
 
 export const useExecution = (id?: string | null) =>
   useQuery({ queryKey: ["execution", id], queryFn: () => api.execution(id!), enabled: !!id, staleTime: 30000 });

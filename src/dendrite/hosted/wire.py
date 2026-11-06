@@ -52,6 +52,11 @@ READS = {
     "samples",
     "sample_hashes",
     "environment",
+    "name",
+    "names",
+    "names_for",
+    "name_history",
+    "named_hashes",
 }
 WRITES = {
     "register_artifacts",
@@ -78,6 +83,8 @@ WRITES = {
     "write_telemetry",
     "record_sample",
     "record_environment",
+    "set_name",
+    "remove_name",
 }
 ADMIN = {"set_keep"}
 REMOTE = {**dict.fromkeys(READS, "viewer"), **dict.fromkeys(WRITES, "runner"), **dict.fromkeys(ADMIN, "admin")}

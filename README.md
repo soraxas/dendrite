@@ -161,6 +161,22 @@ def clips(video, defects):
 - **Display only:** stages, progress and reads never change a signature.
 - **The UI's default view** is one card per stage. A fan-out is one card with a status grid however many items it has, and expanding it draws at most 12 items.
 
+### Naming results
+
+Give any artifact a name and use it wherever a hash works:
+
+```python
+lab.name("best-splats", f"{exp.id}:train_splats.model", note="60k iterations")
+lab.load("@best-splats")                                   # by name
+lab.create(recon, inputs={"video": "@raw-video"})           # inputs and pins accept names too
+```
+
+- **Stable experiments.** An experiment records the artifact a name pointed at when it was created, so moving the name later never changes it.
+- **History.** Moving a name needs `move=True` (`--force` on the CLI), and keeps where it pointed before.
+- **Kept.** Clean-up never deletes a named artifact; removing the name makes it collectable again.
+- **Metadata only.** Naming never changes a signature.
+- **In the UI** press ☆ Name… on any artifact; the Names tab lists them all. On a server, names are per project, record who set them, and only the setter or an admin can move them.
+
 ### Logs, charts, samples and environment
 
 Every step's run is recorded centrally, so you can watch and compare runs without hunting through terminals:
@@ -196,6 +212,8 @@ def train(frames: Path, iterations: int = 30_000):
 
 - **Run telemetry:** each step's Console (live, searchable), Scalars (charts with smoothing), Samples (with a step slider) and Environment tabs. The Metrics page charts every step of an experiment.
 
+- **Names:** ☆ Name… on any artifact, badges on the graph, and a Names tab listing every name with its history.
+
 - **Lineage:** trace any artifact back to its inputs and forward to what used it.
 
 - **Drafts:** "Fork…" makes an editable copy. Change params or freeze steps, and every step shows whether it would be reused or run, with a reason and a time estimate. Running it freezes its settings: `dendrite run <exp> --import …`.
@@ -224,6 +242,7 @@ The built UI ships inside the wheel, so using dendrite never needs Node.js.
 | `dendrite diff A B` · `dag EXP` · `lineage HASH` | compare runs; Mermaid graphs |
 | `dendrite run EXP --import MOD` | run a draft made in the UI |
 | `dendrite check --import MOD` | static checks; exits 1 on errors |
+| `dendrite name NAME TARGET [--force]` · `names [--history NAME]` · `unname NAME` | name artifacts (`EXP:NODE.OUTPUT`, `EXP:INPUT`, a hash); use as `@NAME` |
 | `dendrite logs EXP NODE [-f]` · `env EXP NODE` | a step's console (follow a running one); where it ran |
 | `dendrite ui [--port 8454] [--import MOD]` | the web UI |
 | `dendrite du` · `rm EXP` · `keep EXP` · `evict EXEC` · `gc` · `clean` | storage; deletions preview unless `--yes` |
