@@ -2,7 +2,7 @@
 
 ### Requirement: Star and name artifacts in the UI
 
-The artifact detail panel and Artifacts tab rows SHALL offer a ★ control. Starring SHALL prompt for a name, suggesting `<node>-<output>`, and an optional note. A starred artifact SHALL show its names, each with move and remove actions. Graph output entries SHALL show a badge for named artifacts. The controls SHALL be hidden or disabled when editing is not enabled.
+The artifact detail panel SHALL offer a ★ control, and Artifacts tab rows SHALL show names and open that panel when selected. Starring SHALL prompt for a name, suggesting `<node>-<output>`, and an optional note; when the name already points elsewhere it SHALL offer to move it here. A starred artifact SHALL show its names, each with a remove action. Graph output entries SHALL show a badge for named artifacts. The controls SHALL be hidden or disabled when editing is not enabled.
 
 #### Scenario: Star from the detail panel
 

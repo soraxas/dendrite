@@ -20,8 +20,11 @@ import { ArtifactPreview } from "./ArtifactPreview";
 
 const SOURCE_LABEL = { input: "input", computed: "computed", reused: "reused", pinned: "frozen", pending: "…" };
 
+/** Images up to this size get a thumbnail; larger ones show an icon, so listing never pulls big blobs. */
+export const THUMB_MAX_BYTES = 2 * 1024 * 1024;
+
 function Thumb({ r }: { r: ArtifactRef }) {
-  if (r.kind === "file" && /\.(png|jpe?g|gif|webp|svg)$/i.test(r.filename ?? ""))
+  if (r.kind === "file" && r.size <= THUMB_MAX_BYTES && /\.(png|jpe?g|gif|webp|svg)$/i.test(r.filename ?? ""))
     return <img className="art-thumb" src={api.downloadUrl(r.hash)} alt="" loading="lazy" />;
   return <ArtifactIcon kind={r.kind} filename={r.filename} />;
 }

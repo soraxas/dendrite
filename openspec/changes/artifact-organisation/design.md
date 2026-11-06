@@ -58,7 +58,7 @@ The new `Metadata` methods are listed in `wire.REMOTE`:
 - fan-out `step[key]` nodes grouped through `fanout.ts`
 - source: `cached` → "reused from `execution_experiment`", `pinned` → "pinned", otherwise "computed"
 
-Kinds come from `artifactCategory`. Thumbnails are lazy (IntersectionObserver), images only, and only below `auto_preview_bytes`. Everything else shows `ArtifactIcon`. Filters live in the hash URL as `?kind=&q=`, next to `sel`, so a row click sets `sel=artifact:<hash>` and reuses the existing detail panel.
+Kinds come from `artifactCategory`. Thumbnails are lazy (`loading="lazy"`), images only, and only up to 2 MiB. Everything else shows `ArtifactIcon`. Filters live in the hash URL as `?kind=&q=`, next to `sel`, so a row click sets `sel=artifact:<hash>` and reuses the existing detail panel.
 
 ### 8. Compare uses existing endpoints
 

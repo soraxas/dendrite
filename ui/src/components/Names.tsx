@@ -1,5 +1,5 @@
 // Artifact names: a ★ control to name an artifact, and the Names page listing every name.
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { ApiError, type ArtifactName, api, direct, type NameRequest } from "../api";
 import { fmtSize, fmtTime, short } from "../format";
@@ -164,14 +164,9 @@ export function NameControl({
 }
 
 function History({ name }: { name: string }) {
-  const [rows, setRows] = useState<Awaited<ReturnType<typeof api.nameHistory>>["history"] | null>(null);
-  if (rows === null) {
-    api.nameHistory(name).then(
-      (r) => setRows(r.history),
-      () => setRows([]),
-    );
-    return <div className="muted">Loading…</div>;
-  }
+  const { data } = useQuery({ queryKey: ["name-history", name], queryFn: () => api.nameHistory(name) });
+  if (!data) return <div className="muted">Loading…</div>;
+  const rows = data.history;
   if (!rows.length) return <div className="muted">Never moved.</div>;
   return (
     <ul className="name-history">
@@ -185,7 +180,9 @@ function History({ name }: { name: string }) {
   );
 }
 
-const isImage = (n: ArtifactName) => /\.(png|jpe?g|gif|webp|svg)$/i.test(n.filename ?? "");
+const THUMB_MAX_BYTES = 2 * 1024 * 1024; // larger images show an icon, so the list never pulls big blobs
+const isImage = (n: ArtifactName) =>
+  (n.size ?? Infinity) <= THUMB_MAX_BYTES && /\.(png|jpe?g|gif|webp|svg)$/i.test(n.filename ?? "");
 
 /** Every name in the lab or project. */
 export function NamesPage({
